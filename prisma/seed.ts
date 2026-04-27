@@ -27,8 +27,9 @@ async function main() {
 
   for (const i of interestLabels) {
     await prisma.interest.upsert({
-      where: { slug: i.slug },
-      update: { name: i.name },
+      // `name` is unique and may already exist from earlier seeds.
+      where: { name: i.name },
+      update: { slug: i.slug },
       create: { slug: i.slug, name: i.name },
     });
   }
