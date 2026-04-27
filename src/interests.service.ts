@@ -44,17 +44,46 @@ export class InterestsService {
       throw new BadRequestException('At least one interest must be selected');
     }
 
+    const fullName =
+      getMetadataString(metadata, 'name') ??
+      getMetadataString(metadata, 'full_name') ??
+      null;
+    const preferredUsername =
+      getMetadataString(metadata, 'username') ??
+      getMetadataString(metadata, 'preferred_username') ??
+      null;
+
     const { error: profileError } = await db.from('profiles').upsert(
       {
         user_id: userId,
-        full_name: (metadata.name as string | undefined) ?? null,
-        username: (metadata.username as string | undefined) ?? null,
+        full_name: fullName,
+        username: preferredUsername,
       },
       { onConflict: 'user_id' },
     );
 
-    if (profileError)
-      throw new InternalServerErrorException(profileError.message);
+    if (profileError) {
+      const isUsernameConflict =
+        profileError.code === '23505' ||
+        String(profileError.message).includes('profiles_username_key');
+
+      if (isUsernameConflict) {
+        const { error: fallbackProfileError } = await db.from('profiles').upsert(
+          {
+            user_id: userId,
+            full_name: fullName,
+            username: null,
+          },
+          { onConflict: 'user_id' },
+        );
+
+        if (fallbackProfileError) {
+          throw new InternalServerErrorException(fallbackProfileError.message);
+        }
+      } else {
+        throw new InternalServerErrorException(profileError.message);
+      }
+    }
 
     const { error: deleteError } = await db
       .from('profile_interests')
@@ -95,4 +124,11 @@ export class InterestsService {
 
     return normalizedNames;
   }
+}
+
+function getMetadataString(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : undefined;
 }
