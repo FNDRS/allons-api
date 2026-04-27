@@ -10,7 +10,8 @@ export class InterestsService {
   constructor(private readonly supabaseAdmin: SupabaseAdminService) {}
 
   async getUserInterestNames(userId: string) {
-    const { data, error } = await this.supabaseAdmin.db
+    const db = this.supabaseAdmin.db as any;
+    const { data, error } = await db
       .from('profile_interests')
       .select('interest:interests(name)')
       .eq('user_id', userId);
@@ -34,6 +35,7 @@ export class InterestsService {
     metadata: Record<string, unknown>,
     names: string[],
   ) {
+    const db = this.supabaseAdmin.db as any;
     const normalizedNames = [
       ...new Set(names.map((item) => item.trim()).filter(Boolean)),
     ];
@@ -42,44 +44,39 @@ export class InterestsService {
       throw new BadRequestException('At least one interest must be selected');
     }
 
-    const { error: profileError } = await this.supabaseAdmin.db
-      .from('profiles')
-      .upsert(
-        {
-          user_id: userId,
-          full_name: (metadata.name as string | undefined) ?? null,
-          username: (metadata.username as string | undefined) ?? null,
-        },
-        { onConflict: 'user_id' },
-      );
+    const { error: profileError } = await db.from('profiles').upsert(
+      {
+        user_id: userId,
+        full_name: (metadata.name as string | undefined) ?? null,
+        username: (metadata.username as string | undefined) ?? null,
+      },
+      { onConflict: 'user_id' },
+    );
 
     if (profileError)
       throw new InternalServerErrorException(profileError.message);
 
-    const { error: deleteError } = await this.supabaseAdmin.db
+    const { error: deleteError } = await db
       .from('profile_interests')
       .delete()
       .eq('user_id', userId);
     if (deleteError)
       throw new InternalServerErrorException(deleteError.message);
 
-    const { error: upsertInterestsError } = await this.supabaseAdmin.db
-      .from('interests')
-      .upsert(
-        normalizedNames.map((name) => ({ name })),
-        {
-          onConflict: 'name',
-          ignoreDuplicates: true,
-        },
-      );
+    const { error: upsertInterestsError } = await db.from('interests').upsert(
+      normalizedNames.map((name) => ({ name })),
+      {
+        onConflict: 'name',
+        ignoreDuplicates: true,
+      },
+    );
     if (upsertInterestsError)
       throw new InternalServerErrorException(upsertInterestsError.message);
 
-    const { data: interests, error: interestsError } =
-      await this.supabaseAdmin.db
-        .from('interests')
-        .select('id,name')
-        .in('name', normalizedNames);
+    const { data: interests, error: interestsError } = await db
+      .from('interests')
+      .select('id,name')
+      .in('name', normalizedNames);
     if (interestsError)
       throw new InternalServerErrorException(interestsError.message);
 
@@ -89,7 +86,7 @@ export class InterestsService {
     }));
 
     if (rowsToInsert.length > 0) {
-      const { error: insertError } = await this.supabaseAdmin.db
+      const { error: insertError } = await db
         .from('profile_interests')
         .insert(rowsToInsert);
       if (insertError)

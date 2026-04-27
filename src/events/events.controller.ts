@@ -13,4 +13,25 @@ export class EventsController {
       orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
     });
   }
+
+  @Get('top')
+  top() {
+    return this.prisma.event.findMany({
+      where: {
+        OR: [{ startsAt: { gte: new Date() } }, { startsAt: null }],
+      },
+      include: { provider: true },
+      orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
+      take: 5,
+    });
+  }
+
+  @Get('friends')
+  friends() {
+    return this.prisma.event.findMany({
+      include: { provider: true },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+    });
+  }
 }
