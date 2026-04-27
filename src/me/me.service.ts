@@ -27,7 +27,11 @@ export interface NotificationGroupDto {
 export class MeService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getProfile(userId: string, email?: string) {
+  async getProfile(
+    userId: string,
+    email?: string,
+    metadata: Record<string, unknown> = {},
+  ) {
     const profile = await this.prisma.profile.findUnique({
       where: { userId },
       include: {
@@ -35,14 +39,33 @@ export class MeService {
       },
     });
 
+    const fallbackName =
+      getMetadataString(metadata, 'name') ??
+      getMetadataString(metadata, 'full_name');
+    const fallbackUsername =
+      getMetadataString(metadata, 'username') ??
+      getMetadataString(metadata, 'user_name') ??
+      getMetadataString(metadata, 'preferred_username');
+    const fallbackAvatarUrl =
+      getMetadataString(metadata, 'avatar_url') ??
+      getMetadataString(metadata, 'picture');
+    const fallbackLocation = getMetadataString(metadata, 'location');
+    const fallbackAvatarColor = '#787878';
+
+    const profileFullName = nonEmptyOrUndefined(profile?.fullName);
+    const profileUsername = nonEmptyOrUndefined(profile?.username);
+    const profileAvatarUrl = nonEmptyOrUndefined(profile?.avatarUrl);
+    const profileAvatarColor = nonEmptyOrUndefined(profile?.avatarColor);
+    const profileLocation = nonEmptyOrUndefined(profile?.location);
+
     return {
       userId,
       email: email ?? null,
-      fullName: profile?.fullName ?? null,
-      username: profile?.username ?? null,
-      avatarUrl: profile?.avatarUrl ?? null,
-      avatarColor: profile?.avatarColor ?? null,
-      location: profile?.location ?? null,
+      fullName: profileFullName ?? fallbackName ?? null,
+      username: profileUsername ?? fallbackUsername ?? null,
+      avatarUrl: profileAvatarUrl ?? fallbackAvatarUrl ?? null,
+      avatarColor: profileAvatarColor ?? fallbackAvatarColor,
+      location: profileLocation ?? fallbackLocation ?? null,
       interests: (profile?.interests ?? []).map((row) => row.interest.name),
     };
   }
@@ -77,7 +100,7 @@ export class MeService {
       update: { ...data, updatedAt: new Date() },
     });
 
-    return this.getProfile(userId, email);
+    return this.getProfile(userId, email, metadata);
   }
 
   async listTickets(userId: string) {
@@ -191,4 +214,17 @@ function formatShortDate(date: Date) {
   const d = String(date.getDate()).padStart(2, '0');
   const m = String(date.getMonth() + 1).padStart(2, '0');
   return `${d}/${m}`;
+}
+
+function getMetadataString(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key];
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : undefined;
+}
+
+function nonEmptyOrUndefined(value?: string | null) {
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : undefined;
 }

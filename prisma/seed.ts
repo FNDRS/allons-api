@@ -3,6 +3,7 @@ import { PrismaClient } from '../generated/prisma';
 const prisma = new PrismaClient();
 
 async function main() {
+  // Keep seed deterministic and safe to re-run.
   const providers = [
     {
       handle: 'allons',
@@ -28,6 +29,24 @@ async function main() {
       description: 'Exhibiciones y recorridos',
       websiteUrl: 'https://allonsapp.com',
     },
+    {
+      handle: 'fndrs',
+      name: 'FNDRS Community',
+      description: 'Meetups y actividades de la comunidad',
+      websiteUrl: 'https://allonsapp.com',
+    },
+    {
+      handle: 'allons-sports',
+      name: 'Allons Sports',
+      description: 'Partidos, torneos y experiencias fitness',
+      websiteUrl: 'https://allonsapp.com',
+    },
+    {
+      handle: 'food-week',
+      name: 'Food Week',
+      description: 'Catas y experiencias gastronomicas',
+      websiteUrl: 'https://allonsapp.com',
+    },
   ];
 
   for (const p of providers) {
@@ -42,13 +61,19 @@ async function main() {
     });
   }
 
-  const providerMap = new Map(
-    (await prisma.provider.findMany({ where: { handle: { in: providers.map((p) => p.handle) } } }))
-      .map((p) => [p.handle ?? '', p.id]),
-  );
+  const providerRows = await prisma.provider.findMany({
+    where: { handle: { in: providers.map((p) => p.handle) } },
+    select: { id: true, handle: true },
+  });
+  const providerMap = new Map(providerRows.map((p) => [p.handle ?? '', p.id]));
 
   const now = new Date();
   const addDays = (d: number) => new Date(now.getTime() + d * 24 * 60 * 60 * 1000);
+  const atHour = (d: number, h: number) => {
+    const dt = addDays(d);
+    dt.setHours(h, 0, 0, 0);
+    return dt;
+  };
 
   const events = [
     {
@@ -66,8 +91,8 @@ async function main() {
       providerHandle: 'cdmx-nightlife',
       title: 'Rave: Warehouse Edition',
       description: 'Lineup sorpresa. Acceso limitado.',
-      startsAt: new Date(addDays(5).setHours(23, 0, 0, 0)),
-      endsAt: new Date(addDays(6).setHours(5, 0, 0, 0)),
+      startsAt: atHour(5, 23),
+      endsAt: atHour(6, 5),
       city: 'CDMX',
       venue: 'Warehouse Norte',
       address: 'Norte, CDMX',
@@ -77,8 +102,8 @@ async function main() {
       providerHandle: 'tech-coffee',
       title: 'Meetup: React Native + Supabase',
       description: 'Charlas cortas + networking.',
-      startsAt: new Date(addDays(7).setHours(19, 0, 0, 0)),
-      endsAt: new Date(addDays(7).setHours(21, 0, 0, 0)),
+      startsAt: atHour(7, 19),
+      endsAt: atHour(7, 21),
       city: 'CDMX',
       venue: 'Cafe Roma',
       address: 'Roma Norte, CDMX',
@@ -88,14 +113,81 @@ async function main() {
       providerHandle: 'arte-abierto',
       title: 'Noche de Galerias',
       description: 'Recorrido por galerias y exhibiciones.',
-      startsAt: new Date(addDays(10).setHours(18, 0, 0, 0)),
-      endsAt: new Date(addDays(10).setHours(22, 0, 0, 0)),
+      startsAt: atHour(10, 18),
+      endsAt: atHour(10, 22),
       city: 'CDMX',
       venue: 'Juarez',
       address: 'Col. Juarez, CDMX',
       themeColor: '#FFA62B',
     },
+    {
+      providerHandle: 'fndrs',
+      title: 'Startup Coffee: Product & Growth',
+      description: 'Cafe y networking. 3 lightning talks + Q&A.',
+      startsAt: atHour(3, 9),
+      endsAt: atHour(3, 11),
+      city: 'CDMX',
+      venue: 'Condesa',
+      address: 'Condesa, CDMX',
+      themeColor: '#00B4D8',
+    },
+    {
+      providerHandle: 'allons-sports',
+      title: 'Padel Night: Doubles Mixer',
+      description: 'Partidos rapidos, rotacion y drinks post-game.',
+      startsAt: atHour(4, 20),
+      endsAt: atHour(4, 22),
+      city: 'CDMX',
+      venue: 'Polanco Padel Club',
+      address: 'Polanco, CDMX',
+      themeColor: '#80ED99',
+    },
+    {
+      providerHandle: 'food-week',
+      title: 'Cata: Vinos Naturales (Intro)',
+      description: '6 vinos, maridaje ligero y guia para principiantes.',
+      startsAt: atHour(6, 19),
+      endsAt: atHour(6, 21),
+      city: 'CDMX',
+      venue: 'Roma Wine Bar',
+      address: 'Roma Norte, CDMX',
+      themeColor: '#FFB703',
+    },
+    {
+      providerHandle: 'allons',
+      title: 'Cine al Aire Libre: Classics',
+      description: 'Proyeccion + picnic. Lleva manta.',
+      startsAt: atHour(8, 20),
+      endsAt: atHour(8, 23),
+      city: 'CDMX',
+      venue: 'Parque Mexico',
+      address: 'Condesa, CDMX',
+      themeColor: '#4CC9F0',
+    },
+    {
+      providerHandle: 'tech-coffee',
+      title: 'Workshop: API Design con NestJS',
+      description: 'Buenas practicas, DTOs, validation y versionado.',
+      startsAt: atHour(12, 18),
+      endsAt: atHour(12, 21),
+      city: 'CDMX',
+      venue: 'Cowork Roma',
+      address: 'Roma Norte, CDMX',
+      themeColor: '#F72585',
+    },
   ];
+
+  // Remove previously seeded events with same titles for these providers.
+  const providerIds = [...providerMap.values()];
+  const titles = events.map((e) => e.title);
+  if (providerIds.length > 0) {
+    await prisma.event.deleteMany({
+      where: {
+        providerId: { in: providerIds },
+        title: { in: titles },
+      },
+    });
+  }
 
   for (const e of events) {
     const providerId = providerMap.get(e.providerHandle);
