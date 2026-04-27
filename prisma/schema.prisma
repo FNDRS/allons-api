@@ -1,0 +1,191 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Profile {
+  userId      String   @id @map("user_id") @db.Uuid
+  username    String?  @unique
+  fullName    String?  @map("full_name")
+  avatarUrl   String?  @map("avatar_url")
+  avatarColor String?  @map("avatar_color")
+  location    String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  interests     ProfileInterest[]
+  events        Event[]              @relation("events_created_by")
+  attendees     EventAttendee[]
+  tickets       Ticket[]
+  conversations ConversationMember[]
+  sentMessages  Message[]
+  notifications Notification[]
+
+  @@map("profiles")
+}
+
+model Interest {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String   @unique
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  profiles  ProfileInterest[]
+
+  @@map("interests")
+}
+
+model ProfileInterest {
+  userId     String   @map("user_id") @db.Uuid
+  interestId String   @map("interest_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  profile    Profile  @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  interest   Interest @relation(fields: [interestId], references: [id], onDelete: Cascade)
+
+  @@id([userId, interestId])
+  @@map("profile_interests")
+}
+
+model Provider {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String
+  handle      String?  @unique
+  description String?
+  websiteUrl  String?  @map("website_url")
+  logoUrl     String?  @map("logo_url")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  events      Event[]
+
+  @@map("providers")
+}
+
+model Event {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  providerId    String?   @map("provider_id") @db.Uuid
+  title         String
+  description   String?
+  startsAt      DateTime? @map("starts_at") @db.Timestamptz(6)
+  endsAt        DateTime? @map("ends_at") @db.Timestamptz(6)
+  city          String?
+  venue         String?
+  address       String?
+  coverImageUrl String?   @map("cover_image_url")
+  themeColor    String?   @map("theme_color")
+  createdBy     String?   @map("created_by") @db.Uuid
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  provider      Provider? @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  creator       Profile?  @relation("events_created_by", fields: [createdBy], references: [userId], onDelete: SetNull)
+  attendees     EventAttendee[]
+  tickets       Ticket[]
+
+  @@index([startsAt])
+  @@index([providerId])
+  @@map("events")
+}
+
+model EventAttendee {
+  eventId   String   @map("event_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  status    String   @default("going")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  profile   Profile  @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@id([eventId, userId])
+  @@map("event_attendees")
+}
+
+enum TicketTab {
+  eventos
+  clases
+}
+
+model Ticket {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId       String    @map("owner_id") @db.Uuid
+  eventId       String?   @map("event_id") @db.Uuid
+  title         String
+  tab           TicketTab @default(eventos)
+  themeColor    String?   @map("theme_color")
+  attendeeCount Int       @default(0) @map("attendee_count")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  owner         Profile  @relation(fields: [ownerId], references: [userId], onDelete: Cascade)
+  event         Event?   @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId])
+  @@index([eventId])
+  @@map("tickets")
+}
+
+model Conversation {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  members   ConversationMember[]
+  messages  Message[]
+
+  @@map("conversations")
+}
+
+model ConversationMember {
+  conversationId String   @map("conversation_id") @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  profile        Profile      @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@id([conversationId, userId])
+  @@map("conversation_members")
+}
+
+model Message {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversationId String   @map("conversation_id") @db.Uuid
+  senderId       String   @map("sender_id") @db.Uuid
+  body           String
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         Profile      @relation(fields: [senderId], references: [userId], onDelete: Cascade)
+
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@map("messages")
+}
+
+enum NotificationTab {
+  amigos
+  eventos
+  menciones
+}
+
+model Notification {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId        String            @map("user_id") @db.Uuid
+  categoryLabel String?           @map("category_label")
+  title         String
+  description   String?
+  relevantTabs  NotificationTab[] @map("relevant_tabs")
+  readAt        DateTime?         @map("read_at") @db.Timestamptz(6)
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  profile       Profile           @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("notifications")
+}

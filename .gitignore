@@ -1,0 +1,15 @@
+node_modules
+
+# build
+dist
+
+# local env
+.env
+.env.*
+!.env.example
+
+/generated/prisma
+
+.agents/*
+
+.env
