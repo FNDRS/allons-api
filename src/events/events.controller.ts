@@ -1,4 +1,10 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  NotFoundException,
+  Param,
+  Query,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseDate, parseList } from './events.types';
 
@@ -113,5 +119,38 @@ export class EventsController {
           types: (e.interests ?? []).map((x) => x.interest.slug),
         })),
       );
+  }
+
+  @Get(':id')
+  async getOne(@Param('id') id: string) {
+    const event = await this.prisma.event.findUnique({
+      where: { id },
+      include: {
+        provider: {
+          include: {
+            reviews: { orderBy: { createdAt: 'desc' }, take: 10 },
+          },
+        },
+        interests: { include: { interest: true } },
+        media: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] },
+        _count: { select: { attendees: true } },
+      },
+    });
+
+    if (!event) throw new NotFoundException('Event not found');
+
+    return {
+      ...event,
+      attendeeCount: event._count.attendees,
+      types: (event.interests ?? []).map((x) => x.interest.slug),
+      gallery: (event.media ?? []).map((m) => ({ id: m.id, url: m.url })),
+      providerReviews: (event.provider?.reviews ?? []).map((r) => ({
+        id: r.id,
+        authorName: r.authorName,
+        body: r.body,
+        rating: r.rating,
+        createdAt: r.createdAt,
+      })),
+    };
   }
 }

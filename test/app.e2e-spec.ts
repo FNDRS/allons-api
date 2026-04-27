@@ -20,7 +20,7 @@ describe('AppController (e2e)', () => {
   beforeAll(async () => {
     prismaMock = {
       provider: { findMany: jest.fn() },
-      event: { findMany: jest.fn() },
+      event: { findMany: jest.fn(), findUnique: jest.fn() },
     };
 
     supabaseAdminMock = {
@@ -154,6 +154,55 @@ describe('AppController (e2e)', () => {
     expect(prismaMock.event.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ take: 6 }),
     );
+  });
+
+  it('/events/:id (GET) returns event details', async () => {
+    prismaMock.event.findUnique.mockResolvedValueOnce({
+      id: 'e1',
+      title: 'Event 1',
+      city: 'CDMX',
+      startsAt: null,
+      endsAt: null,
+      venue: null,
+      address: null,
+      themeColor: null,
+      smokingAllowed: false,
+      petFriendly: false,
+      parkingAvailable: false,
+      minAge: null,
+      provider: {
+        id: 'p1',
+        handle: 'allons',
+        name: 'Allons Originals',
+        reviews: [
+          {
+            id: 'r1',
+            authorName: 'Humberto',
+            body: 'ok',
+            rating: 5,
+            createdAt: new Date(),
+          },
+        ],
+      },
+      interests: [{ interest: { slug: 'musica' } }],
+      media: [
+        {
+          id: 'm1',
+          url: 'https://example.com/1.png',
+          sortOrder: 0,
+          createdAt: new Date(),
+        },
+      ],
+      _count: { attendees: 3 },
+    });
+
+    const res = await request(app.getHttpServer())
+      .get('/events/e1')
+      .expect(200);
+    expect(res.body.attendeeCount).toBe(3);
+    expect(res.body.types).toEqual(['musica']);
+    expect(res.body.gallery?.[0]?.url).toBe('https://example.com/1.png');
+    expect(res.body.providerReviews?.[0]?.authorName).toBe('Humberto');
   });
 
   it('/me (GET) requires auth', async () => {

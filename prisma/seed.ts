@@ -320,6 +320,59 @@ async function main() {
         skipDuplicates: true,
       });
     }
+
+    // Seed basic gallery media for the event (placeholder images).
+    await prisma.eventMedia.createMany({
+      data: [
+        {
+          eventId: created.id,
+          url: 'https://picsum.photos/seed/allons-1/600/600',
+          sortOrder: 0,
+        },
+        {
+          eventId: created.id,
+          url: 'https://picsum.photos/seed/allons-2/600/600',
+          sortOrder: 1,
+        },
+        {
+          eventId: created.id,
+          url: 'https://picsum.photos/seed/allons-3/600/600',
+          sortOrder: 2,
+        },
+      ],
+      skipDuplicates: true,
+    });
+  }
+
+  // Seed some provider reviews (for UI cards).
+  for (const [handle, providerId] of providerMap.entries()) {
+    if (!providerId || !handle) continue;
+
+    const existing = await prisma.providerReview.count({ where: { providerId } });
+    if (existing > 0) continue;
+
+    await prisma.providerReview.createMany({
+      data: [
+        {
+          providerId,
+          authorName: 'Humberto',
+          body: 'Todos tienen que ir a este evento. Muy recomendado.',
+          rating: 5,
+        },
+        {
+          providerId,
+          authorName: 'Joseph Reyes',
+          body: 'No caminen, corran a ver a este evento.',
+          rating: 5,
+        },
+        {
+          providerId,
+          authorName: 'JR',
+          body: 'Super recomendado.',
+          rating: 5,
+        },
+      ],
+    });
   }
 }
 

@@ -68,7 +68,8 @@ model Provider {
   logoUrl     String?  @map("logo_url")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  events Event[]
+  events   Event[]
+  reviews  ProviderReview[]
 
   @@map("providers")
 }
@@ -97,11 +98,39 @@ model Event {
   creator   Profile?        @relation("events_created_by", fields: [createdBy], references: [userId], onDelete: SetNull)
   attendees EventAttendee[]
   interests EventInterest[]
+  media     EventMedia[]
   tickets   Ticket[]
 
   @@index([startsAt])
   @@index([providerId])
   @@map("events")
+}
+
+model EventMedia {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eventId   String   @map("event_id") @db.Uuid
+  url       String
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, sortOrder, createdAt])
+  @@map("event_media")
+}
+
+model ProviderReview {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  providerId String   @map("provider_id") @db.Uuid
+  authorName String   @map("author_name")
+  body       String
+  rating     Int?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@index([providerId, createdAt(sort: Desc)])
+  @@map("provider_reviews")
 }
 
 model EventInterest {
