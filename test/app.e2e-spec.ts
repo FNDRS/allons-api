@@ -127,7 +127,7 @@ describe('AppController (e2e)', () => {
     const body = res.body as Array<{ provider?: { handle?: string } }>;
     expect(body[0]?.provider?.handle).toBe('allons');
     expect(prismaMock.event.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: undefined }),
+      expect.objectContaining({ where: {} }),
     );
   });
 
@@ -136,7 +136,7 @@ describe('AppController (e2e)', () => {
 
     await request(app.getHttpServer()).get('/events?city=CDMX').expect(200);
     expect(prismaMock.event.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { city: 'CDMX' } }),
+      expect.objectContaining({ where: { city: { in: ['CDMX'] } } }),
     );
   });
 

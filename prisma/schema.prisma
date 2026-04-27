@@ -9,8 +9,8 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
 
@@ -38,9 +38,11 @@ model Profile {
 model Interest {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name      String   @unique
+  slug      String   @unique
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  profiles  ProfileInterest[]
+  profiles ProfileInterest[]
+  events   EventInterest[]
 
   @@map("interests")
 }
@@ -50,8 +52,8 @@ model ProfileInterest {
   interestId String   @map("interest_id") @db.Uuid
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  profile    Profile  @relation(fields: [userId], references: [userId], onDelete: Cascade)
-  interest   Interest @relation(fields: [interestId], references: [id], onDelete: Cascade)
+  profile  Profile  @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  interest Interest @relation(fields: [interestId], references: [id], onDelete: Cascade)
 
   @@id([userId, interestId])
   @@map("profile_interests")
@@ -66,35 +68,52 @@ model Provider {
   logoUrl     String?  @map("logo_url")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  events      Event[]
+  events Event[]
 
   @@map("providers")
 }
 
 model Event {
-  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  providerId    String?   @map("provider_id") @db.Uuid
-  title         String
-  description   String?
-  startsAt      DateTime? @map("starts_at") @db.Timestamptz(6)
-  endsAt        DateTime? @map("ends_at") @db.Timestamptz(6)
-  city          String?
-  venue         String?
-  address       String?
-  coverImageUrl String?   @map("cover_image_url")
-  themeColor    String?   @map("theme_color")
-  createdBy     String?   @map("created_by") @db.Uuid
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  providerId       String?   @map("provider_id") @db.Uuid
+  title            String
+  description      String?
+  startsAt         DateTime? @map("starts_at") @db.Timestamptz(6)
+  endsAt           DateTime? @map("ends_at") @db.Timestamptz(6)
+  city             String?
+  venue            String?
+  address          String?
+  coverImageUrl    String?   @map("cover_image_url")
+  themeColor       String?   @map("theme_color")
+  smokingAllowed   Boolean   @default(false) @map("smoking_allowed")
+  petFriendly      Boolean   @default(false) @map("pet_friendly")
+  parkingAvailable Boolean   @default(false) @map("parking_available")
+  minAge           Int?      @map("min_age")
+  createdBy        String?   @map("created_by") @db.Uuid
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  provider      Provider? @relation(fields: [providerId], references: [id], onDelete: SetNull)
-  creator       Profile?  @relation("events_created_by", fields: [createdBy], references: [userId], onDelete: SetNull)
-  attendees     EventAttendee[]
-  tickets       Ticket[]
+  provider  Provider?       @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  creator   Profile?        @relation("events_created_by", fields: [createdBy], references: [userId], onDelete: SetNull)
+  attendees EventAttendee[]
+  interests EventInterest[]
+  tickets   Ticket[]
 
   @@index([startsAt])
   @@index([providerId])
   @@map("events")
+}
+
+model EventInterest {
+  eventId    String   @map("event_id") @db.Uuid
+  interestId String   @map("interest_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  event    Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  interest Interest @relation(fields: [interestId], references: [id], onDelete: Cascade)
+
+  @@id([eventId, interestId])
+  @@map("event_interests")
 }
 
 model EventAttendee {
@@ -103,8 +122,8 @@ model EventAttendee {
   status    String   @default("going")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  profile   Profile  @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  event   Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  profile Profile @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
   @@id([eventId, userId])
   @@map("event_attendees")
@@ -125,8 +144,8 @@ model Ticket {
   attendeeCount Int       @default(0) @map("attendee_count")
   createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  owner         Profile  @relation(fields: [ownerId], references: [userId], onDelete: Cascade)
-  event         Event?   @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  owner Profile @relation(fields: [ownerId], references: [userId], onDelete: Cascade)
+  event Event?  @relation(fields: [eventId], references: [id], onDelete: SetNull)
 
   @@index([ownerId])
   @@index([eventId])
@@ -137,8 +156,8 @@ model Conversation {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  members   ConversationMember[]
-  messages  Message[]
+  members  ConversationMember[]
+  messages Message[]
 
   @@map("conversations")
 }
@@ -148,8 +167,8 @@ model ConversationMember {
   userId         String   @map("user_id") @db.Uuid
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  profile        Profile      @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  profile      Profile      @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
   @@id([conversationId, userId])
   @@map("conversation_members")
@@ -162,8 +181,8 @@ model Message {
   body           String
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender         Profile      @relation(fields: [senderId], references: [userId], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       Profile      @relation(fields: [senderId], references: [userId], onDelete: Cascade)
 
   @@index([conversationId, createdAt(sort: Desc)])
   @@map("messages")
@@ -185,7 +204,7 @@ model Notification {
   readAt        DateTime?         @map("read_at") @db.Timestamptz(6)
   createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  profile       Profile           @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  profile Profile @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
   @@index([userId, createdAt(sort: Desc)])
   @@map("notifications")

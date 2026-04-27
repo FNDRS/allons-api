@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   Patch,
+  Query,
 } from '@nestjs/common';
 import { MeService } from './me.service';
 import { SupabaseAdminService } from '../supabase-admin.service';
@@ -51,9 +52,13 @@ export class MeController {
   }
 
   @Get('tickets')
-  async listTickets(@Headers('authorization') authorization?: string) {
+  async listTickets(
+    @Headers('authorization') authorization?: string,
+    @Query('cities') cities?: string | string[],
+    @Query('types') types?: string | string[],
+  ) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
-    return this.meService.listTickets(user.id);
+    return this.meService.listTickets(user.id, { cities, types });
   }
 
   @Get('conversations')

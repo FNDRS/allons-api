@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { parseList } from '../events/events.types';
 
 interface UpdateProfileInput {
   fullName?: string | null;
@@ -103,9 +104,37 @@ export class MeService {
     return this.getProfile(userId, email, metadata);
   }
 
-  async listTickets(userId: string) {
+  async listTickets(
+    userId: string,
+    filters?: { cities?: string | string[]; types?: string | string[] },
+  ) {
+    const cities = parseList(filters?.cities);
+    const types = parseList(filters?.types);
+
+    const where: any = { ownerId: userId };
+    if (cities.length > 0 || types.length > 0) {
+      where.event = {
+        ...(cities.length > 0 ? { city: { in: cities } } : {}),
+        ...(types.length > 0
+          ? {
+              interests: {
+                some: { interest: { slug: { in: types } } },
+              },
+            }
+          : {}),
+      };
+    }
+
     const tickets = await this.prisma.ticket.findMany({
-      where: { ownerId: userId },
+      where,
+      include: {
+        event: {
+          include: {
+            provider: true,
+            interests: { include: { interest: true } },
+          },
+        },
+      },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -116,6 +145,22 @@ export class MeService {
       color: ticket.themeColor ?? '#2a3a4a',
       attendeeCount: ticket.attendeeCount,
       eventId: ticket.eventId,
+      event: ticket.event
+        ? {
+            id: ticket.event.id,
+            title: ticket.event.title,
+            city: ticket.event.city,
+            venue: ticket.event.venue,
+            address: ticket.event.address,
+            themeColor: ticket.event.themeColor,
+            provider: ticket.event.provider,
+            types: (ticket.event.interests ?? []).map((x) => x.interest.slug),
+            smokingAllowed: ticket.event.smokingAllowed,
+            petFriendly: ticket.event.petFriendly,
+            parkingAvailable: ticket.event.parkingAvailable,
+            minAge: ticket.event.minAge,
+          }
+        : null,
     }));
   }
 

@@ -4,6 +4,41 @@ const prisma = new PrismaClient();
 
 async function main() {
   // Keep seed deterministic and safe to re-run.
+  const interestLabels: Array<{ slug: string; name: string }> = [
+    { slug: 'cine-y-proyecciones', name: 'Cine y proyecciones' },
+    { slug: 'festivales-culturales', name: 'Festivales culturales' },
+    { slug: 'exhibiciones-de-arte', name: 'Exhibiciones de Arte' },
+    { slug: 'musica', name: 'Musica' },
+    { slug: 'ciencia-y-tecnologia', name: 'Ciencia y tecnologia' },
+    { slug: 'comic-cons', name: 'Comic-Cons' },
+    { slug: 'conciertos', name: 'Conciertos' },
+    { slug: 'fitness-y-entrenamiento', name: 'Fitness y entrenamiento' },
+    { slug: 'partidos-y-torneos', name: 'Partidos y torneos' },
+    { slug: 'conferencias', name: 'Conferencias' },
+    { slug: 'hackathons', name: 'Hackathons' },
+    { slug: 'catas-de-vino-o-cerveza', name: 'Catas de vino o cerveza' },
+    { slug: 'festivales-gastronomicos', name: 'Festivales gastronomicos' },
+    { slug: 'raves', name: 'Raves' },
+    { slug: 'gaming-y-e-sports', name: 'Gaming y e-sports' },
+    { slug: 'ferias-y-convenciones', name: 'Ferias y convenciones' },
+    { slug: 'comidas', name: 'Comidas' },
+    { slug: 'bares-and-drinks', name: 'Bares & drinks' },
+  ];
+
+  for (const i of interestLabels) {
+    await prisma.interest.upsert({
+      where: { slug: i.slug },
+      update: { name: i.name },
+      create: { slug: i.slug, name: i.name },
+    });
+  }
+
+  const interestRows = await prisma.interest.findMany({
+    where: { slug: { in: interestLabels.map((i) => i.slug) } },
+    select: { id: true, slug: true },
+  });
+  const interestMap = new Map(interestRows.map((i) => [i.slug, i.id]));
+
   const providers = [
     {
       handle: 'allons',
@@ -75,7 +110,22 @@ async function main() {
     return dt;
   };
 
-  const events = [
+  const events: Array<{
+    providerHandle: string;
+    title: string;
+    description: string;
+    startsAt: Date;
+    endsAt: Date;
+    city: string;
+    venue: string;
+    address: string;
+    themeColor: string;
+    types?: string[];
+    smokingAllowed?: boolean;
+    petFriendly?: boolean;
+    parkingAvailable?: boolean;
+    minAge?: number | null;
+  }> = [
     {
       providerHandle: 'allons',
       title: 'After Office: Rooftop Sessions',
@@ -86,6 +136,11 @@ async function main() {
       venue: 'Terraza Centro',
       address: 'Centro, CDMX',
       themeColor: '#7C4DFF',
+      types: ['musica', 'bares-and-drinks'],
+      smokingAllowed: true,
+      petFriendly: false,
+      parkingAvailable: false,
+      minAge: 18,
     },
     {
       providerHandle: 'cdmx-nightlife',
@@ -97,6 +152,11 @@ async function main() {
       venue: 'Warehouse Norte',
       address: 'Norte, CDMX',
       themeColor: '#FF4D6D',
+      types: ['raves', 'musica'],
+      smokingAllowed: true,
+      petFriendly: false,
+      parkingAvailable: true,
+      minAge: 21,
     },
     {
       providerHandle: 'tech-coffee',
@@ -108,6 +168,11 @@ async function main() {
       venue: 'Cafe Roma',
       address: 'Roma Norte, CDMX',
       themeColor: '#2EC4B6',
+      types: ['conferencias', 'ciencia-y-tecnologia'],
+      smokingAllowed: false,
+      petFriendly: true,
+      parkingAvailable: false,
+      minAge: null,
     },
     {
       providerHandle: 'arte-abierto',
@@ -119,6 +184,11 @@ async function main() {
       venue: 'Juarez',
       address: 'Col. Juarez, CDMX',
       themeColor: '#FFA62B',
+      types: ['exhibiciones-de-arte', 'festivales-culturales'],
+      smokingAllowed: false,
+      petFriendly: true,
+      parkingAvailable: true,
+      minAge: null,
     },
     {
       providerHandle: 'fndrs',
@@ -130,6 +200,11 @@ async function main() {
       venue: 'Condesa',
       address: 'Condesa, CDMX',
       themeColor: '#00B4D8',
+      types: ['conferencias'],
+      smokingAllowed: false,
+      petFriendly: true,
+      parkingAvailable: false,
+      minAge: null,
     },
     {
       providerHandle: 'allons-sports',
@@ -141,6 +216,11 @@ async function main() {
       venue: 'Polanco Padel Club',
       address: 'Polanco, CDMX',
       themeColor: '#80ED99',
+      types: ['fitness-y-entrenamiento', 'partidos-y-torneos'],
+      smokingAllowed: false,
+      petFriendly: false,
+      parkingAvailable: true,
+      minAge: 18,
     },
     {
       providerHandle: 'food-week',
@@ -152,6 +232,11 @@ async function main() {
       venue: 'Roma Wine Bar',
       address: 'Roma Norte, CDMX',
       themeColor: '#FFB703',
+      types: ['catas-de-vino-o-cerveza', 'festivales-gastronomicos'],
+      smokingAllowed: false,
+      petFriendly: false,
+      parkingAvailable: false,
+      minAge: 18,
     },
     {
       providerHandle: 'allons',
@@ -163,6 +248,11 @@ async function main() {
       venue: 'Parque Mexico',
       address: 'Condesa, CDMX',
       themeColor: '#4CC9F0',
+      types: ['cine-y-proyecciones', 'comidas'],
+      smokingAllowed: false,
+      petFriendly: true,
+      parkingAvailable: false,
+      minAge: null,
     },
     {
       providerHandle: 'tech-coffee',
@@ -174,6 +264,11 @@ async function main() {
       venue: 'Cowork Roma',
       address: 'Roma Norte, CDMX',
       themeColor: '#F72585',
+      types: ['conferencias', 'hackathons'],
+      smokingAllowed: false,
+      petFriendly: false,
+      parkingAvailable: false,
+      minAge: null,
     },
   ];
 
@@ -193,7 +288,7 @@ async function main() {
     const providerId = providerMap.get(e.providerHandle);
     if (!providerId) continue;
 
-    await prisma.event.create({
+    const created = await prisma.event.create({
       data: {
         providerId,
         title: e.title,
@@ -204,8 +299,26 @@ async function main() {
         venue: e.venue,
         address: e.address,
         themeColor: e.themeColor,
+        smokingAllowed: e.smokingAllowed ?? false,
+        petFriendly: e.petFriendly ?? false,
+        parkingAvailable: e.parkingAvailable ?? false,
+        minAge: e.minAge ?? null,
       },
     });
+
+    const interestIds = (e.types ?? [])
+      .map((slug) => interestMap.get(slug))
+      .filter(Boolean) as string[];
+
+    if (interestIds.length > 0) {
+      await prisma.eventInterest.createMany({
+        data: interestIds.map((interestId) => ({
+          eventId: created.id,
+          interestId,
+        })),
+        skipDuplicates: true,
+      });
+    }
   }
 }
 
