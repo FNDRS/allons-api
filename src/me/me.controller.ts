@@ -26,7 +26,11 @@ export class MeController {
   @Get()
   async getMe(@Headers('authorization') authorization?: string) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
-    return this.meService.getProfile(user.id, user.email, user.user_metadata ?? {});
+    return this.meService.getProfile(
+      user.id,
+      user.email,
+      user.user_metadata ?? {},
+    );
   }
 
   @Patch()

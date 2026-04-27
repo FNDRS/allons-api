@@ -134,16 +134,13 @@ export class MeService {
 
     return memberships
       .map(({ conversation }) => {
-        const others = conversation.members.filter(
-          (m) => m.userId !== userId,
-        );
+        const others = conversation.members.filter((m) => m.userId !== userId);
         const peer = others[0]?.profile;
         const last = conversation.messages[0];
 
         return {
           id: conversation.id,
-          name:
-            peer?.fullName ?? peer?.username ?? 'Conversación',
+          name: peer?.fullName ?? peer?.username ?? 'Conversación',
           lastMessage: last?.body ?? '',
           avatarColor: peer?.avatarColor ?? '#5a4a4a',
           tabs: ['amigos'] as Array<'amigos' | 'eventos'>,
@@ -154,7 +151,10 @@ export class MeService {
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       )
-      .map(({ updatedAt: _updatedAt, ...rest }) => rest);
+      .map(({ updatedAt, ...rest }) => {
+        void updatedAt;
+        return rest;
+      });
   }
 
   async listNotifications(userId: string) {
@@ -177,7 +177,7 @@ export class MeService {
         description: n.description ?? '',
         date: formatShortDate(n.createdAt),
         avatarColor: '#4a4a5a',
-        relevantTabs: (n.relevantTabs ?? []) as string[],
+        relevantTabs: n.relevantTabs ?? [],
       };
       if (n.createdAt >= startOfToday) todayItems.push(item);
       else previousItems.push(item);
