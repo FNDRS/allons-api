@@ -68,14 +68,16 @@ export class InterestsService {
         String(profileError.message).includes('profiles_username_key');
 
       if (isUsernameConflict) {
-        const { error: fallbackProfileError } = await db.from('profiles').upsert(
-          {
-            user_id: userId,
-            full_name: fullName,
-            username: null,
-          },
-          { onConflict: 'user_id' },
-        );
+        const { error: fallbackProfileError } = await db
+          .from('profiles')
+          .upsert(
+            {
+              user_id: userId,
+              full_name: fullName,
+              username: null,
+            },
+            { onConflict: 'user_id' },
+          );
 
         if (fallbackProfileError) {
           throw new InternalServerErrorException(fallbackProfileError.message);
