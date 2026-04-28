@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   Patch,
+  Post,
   Query,
 } from '@nestjs/common';
 import { MeService } from './me.service';
@@ -59,6 +60,18 @@ export class MeController {
   ) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
     return this.meService.listTickets(user.id, { cities, types });
+  }
+
+  @Post('tickets')
+  async createTicket(
+    @Headers('authorization') authorization: string | undefined,
+    @Body() body: { eventId?: string },
+  ) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    if (!body?.eventId || typeof body.eventId !== 'string') {
+      throw new BadRequestException('eventId is required');
+    }
+    return this.meService.createTicket(user.id, body.eventId);
   }
 
   @Get('conversations')

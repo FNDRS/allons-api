@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseList } from '../events/events.types';
 
@@ -138,7 +138,77 @@ export class MeService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return tickets.map((ticket) => ({
+    return tickets.map((ticket) => this.toTicketDto(ticket));
+  }
+
+  async createTicket(userId: string, eventId: string) {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+    });
+    if (!event) {
+      throw new NotFoundException('Event not found');
+    }
+
+    const existing = await this.prisma.ticket.findFirst({
+      where: { ownerId: userId, eventId },
+      include: {
+        event: {
+          include: {
+            provider: true,
+            interests: { include: { interest: true } },
+          },
+        },
+      },
+    });
+    if (existing) {
+      return this.toTicketDto(existing);
+    }
+
+    const ticket = await this.prisma.ticket.create({
+      data: {
+        ownerId: userId,
+        eventId: event.id,
+        title: event.title,
+        themeColor: event.themeColor,
+        tab: 'eventos',
+        attendeeCount: 1,
+      },
+      include: {
+        event: {
+          include: {
+            provider: true,
+            interests: { include: { interest: true } },
+          },
+        },
+      },
+    });
+
+    return this.toTicketDto(ticket);
+  }
+
+  private toTicketDto(ticket: {
+    id: string;
+    title: string;
+    tab: string;
+    themeColor: string | null;
+    attendeeCount: number;
+    eventId: string | null;
+    event: {
+      id: string;
+      title: string;
+      city: string | null;
+      venue: string | null;
+      address: string | null;
+      themeColor: string | null;
+      provider: unknown;
+      interests: { interest: { slug: string } }[];
+      smokingAllowed: boolean;
+      petFriendly: boolean;
+      parkingAvailable: boolean;
+      minAge: number | null;
+    } | null;
+  }) {
+    return {
       id: ticket.id,
       title: ticket.title,
       tab: ticket.tab,
@@ -161,7 +231,7 @@ export class MeService {
             minAge: ticket.event.minAge,
           }
         : null,
-    }));
+    };
   }
 
   async listConversations(userId: string) {
