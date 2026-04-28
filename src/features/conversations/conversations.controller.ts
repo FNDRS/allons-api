@@ -29,7 +29,7 @@ export class ConversationsController {
     );
     const peerUserId = body?.peerUserId;
     if (!peerUserId || typeof peerUserId !== 'string') {
-      throw new BadRequestException('peerUserId is required');
+      throw new BadRequestException('peerUserId es requerido');
     }
     const conv = await this.conversationsService.findOrCreateDirect(
       user.id,
@@ -59,7 +59,7 @@ export class ConversationsController {
       req.headers.authorization,
     );
     if (!body || typeof body !== 'object') {
-      throw new BadRequestException('Payload required');
+      throw new BadRequestException('Payload es requerido');
     }
     return this.conversationsService.sendMessage(user.id, conversationId, body);
   }

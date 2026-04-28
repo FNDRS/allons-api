@@ -43,7 +43,7 @@ export class MeController {
   @Patch()
   async updateMe(@Req() req: Request, @Body() body: UpdateProfileBody) {
     if (body && typeof body !== 'object') {
-      throw new BadRequestException('Invalid body');
+      throw new BadRequestException('Cuerpo de solicitud inválido');
     }
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
@@ -98,14 +98,14 @@ export class MeController {
       req.headers.authorization,
     );
     if (!body?.eventId || typeof body.eventId !== 'string') {
-      throw new BadRequestException('eventId is required');
+      throw new BadRequestException('eventId es requerido');
     }
     const quantity =
       typeof body.quantity === 'number' && Number.isFinite(body.quantity)
         ? Math.floor(body.quantity)
         : 1;
     if (quantity < 1 || quantity > 20) {
-      throw new BadRequestException('quantity must be between 1 and 20');
+      throw new BadRequestException('quantity debe estar entre 1 y 20');
     }
     return this.meService.createTicket(user.id, body.eventId, quantity, {
       name:
@@ -135,7 +135,7 @@ export class MeController {
       req.headers.authorization,
     );
     if (!body?.peerUserId || typeof body.peerUserId !== 'string') {
-      throw new BadRequestException('peerUserId is required');
+      throw new BadRequestException('peerUserId es requerido');
     }
     return this.meService.shareTicketWithUser(user.id, {
       ticketId,
@@ -153,7 +153,7 @@ export class MeController {
       req.headers.authorization,
     );
     if (!body?.email || typeof body.email !== 'string') {
-      throw new BadRequestException('email is required');
+      throw new BadRequestException('email es requerido');
     }
     const inviterName =
       (typeof user.user_metadata?.name === 'string'

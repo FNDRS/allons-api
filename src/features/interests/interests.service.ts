@@ -41,7 +41,7 @@ export class InterestsService {
     ];
 
     if (normalizedNames.length === 0) {
-      throw new BadRequestException('At least one interest must be selected');
+      throw new BadRequestException('Debes seleccionar al menos un interés');
     }
 
     const fullName =

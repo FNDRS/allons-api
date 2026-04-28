@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+.git
+.env
+.env.*
+README.md
+generated/prisma/query_engine*
+generated/prisma/libquery_engine*
+generated/prisma/schema.prisma

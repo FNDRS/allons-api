@@ -277,13 +277,15 @@ export class MeService {
       where: { id: eventId },
     });
     if (!event) {
-      throw new NotFoundException('Event not found');
+      throw new NotFoundException('Evento no encontrado');
     }
     await this.ensureTicketHoldersTable();
 
     const providedHolders = options?.holders ?? [];
     if (providedHolders.length > quantity) {
-      throw new BadRequestException('holders length cannot exceed quantity');
+      throw new BadRequestException(
+        'La cantidad de asistentes no puede exceder la cantidad de tickets',
+      );
     }
 
     const fallbackName = nonEmptyOrUndefined(options?.name) ?? 'Invitado';
@@ -296,7 +298,7 @@ export class MeService {
         (idx === 0 ? fallbackEmail : undefined);
       if (!email) {
         throw new BadRequestException(
-          `holder email is required for ticket ${idx + 1}`,
+          `El correo del asistente es requerido para el ticket ${idx + 1}`,
         );
       }
       const holderUserId =
@@ -343,7 +345,7 @@ export class MeService {
       RETURNING id
     `;
     if (createdRows.length === 0) {
-      throw new InternalServerErrorException('Failed to create ticket');
+      throw new InternalServerErrorException('No se pudo crear el ticket');
     }
     for (let i = 0; i < createdRows.length; i += 1) {
       const row = createdRows[i];
@@ -392,7 +394,7 @@ export class MeService {
       },
     });
     if (!ticket) {
-      throw new NotFoundException('Ticket not found');
+      throw new NotFoundException('Ticket no encontrado');
     }
     const holderRows = await this.prisma.$queryRaw<
       Array<{
@@ -417,7 +419,7 @@ export class MeService {
       normalizedUserEmail.length > 0 && holderEmail === normalizedUserEmail;
 
     if (!isOwner && !isAssignedHolder && !isAssignedByUserId) {
-      throw new ForbiddenException('Ticket does not belong to user');
+      throw new ForbiddenException('El ticket no pertenece al usuario');
     }
 
     const refundPolicy = await this.getRefundPolicyForProvider(
@@ -450,10 +452,10 @@ export class MeService {
       include: { event: true },
     });
     if (!ticket) {
-      throw new NotFoundException('Ticket not found');
+      throw new NotFoundException('Ticket no encontrado');
     }
     if (ticket.ownerId !== userId) {
-      throw new ForbiddenException('Ticket does not belong to user');
+      throw new ForbiddenException('El ticket no pertenece al usuario');
     }
 
     const refundPolicy = await this.getRefundPolicyForProvider(
@@ -722,9 +724,9 @@ export class MeService {
       where: { id: args.ticketId },
       include: { event: true },
     });
-    if (!ticket) throw new NotFoundException('Ticket not found');
+    if (!ticket) throw new NotFoundException('Ticket no encontrado');
     if (ticket.ownerId !== userId) {
-      throw new ForbiddenException('Ticket does not belong to user');
+      throw new ForbiddenException('El ticket no pertenece al usuario');
     }
 
     const peerAuth = await this.supabaseAdmin.db.auth.admin.getUserById(
@@ -812,9 +814,9 @@ export class MeService {
       where: { id: args.ticketId },
       include: { event: true },
     });
-    if (!ticket) throw new NotFoundException('Ticket not found');
+    if (!ticket) throw new NotFoundException('Ticket no encontrado');
     if (ticket.ownerId !== userId) {
-      throw new ForbiddenException('Ticket does not belong to user');
+      throw new ForbiddenException('El ticket no pertenece al usuario');
     }
 
     const email = (args.email ?? '').trim().toLowerCase();

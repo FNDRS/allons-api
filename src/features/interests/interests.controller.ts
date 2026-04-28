@@ -33,10 +33,12 @@ export class InterestsController {
   @Put()
   async update(@Req() req: Request, @Body() body: UpdateInterestsBody) {
     if (!Array.isArray(body?.interests)) {
-      throw new BadRequestException('"interests" must be an array of strings');
+      throw new BadRequestException(
+        '"interests" debe ser un arreglo de strings',
+      );
     }
     if (body.interests.some((item) => typeof item !== 'string')) {
-      throw new BadRequestException('"interests" must contain only strings');
+      throw new BadRequestException('"interests" solo debe contener strings');
     }
 
     const user = await this.supabaseAdmin.getAuthenticatedUser(

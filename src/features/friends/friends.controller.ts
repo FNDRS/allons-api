@@ -37,7 +37,8 @@ export class FriendsController {
 
   @Post(':friendUserId')
   async add(@Req() req: Request, @Param('friendUserId') friendUserId: string) {
-    if (!friendUserId) throw new BadRequestException('friendUserId required');
+    if (!friendUserId)
+      throw new BadRequestException('friendUserId es requerido');
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );

@@ -137,7 +137,7 @@ export class EventsController {
       },
     });
 
-    if (!event) throw new NotFoundException('Event not found');
+    if (!event) throw new NotFoundException('Evento no encontrado');
 
     const attendeeRows = await this.prisma.$queryRaw<
       Array<{
