@@ -2,6 +2,7 @@ import {
   BadRequestException,
   InternalServerErrorException,
 } from '@nestjs/common';
+import type { SupabaseAdminService } from './shared/supabase/supabase-admin.service';
 import { InterestsService } from './features/interests/interests.service';
 
 function makeDb() {
@@ -31,7 +32,7 @@ describe('InterestsService', () => {
       ],
       error: null,
     };
-    const supabaseAdmin: any = { db };
+    const supabaseAdmin = { db } as unknown as SupabaseAdminService;
     const service = new InterestsService(supabaseAdmin);
 
     await expect(service.getUserInterestNames('u1')).resolves.toEqual([
@@ -43,7 +44,7 @@ describe('InterestsService', () => {
   it('throws when supabase errors', async () => {
     const db = makeDb();
     db.state.eqResult = { data: null, error: { message: 'nope' } };
-    const service = new InterestsService({ db } as any);
+    const service = new InterestsService({ db } as unknown as SupabaseAdminService);
     await expect(service.getUserInterestNames('u1')).rejects.toBeInstanceOf(
       InternalServerErrorException,
     );
@@ -51,7 +52,7 @@ describe('InterestsService', () => {
 
   it('rejects empty interests', async () => {
     const db = makeDb();
-    const service = new InterestsService({ db } as any);
+    const service = new InterestsService({ db } as unknown as SupabaseAdminService);
     await expect(
       service.replaceUserInterests('u1', {}, [' ', '']),
     ).rejects.toBeInstanceOf(BadRequestException);
@@ -60,26 +61,29 @@ describe('InterestsService', () => {
   it('handles username conflict by retrying profile upsert', async () => {
     const db = makeDb();
     const calls: any[] = [];
-    const chain = (db.from as any).mock.results[0]?.value;
 
     db.from.mockImplementation(() => {
       const c: any = {
-        upsert: jest.fn(async (...args) => {
+        upsert: jest.fn((...args) => {
           calls.push(args);
-          return calls.length === 1
-            ? { error: { code: '23505', message: 'profiles_username_key' } }
-            : { error: null };
+          return Promise.resolve(
+            calls.length === 1
+              ? { error: { code: '23505', message: 'profiles_username_key' } }
+              : { error: null },
+          );
         }),
         delete: jest.fn(() => c),
-        eq: jest.fn(async () => ({ error: null })),
+        eq: jest.fn(() => Promise.resolve({ error: null })),
         select: jest.fn(() => c),
-        in: jest.fn(async () => ({ data: [{ id: 'i1' }], error: null })),
-        insert: jest.fn(async () => ({ error: null })),
+        in: jest.fn(() =>
+          Promise.resolve({ data: [{ id: 'i1' }], error: null }),
+        ),
+        insert: jest.fn(() => Promise.resolve({ error: null })),
       };
       return c;
     });
 
-    const service = new InterestsService({ db } as any);
+    const service = new InterestsService({ db } as unknown as SupabaseAdminService);
     await expect(
       service.replaceUserInterests('u1', { name: 'Ana', username: 'ana' }, [
         'music',

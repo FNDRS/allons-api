@@ -1,10 +1,12 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import type { PrismaService } from '../../prisma/prisma.service';
+import type { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { FriendsService } from './friends.service';
 
 function makePrisma() {
   return {
-    $executeRaw: jest.fn(async () => 1),
-    $queryRaw: jest.fn(async () => []),
+    $executeRaw: jest.fn(() => Promise.resolve(1)),
+    $queryRaw: jest.fn(() => Promise.resolve([])),
     profile: {
       findUnique: jest.fn(),
       upsert: jest.fn(),
@@ -14,7 +16,7 @@ function makePrisma() {
 
 describe('FriendsService', () => {
   it('filters listFriends by query', async () => {
-    const prisma = makePrisma();
+    const prisma = makePrisma() as unknown as PrismaService;
     prisma.profile.findUnique.mockResolvedValueOnce({
       userId: 'u1',
       location: 'MX',
@@ -38,7 +40,7 @@ describe('FriendsService', () => {
       },
     ]);
 
-    const supabaseAdmin: any = { db: { auth: { admin: {} } } };
+    const supabaseAdmin = { db: { auth: { admin: {} } } } as unknown as SupabaseAdminService;
     const service = new FriendsService(prisma, supabaseAdmin);
 
     const res = await service.listFriends('u1', 'ana');
@@ -47,7 +49,7 @@ describe('FriendsService', () => {
   });
 
   it('listSuggestions falls back to auth users when profiles are empty', async () => {
-    const prisma = makePrisma();
+    const prisma = makePrisma() as unknown as PrismaService;
     prisma.profile.findUnique.mockResolvedValueOnce({
       userId: 'u1',
       location: null,
@@ -56,7 +58,7 @@ describe('FriendsService', () => {
       .mockResolvedValueOnce([]) // profile suggestions
       .mockResolvedValueOnce([{ friend_id: 'u9' }]); // blocked
 
-    const supabaseAdmin: any = {
+    const supabaseAdmin = {
       db: {
         auth: {
           admin: {
@@ -75,7 +77,7 @@ describe('FriendsService', () => {
           },
         },
       },
-    };
+    } as unknown as SupabaseAdminService;
 
     const service = new FriendsService(prisma, supabaseAdmin);
     const res = await service.listSuggestions('u1', 'ana');
@@ -84,10 +86,10 @@ describe('FriendsService', () => {
   });
 
   it('addFriend rejects self and missing user', async () => {
-    const prisma = makePrisma();
-    const supabaseAdmin: any = {
+    const prisma = makePrisma() as unknown as PrismaService;
+    const supabaseAdmin = {
       db: { auth: { admin: { getUserById: jest.fn() } } },
-    };
+    } as unknown as SupabaseAdminService;
     const service = new FriendsService(prisma, supabaseAdmin);
 
     await expect(service.addFriend('u1', 'u1')).rejects.toBeInstanceOf(

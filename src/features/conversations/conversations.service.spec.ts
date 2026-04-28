@@ -7,11 +7,12 @@ import {
   ConversationsService,
   parseMessageBody,
 } from './conversations.service';
+import type { PrismaService } from '../../prisma/prisma.service';
 
 function makePrisma() {
   return {
-    $executeRaw: jest.fn(async () => 1),
-    $queryRaw: jest.fn(async () => []),
+    $executeRaw: jest.fn(() => Promise.resolve(1)),
+    $queryRaw: jest.fn(() => Promise.resolve([])),
     profile: { findUnique: jest.fn() },
     conversationMember: {
       findFirst: jest.fn(),
@@ -43,7 +44,7 @@ describe('parseMessageBody', () => {
 
 describe('ConversationsService', () => {
   it('findOrCreateDirect rejects self and missing peer', async () => {
-    const prisma = makePrisma();
+    const prisma = makePrisma() as unknown as PrismaService;
     const service = new ConversationsService(prisma);
 
     await expect(service.findOrCreateDirect('u1', 'u1')).rejects.toBeInstanceOf(
@@ -57,7 +58,7 @@ describe('ConversationsService', () => {
   });
 
   it('findOrCreateDirect returns existing conversation with 2 members', async () => {
-    const prisma = makePrisma();
+    const prisma = makePrisma() as unknown as PrismaService;
     const service = new ConversationsService(prisma);
     prisma.profile.findUnique.mockResolvedValueOnce({ userId: 'u2' });
     prisma.conversationMember.findFirst.mockResolvedValueOnce({
@@ -71,7 +72,7 @@ describe('ConversationsService', () => {
   });
 
   it('sendMessage enforces membership and sanitizes payload', async () => {
-    const prisma = makePrisma();
+    const prisma = makePrisma() as unknown as PrismaService;
     const service = new ConversationsService(prisma);
     prisma.conversationMember.findUnique.mockResolvedValueOnce(null);
     await expect(

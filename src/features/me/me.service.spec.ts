@@ -4,11 +4,15 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { MeService } from './me.service';
+import type { PrismaService } from '../../prisma/prisma.service';
+import type { ConversationsService } from '../conversations/conversations.service';
+import type { MailService } from '../../shared/mail/mail.service';
+import type { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 
 function makePrisma() {
   return {
-    $executeRaw: jest.fn(async () => 1),
-    $queryRaw: jest.fn(async () => []),
+    $executeRaw: jest.fn(() => Promise.resolve(1)),
+    $queryRaw: jest.fn(() => Promise.resolve([])),
     profile: {
       findUnique: jest.fn(),
       upsert: jest.fn(),
@@ -33,7 +37,7 @@ function makePrisma() {
 
 describe('MeService', () => {
   it('getProfile uses profile data and metadata fallbacks', async () => {
-    const prisma = makePrisma();
+    const prisma = makePrisma() as unknown as PrismaService;
     prisma.profile.findUnique.mockResolvedValueOnce({
       userId: 'u1',
       fullName: '',
@@ -45,9 +49,9 @@ describe('MeService', () => {
     });
     const service = new MeService(
       prisma,
-      { ensureConversationReadsTable: jest.fn() } as any,
-      { sendTicketInvitation: jest.fn() } as any,
-      { db: { auth: { admin: {} } } } as any,
+      { ensureConversationReadsTable: jest.fn() } as unknown as ConversationsService,
+      { sendTicketInvitation: jest.fn() } as unknown as MailService,
+      { db: { auth: { admin: {} } } } as unknown as SupabaseAdminService,
     );
 
     const res = await service.getProfile('u1', 'x@y.com', {
