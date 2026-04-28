@@ -184,13 +184,17 @@ export class MeService {
 
     const holdersByTicket = new Map<
       string,
-      { holderName: string; holderEmail: string }
+      { holderName: string; holderEmail: string; holderUserId: string | null }
     >();
     for (const ticket of tickets) {
       const rows = await this.prisma.$queryRaw<
-        Array<{ holder_name: string; holder_email: string }>
+        Array<{
+          holder_name: string;
+          holder_email: string;
+          holder_user_id: string | null;
+        }>
       >`
-        SELECT holder_name, holder_email
+        SELECT holder_name, holder_email, holder_user_id
         FROM ticket_holders
         WHERE ticket_id = ${ticket.id}::uuid
         LIMIT 1
@@ -200,13 +204,59 @@ export class MeService {
         holdersByTicket.set(ticket.id, {
           holderName: row.holder_name,
           holderEmail: row.holder_email,
+          holderUserId: row.holder_user_id,
         });
       }
     }
 
-    return tickets.map((ticket) =>
-      this.toTicketDto(ticket, holdersByTicket.get(ticket.id)),
-    );
+    const normalizedUserEmail = userEmail.trim().toLowerCase();
+    const groups = new Map<
+      string,
+      {
+        representative: (typeof tickets)[number];
+        representativeHolder?: {
+          holderName: string;
+          holderEmail: string;
+          holderUserId: string | null;
+        };
+        attendeeEmails: Set<string>;
+      }
+    >();
+
+    for (const ticket of tickets) {
+      const holder = holdersByTicket.get(ticket.id);
+      const key = ticket.eventId ?? ticket.id;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          representative: ticket,
+          representativeHolder: holder,
+          attendeeEmails: new Set<string>(),
+        });
+      }
+      const group = groups.get(key)!;
+      const holderEmail = (holder?.holderEmail ?? '').trim().toLowerCase();
+      if (holderEmail) group.attendeeEmails.add(holderEmail);
+
+      const currentRepEmail = (
+        group.representativeHolder?.holderEmail ?? ''
+      )
+        .trim()
+        .toLowerCase();
+      const isCurrentUsersTicket = holderEmail === normalizedUserEmail;
+      const repIsCurrentUsersTicket = currentRepEmail === normalizedUserEmail;
+      if (isCurrentUsersTicket && !repIsCurrentUsersTicket) {
+        group.representative = ticket;
+        group.representativeHolder = holder;
+      }
+    }
+
+    return Array.from(groups.values()).map((group) => {
+      const dto = this.toTicketDto(group.representative, group.representativeHolder);
+      return {
+        ...dto,
+        attendeeCount: Math.max(group.attendeeEmails.size, 1),
+      };
+    });
   }
 
   async createTicket(
@@ -246,8 +296,30 @@ export class MeService {
           `holder email is required for ticket ${idx + 1}`,
         );
       }
-      return { name, email };
+      const holderUserId =
+        fallbackEmail && email.trim().toLowerCase() === fallbackEmail.trim().toLowerCase()
+          ? userId
+          : null;
+      return { name, email, holderUserId };
     });
+
+    const seenEmails = new Set<string>();
+    for (const holder of holders) {
+      const normalized = holder.email.trim().toLowerCase();
+      if (seenEmails.has(normalized)) {
+        throw new BadRequestException(
+          'No puedes comprar esta invitación ya tienes una invitación asignada para este evento.',
+        );
+      }
+      seenEmails.add(normalized);
+    }
+    for (const holder of holders) {
+      await this.assertNoDuplicateTicketForEventAndEmail(
+        event.id,
+        holder.email,
+        'purchase',
+      );
+    }
 
     const createdRows = await this.prisma.$queryRaw<Array<{ id: string }>>`
       INSERT INTO tickets (
@@ -276,12 +348,14 @@ export class MeService {
         INSERT INTO ticket_holders (
           ticket_id,
           holder_name,
-          holder_email
+          holder_email,
+          holder_user_id
         )
         VALUES (
           ${row.id}::uuid,
           ${holder.name},
-          ${holder.email}
+          ${holder.email},
+          ${holder.holderUserId}::uuid
         )
       `;
     }
@@ -292,7 +366,11 @@ export class MeService {
     };
   }
 
-  async getTicketDetails(userId: string, ticketId: string) {
+  async getTicketDetails(
+    userId: string,
+    ticketId: string,
+    userEmail?: string | null,
+  ) {
     await this.ensureTicketHoldersTable();
     await this.ensureProviderRefundPoliciesTable();
 
@@ -310,19 +388,31 @@ export class MeService {
     if (!ticket) {
       throw new NotFoundException('Ticket not found');
     }
-    if (ticket.ownerId !== userId) {
-      throw new ForbiddenException('Ticket does not belong to user');
-    }
-
     const holderRows = await this.prisma.$queryRaw<
-      Array<{ holder_name: string; holder_email: string }>
+      Array<{
+        holder_name: string;
+        holder_email: string;
+        holder_user_id: string | null;
+      }>
     >`
-      SELECT holder_name, holder_email
+      SELECT holder_name, holder_email, holder_user_id
       FROM ticket_holders
       WHERE ticket_id = ${ticket.id}::uuid
       LIMIT 1
     `;
     const holder = holderRows[0];
+
+    const normalizedUserEmail = (userEmail ?? '').trim().toLowerCase();
+    const holderEmail = (holder?.holder_email ?? '').trim().toLowerCase();
+    const holderUserId = holder?.holder_user_id ?? null;
+    const isOwner = ticket.ownerId === userId;
+    const isAssignedByUserId = Boolean(holderUserId) && holderUserId === userId;
+    const isAssignedHolder =
+      normalizedUserEmail.length > 0 && holderEmail === normalizedUserEmail;
+
+    if (!isOwner && !isAssignedHolder && !isAssignedByUserId) {
+      throw new ForbiddenException('Ticket does not belong to user');
+    }
 
     const refundPolicy = await this.getRefundPolicyForProvider(
       ticket.event?.providerId ?? null,
@@ -381,8 +471,13 @@ export class MeService {
         ticket_id uuid PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
         holder_name text NOT NULL,
         holder_email text NOT NULL,
+        holder_user_id uuid,
         created_at timestamptz NOT NULL DEFAULT now()
       )
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE ticket_holders
+      ADD COLUMN IF NOT EXISTS holder_user_id uuid
     `;
   }
 
@@ -501,6 +596,7 @@ export class MeService {
   }
 
   async listConversations(userId: string) {
+    await this.conversationsService.ensureConversationReadsTable();
     const memberships = await this.prisma.conversationMember.findMany({
       where: { userId },
       include: {
@@ -513,7 +609,7 @@ export class MeService {
       },
     });
 
-    return memberships
+    const base = memberships
       .map(({ conversation }) => {
         const others = conversation.members.filter((m) => m.userId !== userId);
         const peer = others[0]?.profile;
@@ -533,6 +629,7 @@ export class MeService {
           avatarUrl: peer?.avatarUrl ?? null,
           avatarColor: peer?.avatarColor ?? '#5a4a4a',
           tabs,
+          lastSenderId: last?.senderId ?? null,
           updatedAt: last?.createdAt ?? conversation.createdAt,
         };
       })
@@ -540,10 +637,28 @@ export class MeService {
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       )
-      .map(({ updatedAt, ...rest }) => {
-        void updatedAt;
-        return rest;
+      .map(async ({ updatedAt, lastSenderId, ...rest }) => {
+        const readRows = await this.prisma.$queryRaw<
+          Array<{ last_read_at: Date }>
+        >`
+          SELECT last_read_at
+          FROM conversation_reads
+          WHERE conversation_id = ${rest.id}::uuid
+            AND user_id = ${userId}::uuid
+          LIMIT 1
+        `;
+        const lastReadAt = readRows[0]?.last_read_at ?? null;
+        const unread =
+          Boolean(lastSenderId) &&
+          lastSenderId !== userId &&
+          (!lastReadAt ||
+            new Date(updatedAt).getTime() > new Date(lastReadAt).getTime());
+        return {
+          ...rest,
+          unread,
+        };
       });
+    return Promise.all(base);
   }
 
   async listNotifications(userId: string) {
@@ -585,6 +700,7 @@ export class MeService {
     userId: string,
     args: { ticketId: string; peerUserId: string },
   ) {
+    await this.ensureTicketHoldersTable();
     const ticket = await this.prisma.ticket.findUnique({
       where: { id: args.ticketId },
       include: { event: true },
@@ -593,6 +709,43 @@ export class MeService {
     if (ticket.ownerId !== userId) {
       throw new ForbiddenException('Ticket does not belong to user');
     }
+
+    const peerAuth = await this.supabaseAdmin.db.auth.admin.getUserById(
+      args.peerUserId,
+    );
+    const peerUser = peerAuth.data?.user;
+    const peerEmail = (peerUser?.email ?? '').trim().toLowerCase();
+    if (!peerEmail) {
+      throw new BadRequestException(
+        'No se pudo obtener el correo del usuario invitado.',
+      );
+    }
+    const peerName =
+      (typeof peerUser?.user_metadata?.name === 'string'
+        ? peerUser.user_metadata.name
+        : undefined) ??
+      (typeof peerUser?.user_metadata?.full_name === 'string'
+        ? peerUser.user_metadata.full_name
+        : undefined) ??
+      'Invitado';
+
+    await this.assertNoDuplicateTicketForEventAndEmail(
+      ticket.eventId,
+      peerEmail,
+      'accept-invite',
+    );
+
+    // Assign this shared ticket holder to the invited Allons user so it appears in "Mis Tickets".
+    await this.prisma.$executeRaw`
+      INSERT INTO ticket_holders (ticket_id, holder_name, holder_email, holder_user_id)
+      VALUES (${ticket.id}::uuid, ${peerName}, ${peerEmail}, ${args.peerUserId}::uuid)
+      ON CONFLICT (ticket_id)
+      DO UPDATE SET
+        holder_name = EXCLUDED.holder_name,
+        holder_email = EXCLUDED.holder_email,
+        holder_user_id = EXCLUDED.holder_user_id
+    `;
+
     const conv = await this.conversationsService.findOrCreateDirect(
       userId,
       args.peerUserId,
@@ -632,6 +785,11 @@ export class MeService {
     if (!email || !email.includes('@')) {
       throw new BadRequestException('Email inválido');
     }
+    await this.assertNoDuplicateTicketForEventAndEmail(
+      ticket.eventId,
+      email,
+      'accept-invite',
+    );
 
     let allonsUserId: string | null = null;
     try {
@@ -653,6 +811,11 @@ export class MeService {
 
     let conversationId: string | null = null;
     if (allonsUserId) {
+      await this.prisma.$executeRaw`
+        UPDATE ticket_holders
+        SET holder_user_id = ${allonsUserId}::uuid
+        WHERE ticket_id = ${ticket.id}::uuid
+      `;
       const conv = await this.conversationsService.findOrCreateDirect(
         userId,
         allonsUserId,
@@ -684,6 +847,35 @@ export class MeService {
       conversationId,
       mail,
     };
+  }
+
+  private async assertNoDuplicateTicketForEventAndEmail(
+    eventId: string | null,
+    email: string,
+    context: 'purchase' | 'accept-invite',
+  ) {
+    if (!eventId) return;
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) return;
+
+    const rows = await this.prisma.$queryRaw<Array<{ ticket_id: string }>>`
+      SELECT t.id AS ticket_id
+      FROM tickets t
+      JOIN ticket_holders th ON th.ticket_id = t.id
+      WHERE t.event_id = ${eventId}::uuid
+        AND LOWER(th.holder_email) = ${normalizedEmail}
+      LIMIT 1
+    `;
+    if (rows.length > 0) {
+      if (context === 'purchase') {
+        throw new BadRequestException(
+          'No puedes comprar esta invitación ya tienes una invitación asignada para este evento.',
+        );
+      }
+      throw new BadRequestException(
+        'No puedes aceptar esta invitación porque ya tienes una invitación a tu nombre.',
+      );
+    }
   }
 
   async listEventHistory(userId: string) {

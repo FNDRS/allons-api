@@ -3,10 +3,11 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
   Param,
   Post,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { ConversationsService } from './conversations.service';
 import type { MessagePayload } from './conversations.service';
 import { SupabaseAdminService } from '../supabase-admin.service';
@@ -20,10 +21,12 @@ export class ConversationsController {
 
   @Post()
   async createOrFind(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() req: Request,
     @Body() body: { peerUserId?: string },
   ) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     const peerUserId = body?.peerUserId;
     if (!peerUserId || typeof peerUserId !== 'string') {
       throw new BadRequestException('peerUserId is required');
@@ -37,20 +40,24 @@ export class ConversationsController {
 
   @Get(':conversationId')
   async getOne(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() req: Request,
     @Param('conversationId') conversationId: string,
   ) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     return this.conversationsService.getConversation(user.id, conversationId);
   }
 
   @Post(':conversationId/messages')
   async sendMessage(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() req: Request,
     @Param('conversationId') conversationId: string,
     @Body() body: MessagePayload,
   ) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     if (!body || typeof body !== 'object') {
       throw new BadRequestException('Payload required');
     }

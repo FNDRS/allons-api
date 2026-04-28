@@ -4,12 +4,13 @@ import {
   Controller,
   Delete,
   Get,
-  Headers,
   Param,
   Patch,
   Post,
   Query,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { MeService } from './me.service';
 import { SupabaseAdminService } from '../supabase-admin.service';
 
@@ -28,8 +29,10 @@ export class MeController {
   ) {}
 
   @Get()
-  async getMe(@Headers('authorization') authorization?: string) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+  async getMe(@Req() req: Request) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     return this.meService.getProfile(
       user.id,
       user.email,
@@ -39,13 +42,15 @@ export class MeController {
 
   @Patch()
   async updateMe(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() req: Request,
     @Body() body: UpdateProfileBody,
   ) {
     if (body && typeof body !== 'object') {
       throw new BadRequestException('Invalid body');
     }
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     return this.meService.updateProfile(
       user.id,
       user.email,
@@ -56,11 +61,13 @@ export class MeController {
 
   @Get('tickets')
   async listTickets(
-    @Headers('authorization') authorization?: string,
+    @Req() req: Request,
     @Query('cities') cities?: string | string[],
     @Query('types') types?: string | string[],
   ) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     return this.meService.listTickets(user.id, {
       cities,
       types,
@@ -70,16 +77,18 @@ export class MeController {
 
   @Get('tickets/:ticketId')
   async getTicket(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() req: Request,
     @Param('ticketId') ticketId: string,
   ) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
-    return this.meService.getTicketDetails(user.id, ticketId);
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
+    return this.meService.getTicketDetails(user.id, ticketId, user.email ?? null);
   }
 
   @Post('tickets')
   async createTicket(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() req: Request,
     @Body()
     body: {
       eventId?: string;
@@ -87,7 +96,9 @@ export class MeController {
       holders?: Array<{ name?: string; email?: string }>;
     },
   ) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     if (!body?.eventId || typeof body.eventId !== 'string') {
       throw new BadRequestException('eventId is required');
     }
@@ -110,20 +121,24 @@ export class MeController {
 
   @Delete('tickets/:ticketId')
   async cancelTicket(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() req: Request,
     @Param('ticketId') ticketId: string,
   ) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     return this.meService.cancelTicket(user.id, ticketId);
   }
 
   @Post('tickets/:ticketId/share')
   async shareTicket(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() req: Request,
     @Param('ticketId') ticketId: string,
     @Body() body: { peerUserId?: string },
   ) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     if (!body?.peerUserId || typeof body.peerUserId !== 'string') {
       throw new BadRequestException('peerUserId is required');
     }
@@ -135,11 +150,13 @@ export class MeController {
 
   @Post('tickets/:ticketId/invite')
   async inviteTicketRecipient(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() req: Request,
     @Param('ticketId') ticketId: string,
     @Body() body: { email?: string; name?: string | null },
   ) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     if (!body?.email || typeof body.email !== 'string') {
       throw new BadRequestException('email is required');
     }
@@ -156,20 +173,26 @@ export class MeController {
   }
 
   @Get('conversations')
-  async listConversations(@Headers('authorization') authorization?: string) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+  async listConversations(@Req() req: Request) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     return this.meService.listConversations(user.id);
   }
 
   @Get('notifications')
-  async listNotifications(@Headers('authorization') authorization?: string) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+  async listNotifications(@Req() req: Request) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     return this.meService.listNotifications(user.id);
   }
 
   @Get('event-history')
-  async listEventHistory(@Headers('authorization') authorization?: string) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+  async listEventHistory(@Req() req: Request) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     return this.meService.listEventHistory(user.id);
   }
 }

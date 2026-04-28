@@ -3,9 +3,10 @@ import {
   Body,
   Controller,
   Get,
-  Headers,
+  Req,
   Put,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { InterestsService } from './interests.service';
 import { SupabaseAdminService } from './supabase-admin.service';
 
@@ -21,15 +22,17 @@ export class InterestsController {
   ) {}
 
   @Get()
-  async list(@Headers('authorization') authorization?: string) {
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+  async list(@Req() req: Request) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     const interests = await this.interestsService.getUserInterestNames(user.id);
     return { interests };
   }
 
   @Put()
   async update(
-    @Headers('authorization') authorization: string | undefined,
+    @Req() req: Request,
     @Body() body: UpdateInterestsBody,
   ) {
     if (!Array.isArray(body?.interests)) {
@@ -39,7 +42,9 @@ export class InterestsController {
       throw new BadRequestException('"interests" must contain only strings');
     }
 
-    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
     const interests = await this.interestsService.replaceUserInterests(
       user.id,
       user.user_metadata ?? {},

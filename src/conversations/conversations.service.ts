@@ -29,6 +29,17 @@ export interface MessageDto {
 export class ConversationsService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async ensureConversationReadsTable() {
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS conversation_reads (
+        conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        user_id uuid NOT NULL REFERENCES profiles(user_id) ON DELETE CASCADE,
+        last_read_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (conversation_id, user_id)
+      )
+    `;
+  }
+
   async findOrCreateDirect(userId: string, peerUserId: string) {
     if (userId === peerUserId) {
       throw new BadRequestException('Selecciona otra persona.');
@@ -67,6 +78,7 @@ export class ConversationsService {
   }
 
   async getConversation(userId: string, conversationId: string) {
+    await this.ensureConversationReadsTable();
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
       include: {
@@ -84,6 +96,13 @@ export class ConversationsService {
     const peerProfile = conversation.members.find(
       (m) => m.userId !== userId,
     )?.profile;
+
+    await this.prisma.$executeRaw`
+      INSERT INTO conversation_reads (conversation_id, user_id, last_read_at)
+      VALUES (${conversation.id}::uuid, ${userId}::uuid, now())
+      ON CONFLICT (conversation_id, user_id)
+      DO UPDATE SET last_read_at = EXCLUDED.last_read_at
+    `;
 
     return {
       id: conversation.id,

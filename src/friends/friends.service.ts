@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { SupabaseAdminService } from '../supabase-admin.service';
 
 export interface FriendDto {
   userId: string;
@@ -17,7 +18,10 @@ export interface FriendDto {
 
 @Injectable()
 export class FriendsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly supabaseAdmin: SupabaseAdminService,
+  ) {}
 
   async ensureTable() {
     await this.prisma.$executeRaw`
@@ -88,8 +92,49 @@ export class FriendsService {
         COALESCE(p.full_name, p.username, '') ASC
     `;
 
-    const filtered = filterByQuery(rows, query);
-    return filtered.map(toFriendDto);
+    const filtered = filterByCityThenGlobal(rows, myLocation, query);
+    const fromProfiles = filtered.map(toFriendDto);
+    if (fromProfiles.length > 0) return fromProfiles;
+
+    const friendRows = await this.prisma.$queryRaw<Array<{ friend_id: string }>>`
+      SELECT friend_id
+      FROM friendships
+      WHERE user_id = ${userId}::uuid
+    `;
+    const blocked = new Set(friendRows.map((r) => r.friend_id));
+    blocked.add(userId);
+
+    const authUsers = await this.listAuthUsersFallback();
+    const fallback = authUsers
+      .filter((u) => u.id && !blocked.has(u.id))
+      .map((u) => ({
+        userId: u.id!,
+        fullName:
+          (typeof u.user_metadata?.name === 'string'
+            ? u.user_metadata.name
+            : null) ??
+          (typeof u.user_metadata?.full_name === 'string'
+            ? u.user_metadata.full_name
+            : null),
+        username:
+          (typeof u.user_metadata?.username === 'string'
+            ? u.user_metadata.username
+            : null) ??
+          (u.email ? u.email.split('@')[0] : null),
+        avatarUrl:
+          (typeof u.user_metadata?.avatar_url === 'string'
+            ? u.user_metadata.avatar_url
+            : null) ??
+          (typeof u.user_metadata?.picture === 'string'
+            ? u.user_metadata.picture
+            : null),
+        avatarColor: '#5a4a4a',
+        location:
+          typeof u.user_metadata?.location === 'string'
+            ? u.user_metadata.location
+            : null,
+      }));
+    return filterFriendDtosByQuery(fallback, query);
   }
 
   async addFriend(userId: string, friendUserId: string) {
@@ -97,9 +142,12 @@ export class FriendsService {
       throw new BadRequestException('No te puedes agregar a ti mismo.');
     }
     await this.ensureTable();
-    const target = await this.prisma.profile.findUnique({
+    let target = await this.prisma.profile.findUnique({
       where: { userId: friendUserId },
     });
+    if (!target) {
+      target = await this.ensureProfileFromAuth(friendUserId);
+    }
     if (!target) {
       throw new NotFoundException('Usuario no encontrado.');
     }
@@ -140,6 +188,61 @@ export class FriendsService {
     `;
     return Boolean(rows[0]?.exists);
   }
+
+  private async listAuthUsersFallback() {
+    try {
+      const first = await this.supabaseAdmin.db.auth.admin.listUsers({
+        page: 1,
+        perPage: 200,
+      });
+      return first.data?.users ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async ensureProfileFromAuth(friendUserId: string) {
+    try {
+      const auth = await this.supabaseAdmin.db.auth.admin.getUserById(friendUserId);
+      const user = auth.data?.user;
+      if (!user) return null;
+      return this.prisma.profile.upsert({
+        where: { userId: friendUserId },
+        create: {
+          userId: friendUserId,
+          fullName:
+            (typeof user.user_metadata?.name === 'string'
+              ? user.user_metadata.name
+              : undefined) ??
+            (typeof user.user_metadata?.full_name === 'string'
+              ? user.user_metadata.full_name
+              : undefined) ??
+            null,
+          username:
+            (typeof user.user_metadata?.username === 'string'
+              ? user.user_metadata.username
+              : undefined) ??
+            (user.email ? user.email.split('@')[0] : null),
+          avatarUrl:
+            (typeof user.user_metadata?.avatar_url === 'string'
+              ? user.user_metadata.avatar_url
+              : undefined) ??
+            (typeof user.user_metadata?.picture === 'string'
+              ? user.user_metadata.picture
+              : undefined) ??
+            null,
+          avatarColor: '#5a4a4a',
+          location:
+            typeof user.user_metadata?.location === 'string'
+              ? user.user_metadata.location
+              : null,
+        },
+        update: {},
+      });
+    } catch {
+      return null;
+    }
+  }
 }
 
 function filterByQuery<T extends { full_name: string | null; username: string | null; location: string | null }>(
@@ -172,4 +275,27 @@ function toFriendDto(row: {
     avatarColor: row.avatar_color,
     location: row.location,
   };
+}
+
+function filterFriendDtosByQuery(rows: FriendDto[], query?: string) {
+  const q = (query ?? '').trim().toLowerCase();
+  if (q.length === 0) return rows;
+  return rows.filter((r) =>
+    [r.fullName ?? '', r.username ?? '', r.location ?? '']
+      .join(' ')
+      .toLowerCase()
+      .includes(q),
+  );
+}
+
+function filterByCityThenGlobal<
+  T extends { location: string | null; full_name: string | null; username: string | null },
+>(rows: T[], myLocation: string | null, query?: string) {
+  if (!myLocation) return filterByQuery(rows, query);
+
+  const sameCity = rows.filter((r) => r.location === myLocation);
+  const sameCityFiltered = filterByQuery(sameCity, query);
+  if (sameCityFiltered.length > 0) return sameCityFiltered;
+
+  return filterByQuery(rows, query);
 }
