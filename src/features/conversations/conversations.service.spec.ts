@@ -34,7 +34,10 @@ describe('parseMessageBody', () => {
       type: 'text',
       text: 'hola',
     });
-    expect(parseMessageBody('legacy')).toEqual({ type: 'text', text: 'legacy' });
+    expect(parseMessageBody('legacy')).toEqual({
+      type: 'text',
+      text: 'legacy',
+    });
   });
 });
 

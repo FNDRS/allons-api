@@ -31,10 +31,7 @@ export class InterestsController {
   }
 
   @Put()
-  async update(
-    @Req() req: Request,
-    @Body() body: UpdateInterestsBody,
-  ) {
+  async update(@Req() req: Request, @Body() body: UpdateInterestsBody) {
     if (!Array.isArray(body?.interests)) {
       throw new BadRequestException('"interests" must be an array of strings');
     }

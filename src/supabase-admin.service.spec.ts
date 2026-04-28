@@ -39,12 +39,12 @@ describe('SupabaseAdminService', () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'k';
     const service = new SupabaseAdminService();
 
-    await expect(service.getAuthenticatedUser(undefined)).rejects.toBeInstanceOf(
-      UnauthorizedException,
-    );
-    await expect(service.getAuthenticatedUser('Token abc')).rejects.toBeInstanceOf(
-      UnauthorizedException,
-    );
+    await expect(
+      service.getAuthenticatedUser(undefined),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+    await expect(
+      service.getAuthenticatedUser('Token abc'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
   it('rejects invalid token and returns user for valid token', async () => {
@@ -53,12 +53,15 @@ describe('SupabaseAdminService', () => {
     const service = new SupabaseAdminService();
 
     (service as any).client.auth.getUser
-      .mockResolvedValueOnce({ data: { user: null }, error: { message: 'bad' } })
+      .mockResolvedValueOnce({
+        data: { user: null },
+        error: { message: 'bad' },
+      })
       .mockResolvedValueOnce({ data: { user: { id: 'u1' } }, error: null });
 
-    await expect(service.getAuthenticatedUser('Bearer bad')).rejects.toBeInstanceOf(
-      UnauthorizedException,
-    );
+    await expect(
+      service.getAuthenticatedUser('Bearer bad'),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
     await expect(service.getAuthenticatedUser('Bearer ok')).resolves.toEqual({
       id: 'u1',
     });

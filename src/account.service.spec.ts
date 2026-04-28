@@ -15,7 +15,10 @@ describe('AccountService', () => {
     const service = new AccountService(supabaseAdmin);
 
     await expect(service.deleteAccount('u1')).resolves.toBeUndefined();
-    expect(supabaseAdmin.db.auth.admin.deleteUser).toHaveBeenCalledWith('u1', true);
+    expect(supabaseAdmin.db.auth.admin.deleteUser).toHaveBeenCalledWith(
+      'u1',
+      true,
+    );
   });
 
   it('throws when supabase returns error', async () => {

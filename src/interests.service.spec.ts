@@ -34,7 +34,10 @@ describe('InterestsService', () => {
     const supabaseAdmin: any = { db };
     const service = new InterestsService(supabaseAdmin);
 
-    await expect(service.getUserInterestNames('u1')).resolves.toEqual(['a', 'b']);
+    await expect(service.getUserInterestNames('u1')).resolves.toEqual([
+      'a',
+      'b',
+    ]);
   });
 
   it('throws when supabase errors', async () => {
@@ -78,11 +81,11 @@ describe('InterestsService', () => {
 
     const service = new InterestsService({ db } as any);
     await expect(
-      service.replaceUserInterests(
-        'u1',
-        { name: 'Ana', username: 'ana' },
-        ['music', 'music', ' art '],
-      ),
+      service.replaceUserInterests('u1', { name: 'Ana', username: 'ana' }, [
+        'music',
+        'music',
+        ' art ',
+      ]),
     ).resolves.toEqual(['music', 'art']);
 
     // Called for profile upsert (conflict + retry) and interests upsert.

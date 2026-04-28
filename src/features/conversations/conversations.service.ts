@@ -241,7 +241,11 @@ function sanitizePayload(payload: MessagePayload): MessagePayload {
 export function parseMessageBody(body: string): MessagePayload {
   try {
     const parsed = JSON.parse(body);
-    if (parsed && typeof parsed === 'object' && typeof parsed.type === 'string') {
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof parsed.type === 'string'
+    ) {
       return parsed as MessagePayload;
     }
   } catch {

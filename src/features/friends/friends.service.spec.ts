@@ -1,7 +1,4 @@
-import {
-  BadRequestException,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { FriendsService } from './friends.service';
 
 function makePrisma() {
@@ -18,7 +15,10 @@ function makePrisma() {
 describe('FriendsService', () => {
   it('filters listFriends by query', async () => {
     const prisma = makePrisma();
-    prisma.profile.findUnique.mockResolvedValueOnce({ userId: 'u1', location: 'MX' });
+    prisma.profile.findUnique.mockResolvedValueOnce({
+      userId: 'u1',
+      location: 'MX',
+    });
     prisma.$queryRaw.mockResolvedValueOnce([
       {
         user_id: 'u2',
@@ -48,7 +48,10 @@ describe('FriendsService', () => {
 
   it('listSuggestions falls back to auth users when profiles are empty', async () => {
     const prisma = makePrisma();
-    prisma.profile.findUnique.mockResolvedValueOnce({ userId: 'u1', location: null });
+    prisma.profile.findUnique.mockResolvedValueOnce({
+      userId: 'u1',
+      location: null,
+    });
     prisma.$queryRaw
       .mockResolvedValueOnce([]) // profile suggestions
       .mockResolvedValueOnce([{ friend_id: 'u9' }]); // blocked
@@ -92,7 +95,9 @@ describe('FriendsService', () => {
     );
 
     prisma.profile.findUnique.mockResolvedValueOnce(null);
-    supabaseAdmin.db.auth.admin.getUserById.mockResolvedValueOnce({ data: { user: null } });
+    supabaseAdmin.db.auth.admin.getUserById.mockResolvedValueOnce({
+      data: { user: null },
+    });
     await expect(service.addFriend('u1', 'u2')).rejects.toBeInstanceOf(
       NotFoundException,
     );

@@ -66,18 +66,18 @@ describe('MeService', () => {
   it('updateProfile upserts and returns getProfile result', async () => {
     const prisma = makePrisma();
     prisma.profile.upsert.mockResolvedValueOnce({ userId: 'u1' });
-    const service = new MeService(
-      prisma,
-      {} as any,
-      {} as any,
-      {} as any,
-    );
+    const service = new MeService(prisma, {} as any, {} as any, {} as any);
     const spy = jest
       .spyOn(service, 'getProfile')
       .mockResolvedValueOnce({ userId: 'u1' } as any);
 
     await expect(
-      service.updateProfile('u1', 'a@b.com', { fullName: 'Ana' }, { username: 'ana' }),
+      service.updateProfile(
+        'u1',
+        'a@b.com',
+        { fullName: 'Ana' },
+        { username: 'ana' },
+      ),
     ).resolves.toEqual({ userId: 'u1' });
     expect(prisma.profile.upsert).toHaveBeenCalled();
     expect(spy).toHaveBeenCalled();
@@ -133,17 +133,34 @@ describe('MeService', () => {
       NotFoundException,
     );
 
-    prisma.event.findUnique.mockResolvedValueOnce({ id: 'e1', title: 'T', themeColor: '#1' });
+    prisma.event.findUnique.mockResolvedValueOnce({
+      id: 'e1',
+      title: 'T',
+      themeColor: '#1',
+    });
     await expect(
-      service.createTicket('u1', 'e1', 1, { holders: [{ email: 'a@b.com' }, { email: 'b@b.com' }] }),
+      service.createTicket('u1', 'e1', 1, {
+        holders: [{ email: 'a@b.com' }, { email: 'b@b.com' }],
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
 
-    prisma.event.findUnique.mockResolvedValueOnce({ id: 'e1', title: 'T', themeColor: '#1' });
+    prisma.event.findUnique.mockResolvedValueOnce({
+      id: 'e1',
+      title: 'T',
+      themeColor: '#1',
+    });
     await expect(
-      service.createTicket('u1', 'e1', 2, { email: 'me@x.com', holders: [{ name: 'Ana' }] }),
+      service.createTicket('u1', 'e1', 2, {
+        email: 'me@x.com',
+        holders: [{ name: 'Ana' }],
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
 
-    prisma.event.findUnique.mockResolvedValueOnce({ id: 'e1', title: 'T', themeColor: '#1' });
+    prisma.event.findUnique.mockResolvedValueOnce({
+      id: 'e1',
+      title: 'T',
+      themeColor: '#1',
+    });
     prisma.$queryRaw
       .mockResolvedValueOnce([]) // assertNoDuplicate #1
       .mockResolvedValueOnce([]) // assertNoDuplicate #2
@@ -163,9 +180,9 @@ describe('MeService', () => {
     const service = new MeService(prisma, {} as any, {} as any, {} as any);
 
     prisma.ticket.findUnique.mockResolvedValueOnce(null);
-    await expect(service.getTicketDetails('u1', 't1', 'a@b.com')).rejects.toBeInstanceOf(
-      NotFoundException,
-    );
+    await expect(
+      service.getTicketDetails('u1', 't1', 'a@b.com'),
+    ).rejects.toBeInstanceOf(NotFoundException);
 
     prisma.ticket.findUnique.mockResolvedValueOnce({
       id: 't1',
@@ -197,9 +214,9 @@ describe('MeService', () => {
       { holder_name: 'Ana', holder_email: 'a@b.com', holder_user_id: null },
     ]);
 
-    await expect(service.getTicketDetails('u1', 't1', 'no@x.com')).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
+    await expect(
+      service.getTicketDetails('u1', 't1', 'no@x.com'),
+    ).rejects.toBeInstanceOf(ForbiddenException);
 
     prisma.ticket.findUnique.mockResolvedValueOnce({
       id: 't1',
@@ -230,7 +247,9 @@ describe('MeService', () => {
       .mockResolvedValueOnce([
         { holder_name: 'Ana', holder_email: 'a@b.com', holder_user_id: null },
       ])
-      .mockResolvedValueOnce([{ refund_enabled: false, refund_deadline_hours: 24 }]);
+      .mockResolvedValueOnce([
+        { refund_enabled: false, refund_deadline_hours: 24 },
+      ]);
     const res = await service.getTicketDetails('u1', 't1', 'a@b.com');
     expect(res.refundPolicy.eligible).toBe(false);
     expect(res.qrPayload).toContain('ticketId');
@@ -245,7 +264,11 @@ describe('MeService', () => {
       NotFoundException,
     );
 
-    prisma.ticket.findUnique.mockResolvedValueOnce({ id: 't1', ownerId: 'u2', event: null });
+    prisma.ticket.findUnique.mockResolvedValueOnce({
+      id: 't1',
+      ownerId: 'u2',
+      event: null,
+    });
     await expect(service.cancelTicket('u1', 't1')).rejects.toBeInstanceOf(
       ForbiddenException,
     );
@@ -286,7 +309,11 @@ describe('MeService', () => {
           ],
           messages: [
             {
-              body: JSON.stringify({ type: 'event_invite', text: 'inv', eventTitle: 'E' }),
+              body: JSON.stringify({
+                type: 'event_invite',
+                text: 'inv',
+                eventTitle: 'E',
+              }),
               senderId: 'u2',
               createdAt: new Date('2026-02-01T00:00:00.000Z'),
             },
@@ -294,9 +321,16 @@ describe('MeService', () => {
         },
       },
     ]);
-    prisma.$queryRaw.mockResolvedValueOnce([{ last_read_at: new Date('2026-01-01T00:00:00.000Z') }]);
+    prisma.$queryRaw.mockResolvedValueOnce([
+      { last_read_at: new Date('2026-01-01T00:00:00.000Z') },
+    ]);
 
-    const service = new MeService(prisma, conversationsService, {} as any, {} as any);
+    const service = new MeService(
+      prisma,
+      conversationsService,
+      {} as any,
+      {} as any,
+    );
     const res = await service.listConversations('u1');
     expect(res[0]).toMatchObject({ id: 'c1', unread: true, tabs: ['eventos'] });
   });
@@ -343,7 +377,9 @@ describe('MeService', () => {
         auth: {
           admin: {
             getUserById: jest.fn().mockResolvedValue({
-              data: { user: { email: 'peer@x.com', user_metadata: { name: 'Peer' } } },
+              data: {
+                user: { email: 'peer@x.com', user_metadata: { name: 'Peer' } },
+              },
             }),
           },
         },
@@ -358,7 +394,12 @@ describe('MeService', () => {
     });
     prisma.$queryRaw.mockResolvedValueOnce([]); // no duplicate
 
-    const service = new MeService(prisma, conversationsService, {} as any, supabaseAdmin);
+    const service = new MeService(
+      prisma,
+      conversationsService,
+      {} as any,
+      supabaseAdmin,
+    );
     const res = await service.shareTicketWithUser('u1', {
       ticketId: 't1',
       peerUserId: 'u2',
@@ -391,11 +432,11 @@ describe('MeService', () => {
     };
     prisma.ticket.findUnique
       .mockResolvedValueOnce({
-      id: 't1',
-      ownerId: 'u1',
-      eventId: 'e1',
-      title: 'T',
-      event: { title: 'E', startsAt: null },
+        id: 't1',
+        ownerId: 'u1',
+        eventId: 'e1',
+        title: 'T',
+        event: { title: 'E', startsAt: null },
       })
       // second call in same test
       .mockResolvedValueOnce({
@@ -407,9 +448,18 @@ describe('MeService', () => {
       });
     prisma.$queryRaw.mockResolvedValueOnce([]);
 
-    const service = new MeService(prisma, conversationsService, mailService, supabaseAdmin);
+    const service = new MeService(
+      prisma,
+      conversationsService,
+      mailService,
+      supabaseAdmin,
+    );
     await expect(
-      service.inviteTicketRecipient('u1', { ticketId: 't1', email: 'bad', inviterName: 'X' }),
+      service.inviteTicketRecipient('u1', {
+        ticketId: 't1',
+        email: 'bad',
+        inviterName: 'X',
+      }),
     ).rejects.toBeInstanceOf(BadRequestException);
 
     const res = await service.inviteTicketRecipient('u1', {

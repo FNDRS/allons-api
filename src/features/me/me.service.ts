@@ -240,9 +240,7 @@ export class MeService {
       const holderEmail = (holder?.holderEmail ?? '').trim().toLowerCase();
       if (holderEmail) group.attendeeEmails.add(holderEmail);
 
-      const currentRepEmail = (
-        group.representativeHolder?.holderEmail ?? ''
-      )
+      const currentRepEmail = (group.representativeHolder?.holderEmail ?? '')
         .trim()
         .toLowerCase();
       const isCurrentUsersTicket = holderEmail === normalizedUserEmail;
@@ -254,7 +252,10 @@ export class MeService {
     }
 
     return Array.from(groups.values()).map((group) => {
-      const dto = this.toTicketDto(group.representative, group.representativeHolder);
+      const dto = this.toTicketDto(
+        group.representative,
+        group.representativeHolder,
+      );
       return {
         ...dto,
         attendeeCount: Math.max(group.attendeeEmails.size, 1),
@@ -285,8 +286,7 @@ export class MeService {
       throw new BadRequestException('holders length cannot exceed quantity');
     }
 
-    const fallbackName =
-      nonEmptyOrUndefined(options?.name) ?? 'Invitado';
+    const fallbackName = nonEmptyOrUndefined(options?.name) ?? 'Invitado';
     const fallbackEmail = nonEmptyOrUndefined(options?.email);
     const holders = Array.from({ length: quantity }, (_, idx) => {
       const holder = providedHolders[idx];
@@ -300,7 +300,8 @@ export class MeService {
         );
       }
       const holderUserId =
-        fallbackEmail && email.trim().toLowerCase() === fallbackEmail.trim().toLowerCase()
+        fallbackEmail &&
+        email.trim().toLowerCase() === fallbackEmail.trim().toLowerCase()
           ? userId
           : null;
       return { name, email, holderUserId };
@@ -541,7 +542,8 @@ export class MeService {
     }
 
     const now = Date.now();
-    const cutoff = new Date(startsAt).getTime() - row.refund_deadline_hours * 60 * 60 * 1000;
+    const cutoff =
+      new Date(startsAt).getTime() - row.refund_deadline_hours * 60 * 60 * 1000;
     const eligible = now <= cutoff;
     return {
       enabled: true,
@@ -553,33 +555,34 @@ export class MeService {
     };
   }
 
-  private toTicketDto(ticket: {
-    id: string;
-    title: string;
-    tab: string;
-    themeColor: string | null;
-    attendeeCount: number;
-    eventId: string | null;
-    event: {
+  private toTicketDto(
+    ticket: {
       id: string;
       title: string;
-      city: string | null;
-      venue: string | null;
-      address: string | null;
+      tab: string;
       themeColor: string | null;
-      provider: unknown;
-      interests: { interest: { slug: string } }[];
-      smokingAllowed: boolean;
-      petFriendly: boolean;
-      parkingAvailable: boolean;
-      minAge: number | null;
-    } | null;
-  },
-  holder?: {
-    holderName: string;
-    holderEmail: string;
-    holderUserId?: string | null;
-  },
+      attendeeCount: number;
+      eventId: string | null;
+      event: {
+        id: string;
+        title: string;
+        city: string | null;
+        venue: string | null;
+        address: string | null;
+        themeColor: string | null;
+        provider: unknown;
+        interests: { interest: { slug: string } }[];
+        smokingAllowed: boolean;
+        petFriendly: boolean;
+        parkingAvailable: boolean;
+        minAge: number | null;
+      } | null;
+    },
+    holder?: {
+      holderName: string;
+      holderEmail: string;
+      holderUserId?: string | null;
+    },
   ) {
     return {
       id: ticket.id,
@@ -834,9 +837,7 @@ export class MeService {
         id?: string;
         email?: string | null;
       }>;
-      const found = users.find(
-        (u) => (u.email ?? '').toLowerCase() === email,
-      );
+      const found = users.find((u) => (u.email ?? '').toLowerCase() === email);
       if (found?.id) allonsUserId = found.id;
     } catch {
       allonsUserId = null;

@@ -41,10 +41,7 @@ export class MeController {
   }
 
   @Patch()
-  async updateMe(
-    @Req() req: Request,
-    @Body() body: UpdateProfileBody,
-  ) {
+  async updateMe(@Req() req: Request, @Body() body: UpdateProfileBody) {
     if (body && typeof body !== 'object') {
       throw new BadRequestException('Invalid body');
     }
@@ -76,14 +73,15 @@ export class MeController {
   }
 
   @Get('tickets/:ticketId')
-  async getTicket(
-    @Req() req: Request,
-    @Param('ticketId') ticketId: string,
-  ) {
+  async getTicket(@Req() req: Request, @Param('ticketId') ticketId: string) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
-    return this.meService.getTicketDetails(user.id, ticketId, user.email ?? null);
+    return this.meService.getTicketDetails(
+      user.id,
+      ticketId,
+      user.email ?? null,
+    );
   }
 
   @Post('tickets')
@@ -120,10 +118,7 @@ export class MeController {
   }
 
   @Delete('tickets/:ticketId')
-  async cancelTicket(
-    @Req() req: Request,
-    @Param('ticketId') ticketId: string,
-  ) {
+  async cancelTicket(@Req() req: Request, @Param('ticketId') ticketId: string) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
@@ -162,8 +157,10 @@ export class MeController {
     }
     const inviterName =
       (typeof user.user_metadata?.name === 'string'
-        ? (user.user_metadata.name as string)
-        : undefined) ?? user.email ?? 'Un amigo';
+        ? user.user_metadata.name
+        : undefined) ??
+      user.email ??
+      'Un amigo';
     return this.meService.inviteTicketRecipient(user.id, {
       ticketId,
       email: body.email,

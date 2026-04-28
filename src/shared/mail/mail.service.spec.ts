@@ -6,7 +6,6 @@ import {
   WEB_FALLBACK_TICKETS,
 } from './mail.service';
 
-
 describe('MailService', () => {
   it('builds deep link when recipient is Allons user', async () => {
     const service = new MailService();

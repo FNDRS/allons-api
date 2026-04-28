@@ -63,10 +63,7 @@ export class FriendsService {
     return filtered.map(toFriendDto);
   }
 
-  async listSuggestions(
-    userId: string,
-    query?: string,
-  ): Promise<FriendDto[]> {
+  async listSuggestions(userId: string, query?: string): Promise<FriendDto[]> {
     await this.ensureTable();
     const me = await this.prisma.profile.findUnique({ where: { userId } });
     const myLocation = me?.location ?? null;
@@ -96,7 +93,9 @@ export class FriendsService {
     const fromProfiles = filtered.map(toFriendDto);
     if (fromProfiles.length > 0) return fromProfiles;
 
-    const friendRows = await this.prisma.$queryRaw<Array<{ friend_id: string }>>`
+    const friendRows = await this.prisma.$queryRaw<
+      Array<{ friend_id: string }>
+    >`
       SELECT friend_id
       FROM friendships
       WHERE user_id = ${userId}::uuid
@@ -108,7 +107,7 @@ export class FriendsService {
     const fallback = authUsers
       .filter((u) => u.id && !blocked.has(u.id))
       .map((u) => ({
-        userId: u.id!,
+        userId: u.id,
         fullName:
           (typeof u.user_metadata?.name === 'string'
             ? u.user_metadata.name
@@ -119,8 +118,7 @@ export class FriendsService {
         username:
           (typeof u.user_metadata?.username === 'string'
             ? u.user_metadata.username
-            : null) ??
-          (u.email ? u.email.split('@')[0] : null),
+            : null) ?? (u.email ? u.email.split('@')[0] : null),
         avatarUrl:
           (typeof u.user_metadata?.avatar_url === 'string'
             ? u.user_metadata.avatar_url
@@ -203,7 +201,8 @@ export class FriendsService {
 
   private async ensureProfileFromAuth(friendUserId: string) {
     try {
-      const auth = await this.supabaseAdmin.db.auth.admin.getUserById(friendUserId);
+      const auth =
+        await this.supabaseAdmin.db.auth.admin.getUserById(friendUserId);
       const user = auth.data?.user;
       if (!user) return null;
       return this.prisma.profile.upsert({
@@ -221,8 +220,7 @@ export class FriendsService {
           username:
             (typeof user.user_metadata?.username === 'string'
               ? user.user_metadata.username
-              : undefined) ??
-            (user.email ? user.email.split('@')[0] : null),
+              : undefined) ?? (user.email ? user.email.split('@')[0] : null),
           avatarUrl:
             (typeof user.user_metadata?.avatar_url === 'string'
               ? user.user_metadata.avatar_url
@@ -245,10 +243,13 @@ export class FriendsService {
   }
 }
 
-function filterByQuery<T extends { full_name: string | null; username: string | null; location: string | null }>(
-  rows: T[],
-  query?: string,
-) {
+function filterByQuery<
+  T extends {
+    full_name: string | null;
+    username: string | null;
+    location: string | null;
+  },
+>(rows: T[], query?: string) {
   const q = (query ?? '').trim().toLowerCase();
   if (q.length === 0) return rows;
   return rows.filter((r) => {
@@ -289,7 +290,11 @@ function filterFriendDtosByQuery(rows: FriendDto[], query?: string) {
 }
 
 function filterByCityThenGlobal<
-  T extends { location: string | null; full_name: string | null; username: string | null },
+  T extends {
+    location: string | null;
+    full_name: string | null;
+    username: string | null;
+  },
 >(rows: T[], myLocation: string | null, query?: string) {
   if (!myLocation) return filterByQuery(rows, query);
 

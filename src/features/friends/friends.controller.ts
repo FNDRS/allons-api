@@ -20,10 +20,7 @@ export class FriendsController {
   ) {}
 
   @Get()
-  async list(
-    @Req() req: Request,
-    @Query('q') q?: string,
-  ) {
+  async list(@Req() req: Request, @Query('q') q?: string) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
@@ -31,10 +28,7 @@ export class FriendsController {
   }
 
   @Get('suggestions')
-  async suggestions(
-    @Req() req: Request,
-    @Query('q') q?: string,
-  ) {
+  async suggestions(@Req() req: Request, @Query('q') q?: string) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
@@ -42,10 +36,7 @@ export class FriendsController {
   }
 
   @Post(':friendUserId')
-  async add(
-    @Req() req: Request,
-    @Param('friendUserId') friendUserId: string,
-  ) {
+  async add(@Req() req: Request, @Param('friendUserId') friendUserId: string) {
     if (!friendUserId) throw new BadRequestException('friendUserId required');
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
