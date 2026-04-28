@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { MeService } from './me.service';
-import { SupabaseAdminService } from '../supabase-admin.service';
+import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 
 interface UpdateProfileBody {
   fullName?: string | null;
@@ -170,6 +170,21 @@ export class MeController {
       name: body.name ?? null,
       inviterName,
     });
+  }
+
+  @Post('tickets/:ticketId/accept')
+  async acceptTicketInvitation(
+    @Req() req: Request,
+    @Param('ticketId') ticketId: string,
+  ) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
+    return this.meService.acceptTicketInvitation(
+      user.id,
+      user.email ?? null,
+      ticketId,
+    );
   }
 
   @Get('conversations')

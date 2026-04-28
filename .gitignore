@@ -3,6 +3,9 @@ node_modules
 # build
 dist
 
+# test coverage
+coverage
+
 # local env
 .env
 .env.*

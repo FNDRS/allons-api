@@ -4,8 +4,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
-import { SupabaseAdminService } from '../supabase-admin.service';
+import { PrismaService } from '../../prisma/prisma.service';
+import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 
 export interface FriendDto {
   userId: string;

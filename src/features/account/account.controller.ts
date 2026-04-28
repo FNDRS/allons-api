@@ -1,6 +1,6 @@
 import { Controller, Delete, Req } from '@nestjs/common';
 import type { Request } from 'express';
-import { SupabaseAdminService } from './supabase-admin.service';
+import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { AccountService } from './account.service';
 
 @Controller('me')

@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { InterestsService } from './interests.service';
-import { SupabaseAdminService } from './supabase-admin.service';
+import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 
 interface UpdateInterestsBody {
   interests?: string[];

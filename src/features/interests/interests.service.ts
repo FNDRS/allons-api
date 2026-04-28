@@ -3,7 +3,7 @@ import {
   Injectable,
   InternalServerErrorException,
 } from '@nestjs/common';
-import { SupabaseAdminService } from './supabase-admin.service';
+import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 
 @Injectable()
 export class InterestsService {
@@ -95,7 +95,10 @@ export class InterestsService {
       throw new InternalServerErrorException(deleteError.message);
 
     const { error: upsertInterestsError } = await db.from('interests').upsert(
-      normalizedNames.map((name) => ({ name })),
+      normalizedNames.map((name) => ({
+        name,
+        slug: toSlug(name),
+      })),
       {
         onConflict: 'name',
         ignoreDuplicates: true,
@@ -133,4 +136,14 @@ function getMetadataString(metadata: Record<string, unknown>, key: string) {
   return typeof value === 'string' && value.trim().length > 0
     ? value.trim()
     : undefined;
+}
+
+function toSlug(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/&/g, ' y ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }

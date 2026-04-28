@@ -10,7 +10,7 @@ import {
 import type { Request } from 'express';
 import { ConversationsService } from './conversations.service';
 import type { MessagePayload } from './conversations.service';
-import { SupabaseAdminService } from '../supabase-admin.service';
+import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 
 @Controller('me/conversations')
 export class ConversationsController {

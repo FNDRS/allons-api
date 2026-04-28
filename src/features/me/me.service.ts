@@ -5,11 +5,14 @@ import {
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import { parseList } from '../events/events.types';
-import { ConversationsService, parseMessageBody } from '../conversations/conversations.service';
-import { MailService } from '../mail/mail.service';
-import { SupabaseAdminService } from '../supabase-admin.service';
+import {
+  ConversationsService,
+  parseMessageBody,
+} from '../conversations/conversations.service';
+import { MailService } from '../../shared/mail/mail.service';
+import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 
 interface UpdateProfileInput {
   fullName?: string | null;
@@ -349,13 +352,15 @@ export class MeService {
           ticket_id,
           holder_name,
           holder_email,
-          holder_user_id
+          holder_user_id,
+          accepted_at
         )
         VALUES (
           ${row.id}::uuid,
           ${holder.name},
           ${holder.email},
-          ${holder.holderUserId}::uuid
+          ${holder.holderUserId}::uuid,
+          ${holder.holderUserId ? new Date() : null}
         )
       `;
     }
@@ -472,12 +477,17 @@ export class MeService {
         holder_name text NOT NULL,
         holder_email text NOT NULL,
         holder_user_id uuid,
+        accepted_at timestamptz,
         created_at timestamptz NOT NULL DEFAULT now()
       )
     `;
     await this.prisma.$executeRaw`
       ALTER TABLE ticket_holders
       ADD COLUMN IF NOT EXISTS holder_user_id uuid
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE ticket_holders
+      ADD COLUMN IF NOT EXISTS accepted_at timestamptz
     `;
   }
 
@@ -565,7 +575,11 @@ export class MeService {
       minAge: number | null;
     } | null;
   },
-  holder?: { holderName: string; holderEmail: string },
+  holder?: {
+    holderName: string;
+    holderEmail: string;
+    holderUserId?: string | null;
+  },
   ) {
     return {
       id: ticket.id,
@@ -737,13 +751,26 @@ export class MeService {
 
     // Assign this shared ticket holder to the invited Allons user so it appears in "Mis Tickets".
     await this.prisma.$executeRaw`
-      INSERT INTO ticket_holders (ticket_id, holder_name, holder_email, holder_user_id)
-      VALUES (${ticket.id}::uuid, ${peerName}, ${peerEmail}, ${args.peerUserId}::uuid)
+      INSERT INTO ticket_holders (
+        ticket_id,
+        holder_name,
+        holder_email,
+        holder_user_id,
+        accepted_at
+      )
+      VALUES (
+        ${ticket.id}::uuid,
+        ${peerName},
+        ${peerEmail},
+        ${args.peerUserId}::uuid,
+        NULL
+      )
       ON CONFLICT (ticket_id)
       DO UPDATE SET
         holder_name = EXCLUDED.holder_name,
         holder_email = EXCLUDED.holder_email,
-        holder_user_id = EXCLUDED.holder_user_id
+        holder_user_id = EXCLUDED.holder_user_id,
+        accepted_at = NULL
     `;
 
     const conv = await this.conversationsService.findOrCreateDirect(
@@ -760,6 +787,12 @@ export class MeService {
         ? ticket.event.startsAt.toISOString()
         : null,
     });
+    await this.createTicketNotification(
+      args.peerUserId,
+      'Invitación nueva',
+      `Te enviaron una invitación para ${ticket.event?.title ?? ticket.title}.`,
+      ['eventos'],
+    );
     return { sent: true, conversationId: conv.id };
   }
 
@@ -813,7 +846,8 @@ export class MeService {
     if (allonsUserId) {
       await this.prisma.$executeRaw`
         UPDATE ticket_holders
-        SET holder_user_id = ${allonsUserId}::uuid
+        SET holder_user_id = ${allonsUserId}::uuid,
+            accepted_at = NULL
         WHERE ticket_id = ${ticket.id}::uuid
       `;
       const conv = await this.conversationsService.findOrCreateDirect(
@@ -831,6 +865,12 @@ export class MeService {
           ? ticket.event.startsAt.toISOString()
           : null,
       });
+      await this.createTicketNotification(
+        allonsUserId,
+        'Invitación nueva',
+        `Te enviaron una invitación para ${ticket.event?.title ?? ticket.title}.`,
+        ['eventos'],
+      );
     }
 
     const mail = await this.mailService.sendTicketInvitation({
@@ -847,6 +887,69 @@ export class MeService {
       conversationId,
       mail,
     };
+  }
+
+  async acceptTicketInvitation(
+    userId: string,
+    userEmail: string | null | undefined,
+    ticketId: string,
+  ) {
+    await this.ensureTicketHoldersTable();
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        ticket_id: string;
+        owner_id: string;
+        event_title: string | null;
+        holder_email: string;
+        holder_user_id: string | null;
+        accepted_at: Date | null;
+      }>
+    >`
+      SELECT
+        t.id AS ticket_id,
+        t.owner_id,
+        COALESCE(e.title, t.title) AS event_title,
+        th.holder_email,
+        th.holder_user_id,
+        th.accepted_at
+      FROM tickets t
+      LEFT JOIN events e ON e.id = t.event_id
+      JOIN ticket_holders th ON th.ticket_id = t.id
+      WHERE t.id = ${ticketId}::uuid
+      LIMIT 1
+    `;
+    const row = rows[0];
+    if (!row) {
+      throw new BadRequestException('La invitación caducó.');
+    }
+
+    const normalizedUserEmail = (userEmail ?? '').trim().toLowerCase();
+    const holderEmail = row.holder_email.trim().toLowerCase();
+    const isHolderByUserId =
+      Boolean(row.holder_user_id) && row.holder_user_id === userId;
+    const isHolderByEmail =
+      normalizedUserEmail.length > 0 && normalizedUserEmail === holderEmail;
+    if (!isHolderByUserId && !isHolderByEmail) {
+      throw new BadRequestException('La invitación caducó.');
+    }
+
+    if (!row.accepted_at) {
+      await this.prisma.$executeRaw`
+        UPDATE ticket_holders
+        SET holder_user_id = ${userId}::uuid,
+            accepted_at = now()
+        WHERE ticket_id = ${ticketId}::uuid
+      `;
+      if (row.owner_id !== userId) {
+        await this.createTicketNotification(
+          row.owner_id,
+          'Invitación aceptada',
+          `Tu invitación para ${row.event_title ?? 'el evento'} fue aceptada.`,
+          ['eventos'],
+        );
+      }
+    }
+    return { accepted: true, alreadyAccepted: Boolean(row.accepted_at) };
   }
 
   private async assertNoDuplicateTicketForEventAndEmail(
@@ -876,6 +979,30 @@ export class MeService {
         'No puedes aceptar esta invitación porque ya tienes una invitación a tu nombre.',
       );
     }
+  }
+
+  private async createTicketNotification(
+    userId: string,
+    title: string,
+    description: string,
+    tabs: Array<'amigos' | 'eventos' | 'menciones'>,
+  ) {
+    await this.prisma.$executeRaw`
+      INSERT INTO notifications (
+        user_id,
+        category_label,
+        title,
+        description,
+        relevant_tabs
+      )
+      VALUES (
+        ${userId}::uuid,
+        ${'Invitaciones'},
+        ${title},
+        ${description},
+        ${tabs}::text[]
+      )
+    `;
   }
 
   async listEventHistory(userId: string) {

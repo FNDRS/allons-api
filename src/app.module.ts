@@ -1,46 +1,33 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { PrismaModule } from './prisma/prisma.module';
+import { SharedModule } from './shared/shared.module';
+import { HealthModule } from './features/health/health.module';
+import { ProvidersModule } from './features/providers/providers.module';
+import { EventsModule } from './features/events/events.module';
+import { AccountModule } from './features/account/account.module';
+import { InterestsModule } from './features/interests/interests.module';
+import { FriendsModule } from './features/friends/friends.module';
+import { ConversationsModule } from './features/conversations/conversations.module';
+import { MeModule } from './features/me/me.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { SupabaseAdminService } from './supabase-admin.service';
-import { InterestsController } from './interests.controller';
-import { InterestsService } from './interests.service';
-import { PrismaModule } from './prisma/prisma.module';
-import { HealthController } from './health/health.controller';
-import { ProvidersController } from './providers/providers.controller';
-import { EventsController } from './events/events.controller';
-import { AccountController } from './account.controller';
-import { AccountService } from './account.service';
-import { MeController } from './me/me.controller';
-import { MeService } from './me/me.service';
-import { FriendsController } from './friends/friends.controller';
-import { FriendsService } from './friends/friends.service';
-import { ConversationsController } from './conversations/conversations.controller';
-import { ConversationsService } from './conversations/conversations.service';
-import { MailService } from './mail/mail.service';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule],
-  controllers: [
-    AppController,
-    HealthController,
-    InterestsController,
-    ProvidersController,
-    EventsController,
-    AccountController,
-    MeController,
-    FriendsController,
-    ConversationsController,
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    PrismaModule,
+    SharedModule,
+    HealthModule,
+    ProvidersModule,
+    EventsModule,
+    AccountModule,
+    InterestsModule,
+    FriendsModule,
+    ConversationsModule,
+    MeModule,
   ],
-  providers: [
-    AppService,
-    SupabaseAdminService,
-    InterestsService,
-    AccountService,
-    MeService,
-    FriendsService,
-    ConversationsService,
-    MailService,
-  ],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule {}

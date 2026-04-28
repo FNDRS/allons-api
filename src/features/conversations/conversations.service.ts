@@ -4,9 +4,10 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PrismaService } from '../prisma/prisma.service';
+import { PrismaService } from '../../prisma/prisma.service';
 
 export type MessageKind = 'text' | 'event_invite' | 'system';
+export type InviteStatus = 'active' | 'accepted' | 'expired';
 
 export interface MessagePayload {
   type: MessageKind;
@@ -15,6 +16,7 @@ export interface MessagePayload {
   ticketId?: string | null;
   eventTitle?: string | null;
   eventStartsAt?: string | null;
+  inviteStatus?: InviteStatus;
 }
 
 export interface MessageDto {
@@ -37,6 +39,17 @@ export class ConversationsService {
         last_read_at timestamptz NOT NULL DEFAULT now(),
         PRIMARY KEY (conversation_id, user_id)
       )
+    `;
+  }
+
+  private async ensureTicketHoldersColumns() {
+    await this.prisma.$executeRaw`
+      ALTER TABLE ticket_holders
+      ADD COLUMN IF NOT EXISTS holder_user_id uuid
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE ticket_holders
+      ADD COLUMN IF NOT EXISTS accepted_at timestamptz
     `;
   }
 
@@ -79,6 +92,7 @@ export class ConversationsService {
 
   async getConversation(userId: string, conversationId: string) {
     await this.ensureConversationReadsTable();
+    await this.ensureTicketHoldersColumns();
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
       include: {
@@ -104,6 +118,23 @@ export class ConversationsService {
       DO UPDATE SET last_read_at = EXCLUDED.last_read_at
     `;
 
+    const messages = await Promise.all(
+      conversation.messages.map(async (m) => {
+        const dto = this.toMessageDto(m);
+        if (dto.payload.type !== 'event_invite') return dto;
+        return {
+          ...dto,
+          payload: {
+            ...dto.payload,
+            inviteStatus: await this.resolveInviteStatus(
+              userId,
+              dto.payload.ticketId ?? null,
+            ),
+          },
+        };
+      }),
+    );
+
     return {
       id: conversation.id,
       peer: peerProfile
@@ -116,7 +147,7 @@ export class ConversationsService {
             location: peerProfile.location,
           }
         : null,
-      messages: conversation.messages.map((m) => this.toMessageDto(m)),
+      messages,
     };
   }
 
@@ -156,6 +187,31 @@ export class ConversationsService {
       createdAt: message.createdAt,
       payload: parseMessageBody(message.body),
     };
+  }
+
+  private async resolveInviteStatus(
+    userId: string,
+    ticketId: string | null,
+  ): Promise<InviteStatus> {
+    if (!ticketId) return 'expired';
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        ticket_id: string;
+        holder_user_id: string | null;
+        accepted_at: Date | null;
+      }>
+    >`
+      SELECT t.id AS ticket_id, th.holder_user_id, th.accepted_at
+      FROM tickets t
+      LEFT JOIN ticket_holders th ON th.ticket_id = t.id
+      WHERE t.id = ${ticketId}::uuid
+      LIMIT 1
+    `;
+    const row = rows[0];
+    if (!row) return 'expired';
+    if (row.holder_user_id && row.holder_user_id !== userId) return 'expired';
+    if (row.accepted_at) return 'accepted';
+    return 'active';
   }
 }
 
