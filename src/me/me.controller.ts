@@ -2,8 +2,10 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
+  Param,
   Patch,
   Post,
   Query,
@@ -62,16 +64,53 @@ export class MeController {
     return this.meService.listTickets(user.id, { cities, types });
   }
 
+  @Get('tickets/:ticketId')
+  async getTicket(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('ticketId') ticketId: string,
+  ) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    return this.meService.getTicketDetails(user.id, ticketId);
+  }
+
   @Post('tickets')
   async createTicket(
     @Headers('authorization') authorization: string | undefined,
-    @Body() body: { eventId?: string },
+    @Body()
+    body: {
+      eventId?: string;
+      quantity?: number;
+      holders?: Array<{ name?: string; email?: string }>;
+    },
   ) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
     if (!body?.eventId || typeof body.eventId !== 'string') {
       throw new BadRequestException('eventId is required');
     }
-    return this.meService.createTicket(user.id, body.eventId);
+    const quantity =
+      typeof body.quantity === 'number' && Number.isFinite(body.quantity)
+        ? Math.floor(body.quantity)
+        : 1;
+    if (quantity < 1 || quantity > 20) {
+      throw new BadRequestException('quantity must be between 1 and 20');
+    }
+    return this.meService.createTicket(user.id, body.eventId, quantity, {
+      name:
+        (typeof user.user_metadata?.name === 'string'
+          ? user.user_metadata.name
+          : undefined) ?? null,
+      email: user.email ?? null,
+      holders: body.holders ?? [],
+    });
+  }
+
+  @Delete('tickets/:ticketId')
+  async cancelTicket(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('ticketId') ticketId: string,
+  ) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    return this.meService.cancelTicket(user.id, ticketId);
   }
 
   @Get('conversations')

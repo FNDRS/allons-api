@@ -1,4 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  InternalServerErrorException,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseList } from '../events/events.types';
 
@@ -108,6 +114,7 @@ export class MeService {
     userId: string,
     filters?: { cities?: string | string[]; types?: string | string[] },
   ) {
+    await this.ensureTicketHoldersTable();
     const cities = parseList(filters?.cities);
     const types = parseList(filters?.types);
 
@@ -138,41 +145,118 @@ export class MeService {
       orderBy: { createdAt: 'desc' },
     });
 
-    return tickets.map((ticket) => this.toTicketDto(ticket));
+    const holdersByTicket = new Map<
+      string,
+      { holderName: string; holderEmail: string }
+    >();
+    for (const ticket of tickets) {
+      const rows = await this.prisma.$queryRaw<
+        Array<{ holder_name: string; holder_email: string }>
+      >`
+        SELECT holder_name, holder_email
+        FROM ticket_holders
+        WHERE ticket_id = ${ticket.id}::uuid
+        LIMIT 1
+      `;
+      const row = rows[0];
+      if (row) {
+        holdersByTicket.set(ticket.id, {
+          holderName: row.holder_name,
+          holderEmail: row.holder_email,
+        });
+      }
+    }
+
+    return tickets.map((ticket) =>
+      this.toTicketDto(ticket, holdersByTicket.get(ticket.id)),
+    );
   }
 
-  async createTicket(userId: string, eventId: string) {
+  async createTicket(
+    userId: string,
+    eventId: string,
+    quantity = 1,
+    options?: {
+      name?: string | null;
+      email?: string | null;
+      holders?: Array<{ name?: string; email?: string }>;
+    },
+  ) {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
     });
     if (!event) {
       throw new NotFoundException('Event not found');
     }
+    await this.ensureTicketHoldersTable();
 
-    const existing = await this.prisma.ticket.findFirst({
-      where: { ownerId: userId, eventId },
-      include: {
-        event: {
-          include: {
-            provider: true,
-            interests: { include: { interest: true } },
-          },
-        },
-      },
-    });
-    if (existing) {
-      return this.toTicketDto(existing);
+    const providedHolders = options?.holders ?? [];
+    if (providedHolders.length > quantity) {
+      throw new BadRequestException('holders length cannot exceed quantity');
     }
 
-    const ticket = await this.prisma.ticket.create({
-      data: {
-        ownerId: userId,
-        eventId: event.id,
-        title: event.title,
-        themeColor: event.themeColor,
-        tab: 'eventos',
-        attendeeCount: 1,
-      },
+    const fallbackName =
+      nonEmptyOrUndefined(options?.name) ?? 'Invitado';
+    const fallbackEmail = nonEmptyOrUndefined(options?.email);
+    const holders = Array.from({ length: quantity }, (_, idx) => {
+      const holder = providedHolders[idx];
+      const name = nonEmptyOrUndefined(holder?.name) ?? fallbackName;
+      const email =
+        nonEmptyOrUndefined(holder?.email) ??
+        (idx === 0 ? fallbackEmail : undefined);
+      if (!email) {
+        throw new BadRequestException(
+          `holder email is required for ticket ${idx + 1}`,
+        );
+      }
+      return { name, email };
+    });
+
+    const createdRows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      INSERT INTO tickets (
+        owner_id,
+        event_id,
+        title,
+        theme_color,
+        attendee_count
+      )
+      SELECT
+        ${userId}::uuid,
+        ${event.id}::uuid,
+        ${event.title},
+        ${event.themeColor},
+        1
+      FROM generate_series(1, ${quantity}::int)
+      RETURNING id
+    `;
+    if (createdRows.length === 0) {
+      throw new InternalServerErrorException('Failed to create ticket');
+    }
+    for (let i = 0; i < createdRows.length; i += 1) {
+      const row = createdRows[i];
+      const holder = holders[i];
+      await this.prisma.$executeRaw`
+        INSERT INTO ticket_holders (
+          ticket_id,
+          holder_name,
+          holder_email
+        )
+        VALUES (
+          ${row.id}::uuid,
+          ${holder.name},
+          ${holder.email}
+        )
+      `;
+    }
+    return { createdCount: createdRows.length };
+  }
+
+  async getTicketDetails(userId: string, ticketId: string) {
+    await this.ensureTicketHoldersTable();
+    await this.ensureProviderRefundPoliciesTable();
+
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
       include: {
         event: {
           include: {
@@ -182,8 +266,145 @@ export class MeService {
         },
       },
     });
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
+    if (ticket.ownerId !== userId) {
+      throw new ForbiddenException('Ticket does not belong to user');
+    }
 
-    return this.toTicketDto(ticket);
+    const holderRows = await this.prisma.$queryRaw<
+      Array<{ holder_name: string; holder_email: string }>
+    >`
+      SELECT holder_name, holder_email
+      FROM ticket_holders
+      WHERE ticket_id = ${ticket.id}::uuid
+      LIMIT 1
+    `;
+    const holder = holderRows[0];
+
+    const refundPolicy = await this.getRefundPolicyForProvider(
+      ticket.event?.providerId ?? null,
+      ticket.event?.startsAt ?? null,
+    );
+
+    return {
+      ...this.toTicketDto(
+        ticket,
+        holder
+          ? { holderName: holder.holder_name, holderEmail: holder.holder_email }
+          : undefined,
+      ),
+      qrPayload: JSON.stringify({
+        ticketId: ticket.id,
+        eventId: ticket.eventId,
+        holderName: holder?.holder_name ?? null,
+        holderEmail: holder?.holder_email ?? null,
+      }),
+      refundPolicy,
+    };
+  }
+
+  async cancelTicket(userId: string, ticketId: string) {
+    await this.ensureProviderRefundPoliciesTable();
+
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: ticketId },
+      include: { event: true },
+    });
+    if (!ticket) {
+      throw new NotFoundException('Ticket not found');
+    }
+    if (ticket.ownerId !== userId) {
+      throw new ForbiddenException('Ticket does not belong to user');
+    }
+
+    const refundPolicy = await this.getRefundPolicyForProvider(
+      ticket.event?.providerId ?? null,
+      ticket.event?.startsAt ?? null,
+    );
+
+    await this.prisma.ticket.delete({ where: { id: ticket.id } });
+    return {
+      cancelled: true,
+      refundEligible: refundPolicy.eligible,
+      refundMessage: refundPolicy.eligible
+        ? 'La reserva fue cancelada y aplica reembolso.'
+        : 'La reserva fue cancelada, pero no aplica reembolso.',
+    };
+  }
+
+  private async ensureTicketHoldersTable() {
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS ticket_holders (
+        ticket_id uuid PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
+        holder_name text NOT NULL,
+        holder_email text NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `;
+  }
+
+  private async ensureProviderRefundPoliciesTable() {
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS provider_refund_policies (
+        provider_id uuid PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,
+        refund_enabled boolean NOT NULL DEFAULT false,
+        refund_deadline_hours integer NOT NULL DEFAULT 24,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `;
+  }
+
+  private async getRefundPolicyForProvider(
+    providerId: string | null,
+    startsAt: Date | null,
+  ) {
+    if (!providerId) {
+      return {
+        enabled: false,
+        deadlineHours: 24,
+        eligible: false,
+        reason: 'El evento no tiene proveedor configurado.',
+      };
+    }
+    const rows = await this.prisma.$queryRaw<
+      Array<{ refund_enabled: boolean; refund_deadline_hours: number }>
+    >`
+      SELECT refund_enabled, refund_deadline_hours
+      FROM provider_refund_policies
+      WHERE provider_id = ${providerId}::uuid
+      LIMIT 1
+    `;
+    const row = rows[0] ?? { refund_enabled: false, refund_deadline_hours: 24 };
+    if (!row.refund_enabled) {
+      return {
+        enabled: false,
+        deadlineHours: row.refund_deadline_hours,
+        eligible: false,
+        reason: 'El proveedor no permite reembolsos.',
+      };
+    }
+    if (!startsAt) {
+      return {
+        enabled: true,
+        deadlineHours: row.refund_deadline_hours,
+        eligible: true,
+        reason: 'Reembolso habilitado por proveedor.',
+      };
+    }
+
+    const now = Date.now();
+    const cutoff = new Date(startsAt).getTime() - row.refund_deadline_hours * 60 * 60 * 1000;
+    const eligible = now <= cutoff;
+    return {
+      enabled: true,
+      deadlineHours: row.refund_deadline_hours,
+      eligible,
+      reason: eligible
+        ? `Reembolso disponible hasta ${row.refund_deadline_hours}h antes del evento.`
+        : `Ya pasó la ventana de ${row.refund_deadline_hours}h para reembolso.`,
+    };
   }
 
   private toTicketDto(ticket: {
@@ -207,13 +428,17 @@ export class MeService {
       parkingAvailable: boolean;
       minAge: number | null;
     } | null;
-  }) {
+  },
+  holder?: { holderName: string; holderEmail: string },
+  ) {
     return {
       id: ticket.id,
       title: ticket.title,
       tab: ticket.tab,
       color: ticket.themeColor ?? '#2a3a4a',
       attendeeCount: ticket.attendeeCount,
+      holderName: holder?.holderName ?? null,
+      holderEmail: holder?.holderEmail ?? null,
       eventId: ticket.eventId,
       event: ticket.event
         ? {
