@@ -18,7 +18,8 @@ export interface InviteEmailPayload {
 export class MailService {
   private readonly logger = new Logger(MailService.name);
 
-  sendTicketInvitation(payload: InviteEmailPayload) {
+  async sendTicketInvitation(payload: InviteEmailPayload) {
+    await Promise.resolve();
     const ticketDeepLink = payload.ticketId
       ? `${DEEP_LINK_TICKETS}/${payload.ticketId}`
       : DEEP_LINK_TICKETS;

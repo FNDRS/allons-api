@@ -32,12 +32,12 @@ function makePrisma() {
       findMany: jest.fn(),
       create: jest.fn(),
     },
-  } as any;
+  } as unknown as PrismaService;
 }
 
 describe('MeService', () => {
   it('getProfile uses profile data and metadata fallbacks', async () => {
-    const prisma = makePrisma() as unknown as PrismaService;
+    const prisma = makePrisma();
     prisma.profile.findUnique.mockResolvedValueOnce({
       userId: 'u1',
       fullName: '',
@@ -49,7 +49,9 @@ describe('MeService', () => {
     });
     const service = new MeService(
       prisma,
-      { ensureConversationReadsTable: jest.fn() } as unknown as ConversationsService,
+      {
+        ensureConversationReadsTable: jest.fn(),
+      } as unknown as ConversationsService,
       { sendTicketInvitation: jest.fn() } as unknown as MailService,
       { db: { auth: { admin: {} } } } as unknown as SupabaseAdminService,
     );
@@ -70,7 +72,12 @@ describe('MeService', () => {
   it('updateProfile upserts and returns getProfile result', async () => {
     const prisma = makePrisma();
     prisma.profile.upsert.mockResolvedValueOnce({ userId: 'u1' });
-    const service = new MeService(prisma, {} as any, {} as any, {} as any);
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+    );
     const spy = jest
       .spyOn(service, 'getProfile')
       .mockResolvedValueOnce({ userId: 'u1' } as any);
@@ -83,7 +90,9 @@ describe('MeService', () => {
         { username: 'ana' },
       ),
     ).resolves.toEqual({ userId: 'u1' });
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(prisma.profile.upsert).toHaveBeenCalled();
+
     expect(spy).toHaveBeenCalled();
   });
 
@@ -122,7 +131,12 @@ describe('MeService', () => {
       },
     ]);
 
-    const service = new MeService(prisma, {} as any, {} as any, {} as any);
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+    );
     const res = await service.listTickets('u1', { email: 'a@b.com' });
     expect(res).toHaveLength(1);
     expect(res[0]).toMatchObject({ id: 't1', attendeeCount: 1 });
@@ -130,7 +144,12 @@ describe('MeService', () => {
 
   it('createTicket validates input and creates holders', async () => {
     const prisma = makePrisma();
-    const service = new MeService(prisma, {} as any, {} as any, {} as any);
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+    );
 
     prisma.event.findUnique.mockResolvedValueOnce(null);
     await expect(service.createTicket('u1', 'e1', 1)).rejects.toBeInstanceOf(
@@ -176,12 +195,18 @@ describe('MeService', () => {
       holders: [{ email: 'me@x.com' }, { email: 'b@b.com', name: 'B' }],
     });
     expect(res.createdCount).toBe(2);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(prisma.$executeRaw).toHaveBeenCalled();
   });
 
   it('getTicketDetails enforces ownership/assignment and returns refundPolicy', async () => {
     const prisma = makePrisma();
-    const service = new MeService(prisma, {} as any, {} as any, {} as any);
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+    );
 
     prisma.ticket.findUnique.mockResolvedValueOnce(null);
     await expect(
@@ -261,7 +286,12 @@ describe('MeService', () => {
 
   it('cancelTicket enforces owner and deletes', async () => {
     const prisma = makePrisma();
-    const service = new MeService(prisma, {} as any, {} as any, {} as any);
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+    );
 
     prisma.ticket.findUnique.mockResolvedValueOnce(null);
     await expect(service.cancelTicket('u1', 't1')).rejects.toBeInstanceOf(
@@ -284,13 +314,14 @@ describe('MeService', () => {
     });
     const res = await service.cancelTicket('u1', 't1');
     expect(res.cancelled).toBe(true);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(prisma.ticket.delete).toHaveBeenCalled();
   });
 
   it('listConversations computes unread based on last_read_at', async () => {
     const prisma = makePrisma();
     const conversationsService: any = {
-      ensureConversationReadsTable: jest.fn(async () => undefined),
+      ensureConversationReadsTable: jest.fn(() => Promise.resolve(undefined)),
     };
     prisma.conversationMember.findMany.mockResolvedValueOnce([
       {
@@ -332,8 +363,8 @@ describe('MeService', () => {
     const service = new MeService(
       prisma,
       conversationsService,
-      {} as any,
-      {} as any,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
     );
     const res = await service.listConversations('u1');
     expect(res[0]).toMatchObject({ id: 'c1', unread: true, tabs: ['eventos'] });
@@ -362,7 +393,12 @@ describe('MeService', () => {
       },
     ]);
 
-    const service = new MeService(prisma, {} as any, {} as any, {} as any);
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+    );
     const res = await service.listNotifications('u1');
     expect(res).toHaveLength(2);
     expect(res[0]?.groupLabel).toBe('Hoy');
@@ -401,7 +437,7 @@ describe('MeService', () => {
     const service = new MeService(
       prisma,
       conversationsService,
-      {} as any,
+      {} as unknown as MailService,
       supabaseAdmin,
     );
     const res = await service.shareTicketWithUser('u1', {
@@ -410,6 +446,7 @@ describe('MeService', () => {
     });
     expect(res).toEqual({ sent: true, conversationId: 'c1' });
     // Notification insert uses raw SQL.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(prisma.$executeRaw).toHaveBeenCalled();
   });
 
@@ -473,6 +510,7 @@ describe('MeService', () => {
     });
     expect(res.sent).toBe(true);
     expect(res.isAllonsUser).toBe(true);
+
     expect(mailService.sendTicketInvitation).toHaveBeenCalled();
   });
 
@@ -489,7 +527,12 @@ describe('MeService', () => {
       },
     ]);
 
-    const service = new MeService(prisma, {} as any, {} as any, {} as any);
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+    );
 
     await expect(
       service.acceptTicketInvitation('u1', 'no@x.com', 't1'),
@@ -507,6 +550,7 @@ describe('MeService', () => {
     ]);
     const res = await service.acceptTicketInvitation('u1', 'peer@x.com', 't1');
     expect(res.accepted).toBe(true);
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(prisma.$executeRaw).toHaveBeenCalled();
   });
 
@@ -520,7 +564,12 @@ describe('MeService', () => {
       },
       { id: 't2', themeColor: null, event: null },
     ]);
-    const service = new MeService(prisma, {} as any, {} as any, {} as any);
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+    );
     const res = await service.listEventHistory('u1');
     expect(res).toHaveLength(1);
     expect(res[0]).toMatchObject({ id: 'e1', title: 'E1' });

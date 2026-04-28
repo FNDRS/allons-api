@@ -4,10 +4,10 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
 import { PrismaService } from '../src/prisma/prisma.service';
-import { SupabaseAdminService } from '../src/supabase-admin.service';
-import { InterestsService } from '../src/interests.service';
-import { AccountService } from '../src/account.service';
-import { MeService } from '../src/me/me.service';
+import { SupabaseAdminService } from '../src/shared/supabase/supabase-admin.service';
+import { InterestsService } from '../src/features/interests/interests.service';
+import { AccountService } from '../src/features/account/account.service';
+import { MeService } from '../src/features/me/me.service';
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;

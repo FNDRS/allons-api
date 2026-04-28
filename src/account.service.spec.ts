@@ -16,6 +16,7 @@ describe('AccountService', () => {
     const service = new AccountService(supabaseAdmin);
 
     await expect(service.deleteAccount('u1')).resolves.toBeUndefined();
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     expect(supabaseAdmin.db.auth.admin.deleteUser).toHaveBeenCalledWith(
       'u1',
       true,

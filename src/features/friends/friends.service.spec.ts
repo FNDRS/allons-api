@@ -40,7 +40,9 @@ describe('FriendsService', () => {
       },
     ]);
 
-    const supabaseAdmin = { db: { auth: { admin: {} } } } as unknown as SupabaseAdminService;
+    const supabaseAdmin = {
+      db: { auth: { admin: {} } },
+    } as unknown as SupabaseAdminService;
     const service = new FriendsService(prisma, supabaseAdmin);
 
     const res = await service.listFriends('u1', 'ana');

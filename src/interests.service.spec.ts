@@ -44,7 +44,9 @@ describe('InterestsService', () => {
   it('throws when supabase errors', async () => {
     const db = makeDb();
     db.state.eqResult = { data: null, error: { message: 'nope' } };
-    const service = new InterestsService({ db } as unknown as SupabaseAdminService);
+    const service = new InterestsService({
+      db,
+    } as unknown as SupabaseAdminService);
     await expect(service.getUserInterestNames('u1')).rejects.toBeInstanceOf(
       InternalServerErrorException,
     );
@@ -52,7 +54,9 @@ describe('InterestsService', () => {
 
   it('rejects empty interests', async () => {
     const db = makeDb();
-    const service = new InterestsService({ db } as unknown as SupabaseAdminService);
+    const service = new InterestsService({
+      db,
+    } as unknown as SupabaseAdminService);
     await expect(
       service.replaceUserInterests('u1', {}, [' ', '']),
     ).rejects.toBeInstanceOf(BadRequestException);
@@ -83,7 +87,9 @@ describe('InterestsService', () => {
       return c;
     });
 
-    const service = new InterestsService({ db } as unknown as SupabaseAdminService);
+    const service = new InterestsService({
+      db,
+    } as unknown as SupabaseAdminService);
     await expect(
       service.replaceUserInterests('u1', { name: 'Ana', username: 'ana' }, [
         'music',
