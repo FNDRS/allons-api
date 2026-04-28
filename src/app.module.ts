@@ -13,6 +13,11 @@ import { AccountController } from './account.controller';
 import { AccountService } from './account.service';
 import { MeController } from './me/me.controller';
 import { MeService } from './me/me.service';
+import { FriendsController } from './friends/friends.controller';
+import { FriendsService } from './friends/friends.service';
+import { ConversationsController } from './conversations/conversations.controller';
+import { ConversationsService } from './conversations/conversations.service';
+import { MailService } from './mail/mail.service';
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule],
@@ -24,6 +29,8 @@ import { MeService } from './me/me.service';
     EventsController,
     AccountController,
     MeController,
+    FriendsController,
+    ConversationsController,
   ],
   providers: [
     AppService,
@@ -31,6 +38,9 @@ import { MeService } from './me/me.service';
     InterestsService,
     AccountService,
     MeService,
+    FriendsService,
+    ConversationsService,
+    MailService,
   ],
 })
 export class AppModule {}

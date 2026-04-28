@@ -61,7 +61,11 @@ export class MeController {
     @Query('types') types?: string | string[],
   ) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
-    return this.meService.listTickets(user.id, { cities, types });
+    return this.meService.listTickets(user.id, {
+      cities,
+      types,
+      email: user.email ?? null,
+    });
   }
 
   @Get('tickets/:ticketId')
@@ -111,6 +115,44 @@ export class MeController {
   ) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
     return this.meService.cancelTicket(user.id, ticketId);
+  }
+
+  @Post('tickets/:ticketId/share')
+  async shareTicket(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('ticketId') ticketId: string,
+    @Body() body: { peerUserId?: string },
+  ) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    if (!body?.peerUserId || typeof body.peerUserId !== 'string') {
+      throw new BadRequestException('peerUserId is required');
+    }
+    return this.meService.shareTicketWithUser(user.id, {
+      ticketId,
+      peerUserId: body.peerUserId,
+    });
+  }
+
+  @Post('tickets/:ticketId/invite')
+  async inviteTicketRecipient(
+    @Headers('authorization') authorization: string | undefined,
+    @Param('ticketId') ticketId: string,
+    @Body() body: { email?: string; name?: string | null },
+  ) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(authorization);
+    if (!body?.email || typeof body.email !== 'string') {
+      throw new BadRequestException('email is required');
+    }
+    const inviterName =
+      (typeof user.user_metadata?.name === 'string'
+        ? (user.user_metadata.name as string)
+        : undefined) ?? user.email ?? 'Un amigo';
+    return this.meService.inviteTicketRecipient(user.id, {
+      ticketId,
+      email: body.email,
+      name: body.name ?? null,
+      inviterName,
+    });
   }
 
   @Get('conversations')

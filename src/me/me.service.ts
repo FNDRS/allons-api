@@ -7,6 +7,9 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseList } from '../events/events.types';
+import { ConversationsService, parseMessageBody } from '../conversations/conversations.service';
+import { MailService } from '../mail/mail.service';
+import { SupabaseAdminService } from '../supabase-admin.service';
 
 interface UpdateProfileInput {
   fullName?: string | null;
@@ -32,7 +35,12 @@ export interface NotificationGroupDto {
 
 @Injectable()
 export class MeService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly conversationsService: ConversationsService,
+    private readonly mailService: MailService,
+    private readonly supabaseAdmin: SupabaseAdminService,
+  ) {}
 
   async getProfile(
     userId: string,
@@ -112,28 +120,57 @@ export class MeService {
 
   async listTickets(
     userId: string,
-    filters?: { cities?: string | string[]; types?: string | string[] },
+    filters?: {
+      cities?: string | string[];
+      types?: string | string[];
+      email?: string | null;
+    },
   ) {
     await this.ensureTicketHoldersTable();
     const cities = parseList(filters?.cities);
     const types = parseList(filters?.types);
+    const userEmail = (filters?.email ?? '').trim().toLowerCase();
 
-    const where: any = { ownerId: userId };
-    if (cities.length > 0 || types.length > 0) {
-      where.event = {
-        ...(cities.length > 0 ? { city: { in: cities } } : {}),
-        ...(types.length > 0
-          ? {
-              interests: {
-                some: { interest: { slug: { in: types } } },
-              },
-            }
-          : {}),
-      };
+    const eventFilter =
+      cities.length > 0 || types.length > 0
+        ? {
+            ...(cities.length > 0 ? { city: { in: cities } } : {}),
+            ...(types.length > 0
+              ? {
+                  interests: {
+                    some: { interest: { slug: { in: types } } },
+                  },
+                }
+              : {}),
+          }
+        : undefined;
+
+    const ownedWhere: any = { ownerId: userId };
+    if (eventFilter) ownedWhere.event = eventFilter;
+
+    let invitedTicketIds: string[] = [];
+    if (userEmail) {
+      const rows = await this.prisma.$queryRaw<Array<{ ticket_id: string }>>`
+        SELECT ticket_id
+        FROM ticket_holders
+        WHERE LOWER(holder_email) = ${userEmail}
+      `;
+      invitedTicketIds = rows.map((r) => r.ticket_id);
     }
 
+    const invitedWhere: any = {
+      AND: [
+        { id: { in: invitedTicketIds } },
+        { ownerId: { not: userId } },
+        ...(eventFilter ? [{ event: eventFilter }] : []),
+      ],
+    };
+
     const tickets = await this.prisma.ticket.findMany({
-      where,
+      where:
+        invitedTicketIds.length > 0
+          ? { OR: [ownedWhere, invitedWhere] }
+          : ownedWhere,
       include: {
         event: {
           include: {
@@ -248,7 +285,11 @@ export class MeService {
         )
       `;
     }
-    return { createdCount: createdRows.length };
+    return {
+      createdCount: createdRows.length,
+      ticketIds: createdRows.map((row) => row.id),
+      holders: holders.map((h) => ({ name: h.name, email: h.email })),
+    };
   }
 
   async getTicketDetails(userId: string, ticketId: string) {
@@ -477,13 +518,21 @@ export class MeService {
         const others = conversation.members.filter((m) => m.userId !== userId);
         const peer = others[0]?.profile;
         const last = conversation.messages[0];
+        const preview = last ? previewFromBody(last.body) : '';
+        const tabs: Array<'amigos' | 'eventos'> = last
+          ? previewIsEventInvite(last.body)
+            ? ['eventos']
+            : ['amigos']
+          : ['amigos'];
 
         return {
           id: conversation.id,
           name: peer?.fullName ?? peer?.username ?? 'Conversación',
-          lastMessage: last?.body ?? '',
+          lastMessage: preview,
+          peerUserId: peer?.userId ?? null,
+          avatarUrl: peer?.avatarUrl ?? null,
           avatarColor: peer?.avatarColor ?? '#5a4a4a',
-          tabs: ['amigos'] as Array<'amigos' | 'eventos'>,
+          tabs,
           updatedAt: last?.createdAt ?? conversation.createdAt,
         };
       })
@@ -532,6 +581,111 @@ export class MeService {
     return groups;
   }
 
+  async shareTicketWithUser(
+    userId: string,
+    args: { ticketId: string; peerUserId: string },
+  ) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: args.ticketId },
+      include: { event: true },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+    if (ticket.ownerId !== userId) {
+      throw new ForbiddenException('Ticket does not belong to user');
+    }
+    const conv = await this.conversationsService.findOrCreateDirect(
+      userId,
+      args.peerUserId,
+    );
+    await this.conversationsService.sendMessage(userId, conv.id, {
+      type: 'event_invite',
+      text: `Te invité a "${ticket.event?.title ?? ticket.title}".`,
+      eventId: ticket.eventId,
+      ticketId: ticket.id,
+      eventTitle: ticket.event?.title ?? ticket.title,
+      eventStartsAt: ticket.event?.startsAt
+        ? ticket.event.startsAt.toISOString()
+        : null,
+    });
+    return { sent: true, conversationId: conv.id };
+  }
+
+  async inviteTicketRecipient(
+    userId: string,
+    args: {
+      ticketId: string;
+      email: string;
+      name?: string | null;
+      inviterName?: string | null;
+    },
+  ) {
+    const ticket = await this.prisma.ticket.findUnique({
+      where: { id: args.ticketId },
+      include: { event: true },
+    });
+    if (!ticket) throw new NotFoundException('Ticket not found');
+    if (ticket.ownerId !== userId) {
+      throw new ForbiddenException('Ticket does not belong to user');
+    }
+
+    const email = (args.email ?? '').trim().toLowerCase();
+    if (!email || !email.includes('@')) {
+      throw new BadRequestException('Email inválido');
+    }
+
+    let allonsUserId: string | null = null;
+    try {
+      const lookup = await this.supabaseAdmin.db.auth.admin.listUsers({
+        page: 1,
+        perPage: 200,
+      });
+      const users = (lookup.data?.users ?? []) as Array<{
+        id?: string;
+        email?: string | null;
+      }>;
+      const found = users.find(
+        (u) => (u.email ?? '').toLowerCase() === email,
+      );
+      if (found?.id) allonsUserId = found.id;
+    } catch {
+      allonsUserId = null;
+    }
+
+    let conversationId: string | null = null;
+    if (allonsUserId) {
+      const conv = await this.conversationsService.findOrCreateDirect(
+        userId,
+        allonsUserId,
+      );
+      conversationId = conv.id;
+      await this.conversationsService.sendMessage(userId, conv.id, {
+        type: 'event_invite',
+        text: `Te invité a "${ticket.event?.title ?? ticket.title}".`,
+        eventId: ticket.eventId,
+        ticketId: ticket.id,
+        eventTitle: ticket.event?.title ?? ticket.title,
+        eventStartsAt: ticket.event?.startsAt
+          ? ticket.event.startsAt.toISOString()
+          : null,
+      });
+    }
+
+    const mail = await this.mailService.sendTicketInvitation({
+      to: email,
+      inviterName: (args.inviterName ?? 'Un amigo').trim() || 'Un amigo',
+      eventTitle: ticket.event?.title ?? ticket.title,
+      ticketId: ticket.id,
+      isAllonsUser: Boolean(allonsUserId),
+    });
+
+    return {
+      sent: true,
+      isAllonsUser: Boolean(allonsUserId),
+      conversationId,
+      mail,
+    };
+  }
+
   async listEventHistory(userId: string) {
     const tickets = await this.prisma.ticket.findMany({
       where: { ownerId: userId, NOT: { eventId: null } },
@@ -554,6 +708,18 @@ function formatShortDate(date: Date) {
   const d = String(date.getDate()).padStart(2, '0');
   const m = String(date.getMonth() + 1).padStart(2, '0');
   return `${d}/${m}`;
+}
+
+function previewFromBody(body: string) {
+  const payload = parseMessageBody(body);
+  if (payload.type === 'event_invite') {
+    return payload.text || `Invitación: ${payload.eventTitle ?? 'evento'}`;
+  }
+  return payload.text ?? '';
+}
+
+function previewIsEventInvite(body: string) {
+  return parseMessageBody(body).type === 'event_invite';
 }
 
 function getMetadataString(metadata: Record<string, unknown>, key: string) {
