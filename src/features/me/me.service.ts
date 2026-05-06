@@ -505,6 +505,17 @@ export class MeService {
     `;
   }
 
+  private async ensureProviderFollowsTable() {
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS provider_follows (
+        user_id uuid NOT NULL,
+        provider_id uuid NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (user_id, provider_id)
+      )
+    `;
+  }
+
   private async getRefundPolicyForProvider(
     providerId: string | null,
     startsAt: Date | null,
@@ -713,6 +724,50 @@ export class MeService {
       groups.push({ groupLabel: 'Previamente', items: previousItems });
 
     return groups;
+  }
+
+  async listFollowedOrganizerEvents(
+    userId: string,
+    filters?: {
+      cities?: string | string[];
+      types?: string | string[];
+    },
+  ) {
+    await this.ensureProviderFollowsTable();
+    const providerRows = await this.prisma.$queryRaw<Array<{ provider_id: string }>>`
+      SELECT provider_id
+      FROM provider_follows
+      WHERE user_id = ${userId}::uuid
+    `;
+    const providerIds = providerRows.map((row) => row.provider_id);
+    if (providerIds.length === 0) return [];
+
+    const cities = parseList(filters?.cities);
+    const types = parseList(filters?.types);
+    const events = await this.prisma.event.findMany({
+      where: {
+        providerId: { in: providerIds },
+        OR: [{ startsAt: { gte: new Date() } }, { startsAt: null }],
+        ...(cities.length > 0 ? { city: { in: cities } } : {}),
+        ...(types.length > 0
+          ? {
+              interests: {
+                some: { interest: { slug: { in: types } } },
+              },
+            }
+          : {}),
+      },
+      include: {
+        provider: true,
+        interests: { include: { interest: true } },
+      },
+      orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
+      take: 8,
+    });
+    return events.map((event) => ({
+      ...event,
+      types: (event.interests ?? []).map((x) => x.interest.slug),
+    }));
   }
 
   async shareTicketWithUser(
@@ -1003,7 +1058,7 @@ export class MeService {
         ${'Invitaciones'},
         ${title},
         ${description},
-        ${tabs}::text[]
+        ${tabs}::notification_tab[]
       )
     `;
   }

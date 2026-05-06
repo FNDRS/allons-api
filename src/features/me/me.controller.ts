@@ -207,4 +207,16 @@ export class MeController {
     );
     return this.meService.listEventHistory(user.id);
   }
+
+  @Get('following-organizers/events')
+  async listFollowedOrganizerEvents(
+    @Req() req: Request,
+    @Query('cities') cities?: string | string[],
+    @Query('types') types?: string | string[],
+  ) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
+    return this.meService.listFollowedOrganizerEvents(user.id, { cities, types });
+  }
 }

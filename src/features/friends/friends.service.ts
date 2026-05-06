@@ -14,6 +14,7 @@ export interface FriendDto {
   avatarUrl: string | null;
   avatarColor: string | null;
   location: string | null;
+  isProvider?: boolean;
 }
 
 @Injectable()
@@ -35,8 +36,20 @@ export class FriendsService {
     `;
   }
 
+  async ensureProviderFollowsTable() {
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS provider_follows (
+        user_id uuid NOT NULL,
+        provider_id uuid NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (user_id, provider_id)
+      )
+    `;
+  }
+
   async listFriends(userId: string, query?: string): Promise<FriendDto[]> {
     await this.ensureTable();
+    await this.ensureProviderFollowsTable();
     const me = await this.prisma.profile.findUnique({ where: { userId } });
     const myLocation = me?.location ?? null;
 
@@ -60,11 +73,14 @@ export class FriendsService {
     `;
 
     const filtered = filterByQuery(rows, query);
-    return filtered.map(toFriendDto);
+    const people = filtered.map(toFriendDto);
+    const providers = await this.listFollowedProviders(userId, query);
+    return [...people, ...providers];
   }
 
   async listSuggestions(userId: string, query?: string): Promise<FriendDto[]> {
     await this.ensureTable();
+    await this.ensureProviderFollowsTable();
     const me = await this.prisma.profile.findUnique({ where: { userId } });
     const myLocation = me?.location ?? null;
 
@@ -91,7 +107,10 @@ export class FriendsService {
 
     const filtered = filterByCityThenGlobal(rows, myLocation, query);
     const fromProfiles = filtered.map(toFriendDto);
-    if (fromProfiles.length > 0) return fromProfiles;
+    const fromProviders = await this.listProviderSuggestions(userId, query);
+    if (fromProfiles.length > 0 || fromProviders.length > 0) {
+      return [...fromProfiles, ...fromProviders];
+    }
 
     const friendRows = await this.prisma.$queryRaw<
       Array<{ friend_id: string }>
@@ -131,6 +150,7 @@ export class FriendsService {
           typeof u.user_metadata?.location === 'string'
             ? u.user_metadata.location
             : null,
+        isProvider: false,
       }));
     return filterFriendDtosByQuery(fallback, query);
   }
@@ -140,6 +160,7 @@ export class FriendsService {
       throw new BadRequestException('No te puedes agregar a ti mismo.');
     }
     await this.ensureTable();
+    await this.ensureProviderFollowsTable();
     let target = await this.prisma.profile.findUnique({
       where: { userId: friendUserId },
     });
@@ -147,7 +168,18 @@ export class FriendsService {
       target = await this.ensureProfileFromAuth(friendUserId);
     }
     if (!target) {
-      throw new NotFoundException('Usuario no encontrado.');
+      const provider = await this.prisma.provider.findUnique({
+        where: { id: friendUserId },
+      });
+      if (!provider) {
+        throw new NotFoundException('Usuario o negocio no encontrado.');
+      }
+      await this.prisma.$executeRaw`
+        INSERT INTO provider_follows (user_id, provider_id)
+        VALUES (${userId}::uuid, ${friendUserId}::uuid)
+        ON CONFLICT DO NOTHING
+      `;
+      return { added: true, isProvider: true };
     }
     try {
       await this.prisma.$executeRaw`
@@ -168,10 +200,15 @@ export class FriendsService {
 
   async removeFriend(userId: string, friendUserId: string) {
     await this.ensureTable();
+    await this.ensureProviderFollowsTable();
     await this.prisma.$executeRaw`
       DELETE FROM friendships
       WHERE (user_id = ${userId}::uuid AND friend_id = ${friendUserId}::uuid)
          OR (user_id = ${friendUserId}::uuid AND friend_id = ${userId}::uuid)
+    `;
+    await this.prisma.$executeRaw`
+      DELETE FROM provider_follows
+      WHERE user_id = ${userId}::uuid AND provider_id = ${friendUserId}::uuid
     `;
     return { removed: true };
   }
@@ -241,6 +278,77 @@ export class FriendsService {
       return null;
     }
   }
+
+  private async listFollowedProviders(
+    userId: string,
+    query?: string,
+  ): Promise<FriendDto[]> {
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        user_id: string;
+        full_name: string;
+        username: string | null;
+        avatar_url: string | null;
+      }>
+    >`
+      SELECT
+        p.id AS user_id,
+        p.name AS full_name,
+        p.handle AS username,
+        p.logo_url AS avatar_url
+      FROM provider_follows pf
+      JOIN providers p ON p.id = pf.provider_id
+      WHERE pf.user_id = ${userId}::uuid
+      ORDER BY p.name ASC
+    `;
+    const providers = rows.map((row) => ({
+      userId: row.user_id,
+      fullName: row.full_name,
+      username: row.username,
+      avatarUrl: row.avatar_url,
+      avatarColor: '#5a4a4a',
+      location: null,
+      isProvider: true,
+    }));
+    return filterFriendDtosByQuery(providers, query);
+  }
+
+  private async listProviderSuggestions(
+    userId: string,
+    query?: string,
+  ): Promise<FriendDto[]> {
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        user_id: string;
+        full_name: string;
+        username: string | null;
+        avatar_url: string | null;
+      }>
+    >`
+      SELECT
+        p.id AS user_id,
+        p.name AS full_name,
+        p.handle AS username,
+        p.logo_url AS avatar_url
+      FROM providers p
+      WHERE p.id NOT IN (
+        SELECT provider_id
+        FROM provider_follows
+        WHERE user_id = ${userId}::uuid
+      )
+      ORDER BY p.name ASC
+    `;
+    const providers = rows.map((row) => ({
+      userId: row.user_id,
+      fullName: row.full_name,
+      username: row.username,
+      avatarUrl: row.avatar_url,
+      avatarColor: '#5a4a4a',
+      location: null,
+      isProvider: true,
+    }));
+    return filterFriendDtosByQuery(providers, query);
+  }
 }
 
 function filterByQuery<
@@ -275,6 +383,7 @@ function toFriendDto(row: {
     avatarUrl: row.avatar_url,
     avatarColor: row.avatar_color,
     location: row.location,
+    isProvider: false,
   };
 }
 

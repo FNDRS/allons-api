@@ -11,12 +11,15 @@ function makePrisma() {
       findUnique: jest.fn(),
       upsert: jest.fn(),
     },
+    provider: {
+      findUnique: jest.fn(),
+    },
   } as any;
 }
 
 describe('FriendsService', () => {
   it('filters listFriends by query', async () => {
-    const prisma = makePrisma() as unknown as PrismaService;
+    const prisma = makePrisma();
     prisma.profile.findUnique.mockResolvedValueOnce({
       userId: 'u1',
       location: 'MX',
@@ -43,7 +46,10 @@ describe('FriendsService', () => {
     const supabaseAdmin = {
       db: { auth: { admin: {} } },
     } as unknown as SupabaseAdminService;
-    const service = new FriendsService(prisma, supabaseAdmin);
+    const service = new FriendsService(
+      prisma as unknown as PrismaService,
+      supabaseAdmin,
+    );
 
     const res = await service.listFriends('u1', 'ana');
     expect(res).toHaveLength(1);
@@ -51,7 +57,7 @@ describe('FriendsService', () => {
   });
 
   it('listSuggestions falls back to auth users when profiles are empty', async () => {
-    const prisma = makePrisma() as unknown as PrismaService;
+    const prisma = makePrisma();
     prisma.profile.findUnique.mockResolvedValueOnce({
       userId: 'u1',
       location: null,
@@ -81,18 +87,24 @@ describe('FriendsService', () => {
       },
     } as unknown as SupabaseAdminService;
 
-    const service = new FriendsService(prisma, supabaseAdmin);
+    const service = new FriendsService(
+      prisma as unknown as PrismaService,
+      supabaseAdmin,
+    );
     const res = await service.listSuggestions('u1', 'ana');
     expect(res).toHaveLength(1);
     expect(res[0]?.userId).toBe('u2');
   });
 
   it('addFriend rejects self and missing user', async () => {
-    const prisma = makePrisma() as unknown as PrismaService;
+    const prisma = makePrisma();
     const supabaseAdmin = {
       db: { auth: { admin: { getUserById: jest.fn() } } },
-    } as unknown as SupabaseAdminService;
-    const service = new FriendsService(prisma, supabaseAdmin);
+    } as any;
+    const service = new FriendsService(
+      prisma as unknown as PrismaService,
+      supabaseAdmin as SupabaseAdminService,
+    );
 
     await expect(service.addFriend('u1', 'u1')).rejects.toBeInstanceOf(
       BadRequestException,
@@ -105,5 +117,26 @@ describe('FriendsService', () => {
     await expect(service.addFriend('u1', 'u2')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+
+  it('addFriend follows provider when id belongs to business', async () => {
+    const prisma = makePrisma();
+    prisma.profile.findUnique.mockResolvedValueOnce(null);
+    prisma.provider.findUnique.mockResolvedValueOnce({
+      id: 'p1',
+      name: 'Allons',
+    });
+    const supabaseAdmin = {
+      db: { auth: { admin: { getUserById: jest.fn() } } },
+    } as any;
+    supabaseAdmin.db.auth.admin.getUserById.mockResolvedValueOnce({
+      data: { user: null },
+    });
+    const service = new FriendsService(
+      prisma as unknown as PrismaService,
+      supabaseAdmin as SupabaseAdminService,
+    );
+    const result = await service.addFriend('u1', 'p1');
+    expect(result).toEqual({ added: true, isProvider: true });
   });
 });
