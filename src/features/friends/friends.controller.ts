@@ -35,6 +35,14 @@ export class FriendsController {
     return this.friendsService.listSuggestions(user.id, q);
   }
 
+  @Get('followers')
+  async followers(@Req() req: Request, @Query('q') q?: string) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
+    return this.friendsService.listProviderFollowers(user.id, q);
+  }
+
   @Post(':friendUserId')
   async add(@Req() req: Request, @Param('friendUserId') friendUserId: string) {
     if (!friendUserId)

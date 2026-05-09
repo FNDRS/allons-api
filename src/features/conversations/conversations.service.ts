@@ -27,6 +27,16 @@ export interface MessageDto {
   payload: MessagePayload;
 }
 
+export interface PeerDto {
+  userId: string;
+  fullName: string | null;
+  username: string | null;
+  avatarUrl: string | null;
+  avatarColor: string | null;
+  location: string | null;
+  isProvider: boolean;
+}
+
 @Injectable()
 export class ConversationsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -57,6 +67,16 @@ export class ConversationsService {
     if (userId === peerUserId) {
       throw new BadRequestException('Selecciona otra persona.');
     }
+    const providerPeer = await this.prisma.provider.findUnique({
+      where: { id: peerUserId },
+      select: { id: true },
+    });
+    if (providerPeer) {
+      throw new ForbiddenException(
+        'No se puede iniciar conversación con cuentas de proveedor.',
+      );
+    }
+
     const peer = await this.prisma.profile.findUnique({
       where: { userId: peerUserId },
     });
@@ -110,6 +130,14 @@ export class ConversationsService {
     const peerProfile = conversation.members.find(
       (m) => m.userId !== userId,
     )?.profile;
+    const peerIsProvider = peerProfile
+      ? Boolean(
+          await this.prisma.provider.findUnique({
+            where: { id: peerProfile.userId },
+            select: { id: true },
+          }),
+        )
+      : false;
 
     await this.prisma.$executeRaw`
       INSERT INTO conversation_reads (conversation_id, user_id, last_read_at)
@@ -145,6 +173,7 @@ export class ConversationsService {
             avatarUrl: peerProfile.avatarUrl,
             avatarColor: peerProfile.avatarColor,
             location: peerProfile.location,
+            isProvider: peerIsProvider,
           }
         : null,
       messages,
@@ -161,6 +190,23 @@ export class ConversationsService {
     });
     if (!member) {
       throw new ForbiddenException('No perteneces a esta conversación.');
+    }
+    const otherMembers = await this.prisma.conversationMember.findMany({
+      where: { conversationId, userId: { not: userId } },
+      select: { userId: true },
+      take: 1,
+    });
+    const peerUserId = otherMembers[0]?.userId;
+    if (peerUserId) {
+      const providerPeer = await this.prisma.provider.findUnique({
+        where: { id: peerUserId },
+        select: { id: true },
+      });
+      if (providerPeer) {
+        throw new ForbiddenException(
+          'No se pueden enviar mensajes a cuentas de proveedor.',
+        );
+      }
     }
     const safePayload: MessagePayload = sanitizePayload(payload);
     const message = await this.prisma.message.create({

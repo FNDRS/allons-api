@@ -17,6 +17,11 @@ export interface FriendDto {
   isProvider?: boolean;
 }
 
+export interface ProviderFollowersDto {
+  count: number;
+  followers: FriendDto[];
+}
+
 @Injectable()
 export class FriendsService {
   constructor(
@@ -97,6 +102,7 @@ export class FriendsService {
       SELECT p.user_id, p.full_name, p.username, p.avatar_url, p.avatar_color, p.location
       FROM profiles p
       WHERE p.user_id <> ${userId}::uuid
+        AND p.user_id NOT IN (SELECT id FROM providers)
         AND p.user_id NOT IN (
           SELECT friend_id FROM friendships WHERE user_id = ${userId}::uuid
         )
@@ -161,6 +167,18 @@ export class FriendsService {
     }
     await this.ensureTable();
     await this.ensureProviderFollowsTable();
+    const provider = await this.prisma.provider.findUnique({
+      where: { id: friendUserId },
+    });
+    if (provider) {
+      await this.prisma.$executeRaw`
+        INSERT INTO provider_follows (user_id, provider_id)
+        VALUES (${userId}::uuid, ${friendUserId}::uuid)
+        ON CONFLICT DO NOTHING
+      `;
+      return { added: true, isProvider: true };
+    }
+
     let target = await this.prisma.profile.findUnique({
       where: { userId: friendUserId },
     });
@@ -168,18 +186,7 @@ export class FriendsService {
       target = await this.ensureProfileFromAuth(friendUserId);
     }
     if (!target) {
-      const provider = await this.prisma.provider.findUnique({
-        where: { id: friendUserId },
-      });
-      if (!provider) {
-        throw new NotFoundException('Usuario o negocio no encontrado.');
-      }
-      await this.prisma.$executeRaw`
-        INSERT INTO provider_follows (user_id, provider_id)
-        VALUES (${userId}::uuid, ${friendUserId}::uuid)
-        ON CONFLICT DO NOTHING
-      `;
-      return { added: true, isProvider: true };
+      throw new NotFoundException('Usuario o negocio no encontrado.');
     }
     try {
       await this.prisma.$executeRaw`
@@ -222,6 +229,44 @@ export class FriendsService {
       ) AS exists
     `;
     return Boolean(rows[0]?.exists);
+  }
+
+  async listProviderFollowers(providerId: string, query?: string): Promise<ProviderFollowersDto> {
+    await this.ensureProviderFollowsTable();
+    const provider = await this.prisma.provider.findUnique({
+      where: { id: providerId },
+      select: { id: true },
+    });
+    if (!provider) {
+      return { count: 0, followers: [] };
+    }
+
+    const countRows = await this.prisma.$queryRaw<Array<{ total: number }>>`
+      SELECT COUNT(*)::int AS total
+      FROM provider_follows
+      WHERE provider_id = ${providerId}::uuid
+    `;
+    const count = countRows[0]?.total ?? 0;
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        user_id: string;
+        full_name: string | null;
+        username: string | null;
+        avatar_url: string | null;
+        avatar_color: string | null;
+        location: string | null;
+      }>
+    >`
+      SELECT p.user_id, p.full_name, p.username, p.avatar_url, p.avatar_color, p.location
+      FROM provider_follows pf
+      JOIN profiles p ON p.user_id = pf.user_id
+      WHERE pf.provider_id = ${providerId}::uuid
+      ORDER BY COALESCE(p.full_name, p.username, '') ASC
+    `;
+
+    const followers = filterByQuery(rows, query).map(toFriendDto);
+    return { count, followers };
   }
 
   private async listAuthUsersFallback() {

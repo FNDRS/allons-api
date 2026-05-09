@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { createClient, User } from '@supabase/supabase-js';
 
 @Injectable()
@@ -42,6 +42,12 @@ export class SupabaseAdminService {
 
     const { data, error } = await this.client.auth.getUser(token);
     if (error || !data.user) throw new UnauthorizedException('Invalid token');
+    const bannedUntil = data.user.banned_until;
+    if (isUserCurrentlyBanned(bannedUntil)) {
+      throw new ForbiddenException(
+        'Cuenta deshabilitada por solicitud de cancelación.',
+      );
+    }
 
     return data.user;
   }
@@ -52,4 +58,11 @@ export class SupabaseAdminService {
     if (!token || type.toLowerCase() !== 'bearer') return null;
     return token;
   }
+}
+
+function isUserCurrentlyBanned(bannedUntil?: string | null) {
+  if (!bannedUntil) return false;
+  const parsed = new Date(bannedUntil);
+  if (Number.isNaN(parsed.getTime())) return true;
+  return parsed.getTime() > Date.now();
 }

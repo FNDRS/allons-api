@@ -15,7 +15,6 @@ export class AccountController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
-    await this.accountService.deleteAccount(user.id);
-    return { success: true };
+    return this.accountService.deleteAccount(user.id, user.email ?? null);
   }
 }

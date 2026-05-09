@@ -21,6 +21,10 @@ interface UpdateProfileBody {
   avatarColor?: string | null;
 }
 
+interface CaptureReferralBody {
+  code?: string;
+}
+
 @Controller('me')
 export class MeController {
   constructor(
@@ -54,6 +58,33 @@ export class MeController {
       body ?? {},
       user.user_metadata ?? {},
     );
+  }
+
+  @Get('referrals')
+  async getReferralSummary(@Req() req: Request) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
+    return this.meService.getReferralSummary(user.id);
+  }
+
+  @Post('referrals/capture')
+  async captureReferral(@Req() req: Request, @Body() body: CaptureReferralBody) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
+    if (!body?.code || typeof body.code !== 'string') {
+      throw new BadRequestException('code es requerido');
+    }
+    return this.meService.captureReferralCode(user.id, body.code);
+  }
+
+  @Post('referrals/apply')
+  async applyReferral(@Req() req: Request) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
+    return this.meService.getReferralCheckoutPreview(user.id);
   }
 
   @Get('tickets')
@@ -92,6 +123,7 @@ export class MeController {
       eventId?: string;
       quantity?: number;
       holders?: Array<{ name?: string; email?: string }>;
+      referralCode?: string;
     },
   ) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
@@ -114,6 +146,8 @@ export class MeController {
           : undefined) ?? null,
       email: user.email ?? null,
       holders: body.holders ?? [],
+      referralCode:
+        typeof body.referralCode === 'string' ? body.referralCode : undefined,
     });
   }
 

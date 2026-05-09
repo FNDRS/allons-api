@@ -36,6 +36,66 @@ export interface NotificationGroupDto {
   items: NotificationItemDto[];
 }
 
+type ReferralClaimStatus = 'pending' | 'applied' | 'invalidated';
+
+interface ReferralCodeRow {
+  owner_user_id: string;
+  code: string;
+  active: boolean;
+}
+
+interface ReferralClaimRow {
+  id: string;
+  referred_user_id: string;
+  referrer_user_id: string;
+  code: string;
+  status: ReferralClaimStatus;
+  captured_at: Date;
+  applied_at: Date | null;
+  invalid_reason: string | null;
+}
+
+interface ReferralBenefitRow {
+  id: string;
+  claim_id: string;
+  referred_user_id: string;
+  discount_type: string;
+  discount_value: number;
+  max_uses: number;
+  used_count: number;
+  consumed_at: Date | null;
+}
+
+interface ReferralEventSummary {
+  referredUserId: string;
+  status: ReferralClaimStatus;
+  capturedAt: string;
+  appliedAt: string | null;
+}
+
+export interface ReferralSummaryDto {
+  enabled: boolean;
+  cohortEnabled: boolean;
+  myCode: string | null;
+  config: {
+    discountType: 'fixed_amount';
+    discountValueCents: number;
+  };
+  invited: {
+    total: number;
+    pending: number;
+    applied: number;
+    invalidated: number;
+    events: ReferralEventSummary[];
+  };
+  myBenefit: {
+    eligible: boolean;
+    status: ReferralClaimStatus | null;
+    discountValueCents: number;
+    consumed: boolean;
+  };
+}
+
 @Injectable()
 export class MeService {
   constructor(
@@ -119,6 +179,238 @@ export class MeService {
     });
 
     return this.getProfile(userId, email, metadata);
+  }
+
+  async getReferralSummary(userId: string): Promise<ReferralSummaryDto> {
+    await this.ensureReferralTables();
+    const config = this.getReferralConfig();
+    const cohortEnabled = this.isReferralsEnabledForUser(userId);
+    if (!cohortEnabled) {
+      return {
+        enabled: false,
+        cohortEnabled: false,
+        myCode: null,
+        config,
+        invited: { total: 0, pending: 0, applied: 0, invalidated: 0, events: [] },
+        myBenefit: {
+          eligible: false,
+          status: null,
+          discountValueCents: config.discountValueCents,
+          consumed: false,
+        },
+      };
+    }
+
+    const myCode = await this.getOrCreateReferralCode(userId);
+    const invitedRows = await this.prisma.$queryRaw<ReferralClaimRow[]>`
+      SELECT id, referred_user_id, referrer_user_id, code, status, captured_at, applied_at, invalid_reason
+      FROM customer_referral_claims
+      WHERE referrer_user_id = ${userId}::uuid
+      ORDER BY captured_at DESC
+      LIMIT 30
+    `;
+    const myClaimRows = await this.prisma.$queryRaw<ReferralClaimRow[]>`
+      SELECT id, referred_user_id, referrer_user_id, code, status, captured_at, applied_at, invalid_reason
+      FROM customer_referral_claims
+      WHERE referred_user_id = ${userId}::uuid
+      LIMIT 1
+    `;
+    const myClaim = myClaimRows[0] ?? null;
+    const myBenefitRows = await this.prisma.$queryRaw<ReferralBenefitRow[]>`
+      SELECT id, claim_id, referred_user_id, discount_type, discount_value, max_uses, used_count, consumed_at
+      FROM customer_referral_benefits
+      WHERE referred_user_id = ${userId}::uuid
+      LIMIT 1
+    `;
+    const myBenefit = myBenefitRows[0] ?? null;
+    const pendingCount = invitedRows.filter((row) => row.status === 'pending').length;
+    const appliedCount = invitedRows.filter((row) => row.status === 'applied').length;
+    const invalidatedCount = invitedRows.filter(
+      (row) => row.status === 'invalidated',
+    ).length;
+
+    return {
+      enabled: true,
+      cohortEnabled: true,
+      myCode,
+      config,
+      invited: {
+        total: invitedRows.length,
+        pending: pendingCount,
+        applied: appliedCount,
+        invalidated: invalidatedCount,
+        events: invitedRows.map((row) => ({
+          referredUserId: row.referred_user_id,
+          status: row.status,
+          capturedAt: row.captured_at.toISOString(),
+          appliedAt: row.applied_at ? row.applied_at.toISOString() : null,
+        })),
+      },
+      myBenefit: {
+        eligible:
+          myClaim?.status === 'pending' &&
+          Boolean(myBenefit) &&
+          myBenefit.used_count < myBenefit.max_uses,
+        status: myClaim?.status ?? null,
+        discountValueCents: myBenefit?.discount_value ?? config.discountValueCents,
+        consumed: Boolean(myBenefit && myBenefit.used_count >= myBenefit.max_uses),
+      },
+    };
+  }
+
+  async captureReferralCode(userId: string, codeRaw: string) {
+    await this.ensureReferralTables();
+    if (!this.isReferralsEnabledForUser(userId)) {
+      return {
+        captured: false,
+        status: 'disabled' as const,
+        message: 'Referidos no disponibles para esta cuenta en este momento.',
+      };
+    }
+
+    const code = codeRaw.trim().toUpperCase();
+    if (code.length < 4 || code.length > 16) {
+      throw new BadRequestException('Código de referido inválido.');
+    }
+
+    const matchingRows = await this.prisma.$queryRaw<ReferralCodeRow[]>`
+      SELECT owner_user_id, code, active
+      FROM customer_referral_codes
+      WHERE code = ${code}
+      LIMIT 1
+    `;
+    const referralCode = matchingRows[0];
+    if (!referralCode || !referralCode.active) {
+      throw new NotFoundException('Código de referido no encontrado.');
+    }
+    if (referralCode.owner_user_id === userId) {
+      throw new BadRequestException('No puedes aplicar tu propio código.');
+    }
+
+    const existingClaimRows = await this.prisma.$queryRaw<ReferralClaimRow[]>`
+      SELECT id, referred_user_id, referrer_user_id, code, status, captured_at, applied_at, invalid_reason
+      FROM customer_referral_claims
+      WHERE referred_user_id = ${userId}::uuid
+      LIMIT 1
+    `;
+    const existingClaim = existingClaimRows[0];
+    if (existingClaim) {
+      return {
+        captured: true,
+        status: existingClaim.status,
+        message: 'Ya existe un referido capturado para esta cuenta.',
+      };
+    }
+
+    const insertedRows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      INSERT INTO customer_referral_claims (
+        referred_user_id,
+        referrer_user_id,
+        code,
+        status,
+        captured_at
+      )
+      VALUES (
+        ${userId}::uuid,
+        ${referralCode.owner_user_id}::uuid,
+        ${code},
+        ${'pending'}::text,
+        now()
+      )
+      RETURNING id
+    `;
+    const claimId = insertedRows[0]?.id;
+    if (!claimId) {
+      throw new InternalServerErrorException('No se pudo registrar el referido.');
+    }
+    const config = this.getReferralConfig();
+    await this.prisma.$executeRaw`
+      INSERT INTO customer_referral_benefits (
+        claim_id,
+        referred_user_id,
+        discount_type,
+        discount_value,
+        max_uses,
+        used_count
+      )
+      VALUES (
+        ${claimId}::uuid,
+        ${userId}::uuid,
+        ${config.discountType},
+        ${config.discountValueCents},
+        1,
+        0
+      )
+      ON CONFLICT (referred_user_id) DO NOTHING
+    `;
+    await this.logReferralEvent(userId, 'capture_success', {
+      code,
+      referrerUserId: referralCode.owner_user_id,
+    });
+    return {
+      captured: true,
+      status: 'pending' as const,
+      discountValueCents: config.discountValueCents,
+    };
+  }
+
+  async getReferralCheckoutPreview(userId: string) {
+    await this.ensureReferralTables();
+    const config = this.getReferralConfig();
+    if (!this.isReferralsEnabledForUser(userId)) {
+      return {
+        enabled: false,
+        eligible: false,
+        discountValueCents: 0,
+        reason: 'Referidos desactivados para esta cuenta.',
+      };
+    }
+    const ticketsCount = await this.prisma.ticket.count({ where: { ownerId: userId } });
+    if (ticketsCount > 0) {
+      return {
+        enabled: true,
+        eligible: false,
+        discountValueCents: 0,
+        reason: 'El descuento aplica solo en la primera compra de ticket.',
+      };
+    }
+    const claimRows = await this.prisma.$queryRaw<ReferralClaimRow[]>`
+      SELECT id, referred_user_id, referrer_user_id, code, status, captured_at, applied_at, invalid_reason
+      FROM customer_referral_claims
+      WHERE referred_user_id = ${userId}::uuid
+      LIMIT 1
+    `;
+    const claim = claimRows[0];
+    if (!claim || claim.status !== 'pending') {
+      return {
+        enabled: true,
+        eligible: false,
+        discountValueCents: 0,
+        reason: 'No tienes un beneficio de referido pendiente.',
+      };
+    }
+    const benefitRows = await this.prisma.$queryRaw<ReferralBenefitRow[]>`
+      SELECT id, claim_id, referred_user_id, discount_type, discount_value, max_uses, used_count, consumed_at
+      FROM customer_referral_benefits
+      WHERE referred_user_id = ${userId}::uuid
+      LIMIT 1
+    `;
+    const benefit = benefitRows[0];
+    if (!benefit || benefit.used_count >= benefit.max_uses) {
+      return {
+        enabled: true,
+        eligible: false,
+        discountValueCents: 0,
+        reason: 'Este beneficio ya fue consumido.',
+      };
+    }
+
+    return {
+      enabled: true,
+      eligible: true,
+      discountValueCents: benefit.discount_value ?? config.discountValueCents,
+      reason: 'Descuento de referido disponible para esta compra.',
+    };
   }
 
   async listTickets(
@@ -271,8 +563,14 @@ export class MeService {
       name?: string | null;
       email?: string | null;
       holders?: Array<{ name?: string; email?: string }>;
+      referralCode?: string;
     },
   ) {
+    await this.ensureReferralTables();
+    const referralCodeInput = options?.referralCode?.trim();
+    if (referralCodeInput) {
+      await this.captureReferralCode(userId, referralCodeInput).catch(() => null);
+    }
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
     });
@@ -280,6 +578,9 @@ export class MeService {
       throw new NotFoundException('Evento no encontrado');
     }
     await this.ensureTicketHoldersTable();
+    const existingTicketCount = await this.prisma.ticket.count({
+      where: { ownerId: userId },
+    });
 
     const providedHolders = options?.holders ?? [];
     if (providedHolders.length > quantity) {
@@ -367,10 +668,26 @@ export class MeService {
         )
       `;
     }
+    const referralApplied =
+      existingTicketCount === 0
+        ? await this.applyReferralForFirstPaidTicket(userId)
+        : null;
     return {
       createdCount: createdRows.length,
       ticketIds: createdRows.map((row) => row.id),
       holders: holders.map((h) => ({ name: h.name, email: h.email })),
+      referral: referralApplied
+        ? {
+            applied: true,
+            discountType: referralApplied.discountType,
+            discountValueCents: referralApplied.discountValueCents,
+            claimId: referralApplied.claimId,
+          }
+        : {
+            applied: false,
+            discountType: 'fixed_amount',
+            discountValueCents: 0,
+          },
     };
   }
 
@@ -516,6 +833,175 @@ export class MeService {
     `;
   }
 
+  private async ensureReferralTables() {
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS customer_referral_codes (
+        owner_user_id uuid PRIMARY KEY,
+        code text NOT NULL UNIQUE,
+        active boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `;
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS customer_referral_claims (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        referred_user_id uuid NOT NULL UNIQUE,
+        referrer_user_id uuid NOT NULL,
+        code text NOT NULL,
+        status text NOT NULL DEFAULT 'pending',
+        captured_at timestamptz NOT NULL DEFAULT now(),
+        applied_at timestamptz,
+        invalid_reason text
+      )
+    `;
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS customer_referral_benefits (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        claim_id uuid NOT NULL UNIQUE,
+        referred_user_id uuid NOT NULL UNIQUE,
+        discount_type text NOT NULL,
+        discount_value integer NOT NULL,
+        max_uses integer NOT NULL DEFAULT 1,
+        used_count integer NOT NULL DEFAULT 0,
+        consumed_at timestamptz,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `;
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS customer_referral_events (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id uuid NOT NULL,
+        event_name text NOT NULL,
+        payload jsonb,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `;
+  }
+
+  private getReferralConfig() {
+    const discountValue = Number(process.env.REFERRAL_DISCOUNT_CENTS ?? 500);
+    return {
+      discountType: 'fixed_amount' as const,
+      discountValueCents: Number.isFinite(discountValue)
+        ? Math.max(0, Math.floor(discountValue))
+        : 500,
+    };
+  }
+
+  private isReferralsEnabledForUser(userId: string) {
+    const globalFlag = (process.env.REFERRALS_ENABLED ?? 'true')
+      .trim()
+      .toLowerCase();
+    if (globalFlag === 'false') return false;
+    const rolloutPercent = Number(process.env.REFERRALS_ROLLOUT_PERCENT ?? 100);
+    const pct = Number.isFinite(rolloutPercent)
+      ? Math.max(0, Math.min(100, Math.floor(rolloutPercent)))
+      : 100;
+    if (pct >= 100) return true;
+    if (pct <= 0) return false;
+    const hash = userId
+      .split('')
+      .reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    return hash % 100 < pct;
+  }
+
+  private async getOrCreateReferralCode(userId: string) {
+    const rows = await this.prisma.$queryRaw<Array<{ code: string }>>`
+      SELECT code
+      FROM customer_referral_codes
+      WHERE owner_user_id = ${userId}::uuid
+      LIMIT 1
+    `;
+    if (rows[0]?.code) return rows[0].code;
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const nextCode = `AL${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+      const createdRows = await this.prisma.$queryRaw<Array<{ code: string }>>`
+        INSERT INTO customer_referral_codes (
+          owner_user_id,
+          code,
+          active,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${userId}::uuid,
+          ${nextCode},
+          true,
+          now(),
+          now()
+        )
+        ON CONFLICT (owner_user_id)
+        DO UPDATE SET updated_at = now()
+        RETURNING code
+      `;
+      if (createdRows[0]?.code) return createdRows[0].code;
+    }
+    throw new InternalServerErrorException(
+      'No se pudo generar código de referido.',
+    );
+  }
+
+  private async applyReferralForFirstPaidTicket(userId: string) {
+    if (!this.isReferralsEnabledForUser(userId)) return null;
+
+    const claimRows = await this.prisma.$queryRaw<ReferralClaimRow[]>`
+      SELECT id, referred_user_id, referrer_user_id, code, status, captured_at, applied_at, invalid_reason
+      FROM customer_referral_claims
+      WHERE referred_user_id = ${userId}::uuid
+        AND status = ${'pending'}::text
+      LIMIT 1
+    `;
+    const claim = claimRows[0];
+    if (!claim) return null;
+
+    const benefitRows = await this.prisma.$queryRaw<ReferralBenefitRow[]>`
+      SELECT id, claim_id, referred_user_id, discount_type, discount_value, max_uses, used_count, consumed_at
+      FROM customer_referral_benefits
+      WHERE referred_user_id = ${userId}::uuid
+      LIMIT 1
+    `;
+    const benefit = benefitRows[0];
+    if (!benefit || benefit.used_count >= benefit.max_uses) return null;
+
+    await this.prisma.$executeRaw`
+      UPDATE customer_referral_claims
+      SET status = ${'applied'}::text,
+          applied_at = now(),
+          invalid_reason = NULL
+      WHERE id = ${claim.id}::uuid
+    `;
+    await this.prisma.$executeRaw`
+      UPDATE customer_referral_benefits
+      SET used_count = used_count + 1,
+          consumed_at = now()
+      WHERE id = ${benefit.id}::uuid
+    `;
+    await this.logReferralEvent(userId, 'benefit_applied', {
+      claimId: claim.id,
+      discountValueCents: benefit.discount_value,
+    });
+    return {
+      claimId: claim.id,
+      discountType: benefit.discount_type,
+      discountValueCents: benefit.discount_value,
+    };
+  }
+
+  private async logReferralEvent(
+    userId: string,
+    eventName: string,
+    payload?: Record<string, unknown>,
+  ) {
+    const safePayload = payload ? JSON.stringify(payload) : null;
+    await this.prisma.$executeRaw`
+      INSERT INTO customer_referral_events (user_id, event_name, payload, created_at)
+      VALUES (${userId}::uuid, ${eventName}, ${safePayload}::jsonb, now())
+    `;
+    console.log('[referrals]', eventName, { userId, ...(payload ?? {}) });
+  }
+
   private async getRefundPolicyForProvider(
     providerId: string | null,
     startsAt: Date | null,
@@ -639,10 +1125,29 @@ export class MeService {
       },
     });
 
-    const base = memberships
-      .map(({ conversation }) => {
+    const providerRows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM providers
+    `;
+    const providerIds = new Set(providerRows.map((row) => row.id));
+
+    type ConversationRow = {
+      id: string;
+      name: string;
+      lastMessage: string;
+      peerUserId: string | null;
+      avatarUrl: string | null;
+      avatarColor: string;
+      tabs: Array<'amigos' | 'eventos'>;
+      lastSenderId: string | null;
+      updatedAt: Date;
+    };
+
+    const baseRows: Array<ConversationRow | null> = memberships.map(
+      ({ conversation }) => {
         const others = conversation.members.filter((m) => m.userId !== userId);
         const peer = others[0]?.profile;
+        const peerUserId = peer?.userId ?? null;
+        if (peerUserId && providerIds.has(peerUserId)) return null;
         const last = conversation.messages[0];
         const preview = last ? previewFromBody(last.body) : '';
         const tabs: Array<'amigos' | 'eventos'> = last
@@ -655,14 +1160,18 @@ export class MeService {
           id: conversation.id,
           name: peer?.fullName ?? peer?.username ?? 'Conversación',
           lastMessage: preview,
-          peerUserId: peer?.userId ?? null,
+          peerUserId,
           avatarUrl: peer?.avatarUrl ?? null,
           avatarColor: peer?.avatarColor ?? '#5a4a4a',
           tabs,
           lastSenderId: last?.senderId ?? null,
           updatedAt: last?.createdAt ?? conversation.createdAt,
         };
-      })
+      },
+    );
+
+    const visibleRows = baseRows
+      .filter((row): row is ConversationRow => row !== null)
       .sort(
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
@@ -688,7 +1197,7 @@ export class MeService {
           unread,
         };
       });
-    return Promise.all(base);
+    return Promise.all(visibleRows);
   }
 
   async listNotifications(userId: string) {
