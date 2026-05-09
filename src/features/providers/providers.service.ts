@@ -217,15 +217,49 @@ export class ProvidersService {
       where: { id: userId },
       select: { id: true },
     });
-    if (!legacyProvider) return null;
+    if (legacyProvider) {
+      await this.prisma.$executeRaw`
+        INSERT INTO provider_members (provider_id, user_id, role, active)
+        VALUES (${legacyProvider.id}::uuid, ${userId}::uuid, 'owner', true)
+        ON CONFLICT (provider_id, user_id)
+        DO UPDATE SET active = true, role = 'owner', updated_at = now()
+      `;
+      return { providerId: legacyProvider.id, role: 'owner' };
+    }
 
+    const profile = await this.prisma.profile.findUnique({
+      where: { userId },
+      select: { fullName: true, username: true },
+    });
+    const providerName =
+      profile?.fullName?.trim() ||
+      profile?.username?.trim() ||
+      'Mi comercio';
+
+    const provider = await this.prisma.provider.create({
+      data: {
+        name: providerName,
+      },
+      select: { id: true },
+    });
     await this.prisma.$executeRaw`
       INSERT INTO provider_members (provider_id, user_id, role, active)
-      VALUES (${legacyProvider.id}::uuid, ${userId}::uuid, 'owner', true)
+      VALUES (${provider.id}::uuid, ${userId}::uuid, 'owner', true)
       ON CONFLICT (provider_id, user_id)
       DO UPDATE SET active = true, role = 'owner', updated_at = now()
     `;
-    return { providerId: legacyProvider.id, role: 'owner' };
+    await this.prisma.$executeRaw`
+      INSERT INTO provider_brand_settings (provider_id, logo_color, updated_at)
+      VALUES (${provider.id}::uuid, '#F67010', now())
+      ON CONFLICT (provider_id) DO NOTHING
+    `;
+    await this.appendActivity(
+      provider.id,
+      'staff',
+      'Provider inicial creado automáticamente',
+      userId,
+    );
+    return { providerId: provider.id, role: 'owner' };
   }
 
   async requireMembership(
@@ -401,11 +435,14 @@ export class ProvidersService {
 
   async updateProviderProfile(userId: string, body: Record<string, unknown>) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
+    if (body.name !== undefined && !String(body.name ?? '').trim()) {
+      throw new BadRequestException('name es requerido');
+    }
     await this.prisma.provider.update({
       where: { id: member.providerId },
       data: {
         name:
-          body.name === null ? '' : body.name ? String(body.name).trim() : undefined,
+          body.name !== undefined ? String(body.name ?? '').trim() : undefined,
         handle:
           body.handle === null
             ? null
