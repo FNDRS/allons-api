@@ -44,6 +44,22 @@ export class ProvidersService {
       CREATE INDEX IF NOT EXISTS provider_members_user_idx
       ON provider_members(user_id)
     `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE provider_members
+      ADD COLUMN IF NOT EXISTS full_name text
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE provider_members
+      ADD COLUMN IF NOT EXISTS email text
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE provider_members
+      ADD COLUMN IF NOT EXISTS phone text
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE provider_members
+      ADD COLUMN IF NOT EXISTS avatar_color text
+    `;
 
     await this.prisma.$executeRaw`
       ALTER TABLE events
@@ -144,6 +160,36 @@ export class ProvidersService {
       CREATE INDEX IF NOT EXISTS provider_payout_requests_provider_idx
       ON provider_payout_requests(provider_id, created_at DESC)
     `;
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS provider_brand_settings (
+        provider_id uuid PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,
+        logo_color text NOT NULL DEFAULT '#F67010',
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `;
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS provider_discounts (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        provider_id uuid NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+        event_id uuid REFERENCES events(id) ON DELETE SET NULL,
+        code text NOT NULL,
+        percent integer NOT NULL,
+        max_uses integer NOT NULL DEFAULT 0,
+        uses integer NOT NULL DEFAULT 0,
+        active boolean NOT NULL DEFAULT true,
+        created_by uuid NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `;
+    await this.prisma.$executeRaw`
+      CREATE UNIQUE INDEX IF NOT EXISTS provider_discounts_provider_code_unique
+      ON provider_discounts(provider_id, code)
+    `;
+    await this.prisma.$executeRaw`
+      CREATE INDEX IF NOT EXISTS provider_discounts_provider_idx
+      ON provider_discounts(provider_id, created_at DESC)
+    `;
 
     this.infraReady = true;
   }
@@ -218,6 +264,50 @@ export class ProvidersService {
       : 'draft';
   }
 
+  private normalizeGalleryUrls(raw: unknown): string[] {
+    if (!Array.isArray(raw)) return [];
+    const unique = new Set<string>();
+    for (const item of raw) {
+      const candidate =
+        typeof item === 'string'
+          ? item
+          : item && typeof item === 'object' && 'url' in item
+            ? String((item as { url?: unknown }).url ?? '')
+            : '';
+      const url = candidate.trim();
+      if (url) unique.add(url);
+    }
+    return Array.from(unique);
+  }
+
+  private async syncEventGallery(eventId: string, rawGallery: unknown) {
+    if (rawGallery === undefined) return;
+    const urls = this.normalizeGalleryUrls(rawGallery);
+    await this.prisma.eventMedia.deleteMany({
+      where: { eventId },
+    });
+    if (urls.length === 0) return;
+    await this.prisma.eventMedia.createMany({
+      data: urls.map((url, idx) => ({
+        eventId,
+        url,
+        sortOrder: idx + 1,
+      })),
+    });
+  }
+
+  private mapRoleToMemberRole(raw: unknown): ProviderRole {
+    const role = String(raw ?? '').toLowerCase();
+    if (role === 'owner') return 'owner';
+    if (role === 'admin' || role === 'finance') return 'admin';
+    return 'staff_scanner';
+  }
+
+  private mapMemberRoleToClientRole(raw: unknown): 'scanner' | 'admin' {
+    const role = String(raw ?? '').toLowerCase();
+    return role === 'staff_scanner' ? 'scanner' : 'admin';
+  }
+
   private async getEventAggregates(providerId: string) {
     const rows = await this.prisma.$queryRaw<EventAggregateRow[]>`
       SELECT
@@ -253,6 +343,12 @@ export class ProvidersService {
       this.prisma.event.findMany({
         where: { providerId: member.providerId },
         orderBy: [{ startsAt: 'desc' }, { createdAt: 'desc' }],
+        include: {
+          media: {
+            orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+            select: { id: true, url: true, sortOrder: true },
+          },
+        },
       }),
       this.getEventAggregates(member.providerId),
     ]);
@@ -272,14 +368,372 @@ export class ProvidersService {
         revenue: Number(agg?.revenue ?? 0),
         attendees: ticketsSold,
         scans,
+        gallery: (event as any).media ?? [],
       };
     });
+  }
+
+  async getProviderProfile(userId: string) {
+    const member = await this.requireMembership(userId);
+    const provider = await this.prisma.provider.findUnique({
+      where: { id: member.providerId },
+      select: {
+        id: true,
+        name: true,
+        handle: true,
+        description: true,
+        websiteUrl: true,
+        logoUrl: true,
+      },
+    });
+    if (!provider) throw new NotFoundException('Provider no encontrado');
+    const settings = await this.prisma.$queryRaw<Array<{ logo_color: string | null }>>`
+      SELECT logo_color
+      FROM provider_brand_settings
+      WHERE provider_id = ${member.providerId}::uuid
+      LIMIT 1
+    `;
+    return {
+      ...provider,
+      brandLogoColor: settings[0]?.logo_color ?? '#F67010',
+    };
+  }
+
+  async updateProviderProfile(userId: string, body: Record<string, unknown>) {
+    const member = await this.requireMembership(userId, ['owner', 'admin']);
+    await this.prisma.provider.update({
+      where: { id: member.providerId },
+      data: {
+        name:
+          body.name === null ? '' : body.name ? String(body.name).trim() : undefined,
+        handle:
+          body.handle === null
+            ? null
+            : body.handle
+              ? String(body.handle).trim().replace(/^@+/, '')
+              : undefined,
+        description:
+          body.description === null
+            ? null
+            : body.description
+              ? String(body.description)
+              : undefined,
+        websiteUrl:
+          body.websiteUrl === null
+            ? null
+            : body.websiteUrl
+              ? String(body.websiteUrl)
+              : undefined,
+        logoUrl:
+          body.logoUrl === null
+            ? null
+            : body.logoUrl
+              ? String(body.logoUrl)
+              : undefined,
+      },
+    });
+    if (body.brandLogoColor !== undefined) {
+      await this.prisma.$executeRaw`
+        INSERT INTO provider_brand_settings (provider_id, logo_color, updated_at)
+        VALUES (${member.providerId}::uuid, ${String(body.brandLogoColor ?? '#F67010')}, now())
+        ON CONFLICT (provider_id)
+        DO UPDATE SET logo_color = EXCLUDED.logo_color, updated_at = now()
+      `;
+    }
+    await this.appendActivity(
+      member.providerId,
+      'staff',
+      'Perfil de marca actualizado',
+      null,
+    );
+    return this.getProviderProfile(userId);
+  }
+
+  async listProviderStaff(userId: string) {
+    const member = await this.requireMembership(userId);
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        user_id: string;
+        full_name: string | null;
+        email: string | null;
+        phone: string | null;
+        role: string;
+        avatar_color: string | null;
+        active: boolean;
+        created_at: Date;
+        updated_at: Date;
+        profile_name: string | null;
+        profile_avatar_color: string | null;
+      }>
+    >`
+      SELECT
+        pm.user_id,
+        pm.full_name,
+        pm.email,
+        pm.phone,
+        pm.role,
+        pm.avatar_color,
+        pm.active,
+        pm.created_at,
+        pm.updated_at,
+        p.full_name AS profile_name,
+        p.avatar_color AS profile_avatar_color
+      FROM provider_members pm
+      LEFT JOIN profiles p ON p.user_id = pm.user_id
+      WHERE pm.provider_id = ${member.providerId}::uuid
+      ORDER BY
+        CASE pm.role
+          WHEN 'owner' THEN 0
+          WHEN 'admin' THEN 1
+          ELSE 2
+        END ASC,
+        pm.created_at ASC
+    `;
+    return rows.map((row) => ({
+      userId: row.user_id,
+      name: row.full_name ?? row.profile_name ?? 'Miembro',
+      email: row.email,
+      phone: row.phone,
+      role: this.mapMemberRoleToClientRole(row.role),
+      avatarColor: row.avatar_color ?? row.profile_avatar_color ?? '#F67010',
+      active: row.active,
+      invitedAt: row.created_at,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  async upsertProviderStaff(userId: string, body: Record<string, unknown>) {
+    const member = await this.requireMembership(userId, ['owner', 'admin']);
+    const targetUserId = String(body.userId ?? '').trim();
+    if (!targetUserId) {
+      throw new BadRequestException('userId es requerido');
+    }
+    const role = this.mapRoleToMemberRole(body.role);
+    await this.prisma.$executeRaw`
+      INSERT INTO provider_members (
+        provider_id, user_id, role, active, full_name, email, phone, avatar_color, updated_at
+      )
+      VALUES (
+        ${member.providerId}::uuid,
+        ${targetUserId}::uuid,
+        ${role},
+        true,
+        ${body.name ? String(body.name) : null},
+        ${body.email ? String(body.email).toLowerCase() : null},
+        ${body.phone ? String(body.phone) : null},
+        ${body.avatarColor ? String(body.avatarColor) : null},
+        now()
+      )
+      ON CONFLICT (provider_id, user_id)
+      DO UPDATE SET
+        role = EXCLUDED.role,
+        active = true,
+        full_name = COALESCE(EXCLUDED.full_name, provider_members.full_name),
+        email = COALESCE(EXCLUDED.email, provider_members.email),
+        phone = COALESCE(EXCLUDED.phone, provider_members.phone),
+        avatar_color = COALESCE(EXCLUDED.avatar_color, provider_members.avatar_color),
+        updated_at = now()
+    `;
+    await this.appendActivity(
+      member.providerId,
+      'staff',
+      `Miembro actualizado: ${body.name ? String(body.name) : targetUserId}`,
+      targetUserId,
+    );
+    return this.listProviderStaff(userId);
+  }
+
+  async updateProviderStaff(
+    userId: string,
+    targetUserId: string,
+    body: Record<string, unknown>,
+  ) {
+    const member = await this.requireMembership(userId, ['owner', 'admin']);
+    const role = body.role !== undefined ? this.mapRoleToMemberRole(body.role) : null;
+    const existing = await this.prisma.$queryRaw<Array<{ user_id: string }>>`
+      SELECT user_id
+      FROM provider_members
+      WHERE provider_id = ${member.providerId}::uuid
+        AND user_id = ${targetUserId}::uuid
+      LIMIT 1
+    `;
+    if (!existing[0]) throw new NotFoundException('Miembro no encontrado');
+    await this.prisma.$executeRaw`
+      UPDATE provider_members
+      SET
+        role = COALESCE(${role}, role),
+        active = CASE
+          WHEN ${body.active !== undefined} THEN ${Boolean(body.active)}
+          ELSE active
+        END,
+        full_name = CASE
+          WHEN ${body.name !== undefined} THEN ${body.name ? String(body.name) : null}
+          ELSE full_name
+        END,
+        email = CASE
+          WHEN ${body.email !== undefined} THEN ${body.email ? String(body.email).toLowerCase() : null}
+          ELSE email
+        END,
+        phone = CASE
+          WHEN ${body.phone !== undefined} THEN ${body.phone ? String(body.phone) : null}
+          ELSE phone
+        END,
+        avatar_color = CASE
+          WHEN ${body.avatarColor !== undefined} THEN ${body.avatarColor ? String(body.avatarColor) : null}
+          ELSE avatar_color
+        END,
+        updated_at = now()
+      WHERE provider_id = ${member.providerId}::uuid
+        AND user_id = ${targetUserId}::uuid
+    `;
+    await this.appendActivity(
+      member.providerId,
+      'staff',
+      `Miembro modificado: ${targetUserId}`,
+      targetUserId,
+    );
+    return { updated: true };
+  }
+
+  async removeProviderStaff(userId: string, targetUserId: string) {
+    const member = await this.requireMembership(userId, ['owner', 'admin']);
+    await this.prisma.$executeRaw`
+      UPDATE provider_members
+      SET active = false, updated_at = now()
+      WHERE provider_id = ${member.providerId}::uuid
+        AND user_id = ${targetUserId}::uuid
+    `;
+    await this.appendActivity(
+      member.providerId,
+      'staff',
+      `Miembro desactivado: ${targetUserId}`,
+      targetUserId,
+    );
+    return { deleted: true };
+  }
+
+  async listProviderDiscounts(userId: string) {
+    const member = await this.requireMembership(userId);
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        code: string;
+        percent: number;
+        uses: number;
+        max_uses: number;
+        active: boolean;
+        event_id: string | null;
+        event_title: string | null;
+        created_at: Date;
+      }>
+    >`
+      SELECT
+        d.id,
+        d.code,
+        d.percent,
+        d.uses,
+        d.max_uses,
+        d.active,
+        d.event_id,
+        e.title AS event_title,
+        d.created_at
+      FROM provider_discounts d
+      LEFT JOIN events e ON e.id = d.event_id
+      WHERE d.provider_id = ${member.providerId}::uuid
+      ORDER BY d.created_at DESC
+    `;
+    return rows.map((row) => ({
+      id: row.id,
+      code: row.code,
+      percent: row.percent,
+      uses: row.uses,
+      maxUses: row.max_uses,
+      active: row.active,
+      eventId: row.event_id,
+      eventTitle: row.event_title,
+      createdAt: row.created_at,
+    }));
+  }
+
+  async createProviderDiscount(userId: string, body: Record<string, unknown>) {
+    const member = await this.requireMembership(userId, ['owner', 'admin']);
+    const code = String(body.code ?? '').trim().toUpperCase();
+    if (!code || code.length < 3) {
+      throw new BadRequestException('code inválido');
+    }
+    const percent = Number(body.percent ?? 0);
+    if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+      throw new BadRequestException('percent inválido');
+    }
+    const maxUses = Math.max(1, Number(body.maxUses ?? 1));
+    const eventId = body.eventId ? String(body.eventId) : null;
+    await this.prisma.$executeRaw`
+      INSERT INTO provider_discounts (
+        provider_id, event_id, code, percent, max_uses, uses, active, created_by, updated_at
+      )
+      VALUES (
+        ${member.providerId}::uuid,
+        ${eventId ? `${eventId}` : null}::uuid,
+        ${code},
+        ${Math.round(percent)},
+        ${Math.round(maxUses)},
+        0,
+        true,
+        ${userId}::uuid,
+        now()
+      )
+    `;
+    await this.appendActivity(
+      member.providerId,
+      'event',
+      `Descuento creado: ${code}`,
+      eventId,
+    );
+    return this.listProviderDiscounts(userId);
+  }
+
+  async updateProviderDiscount(
+    userId: string,
+    discountId: string,
+    body: Record<string, unknown>,
+  ) {
+    const member = await this.requireMembership(userId, ['owner', 'admin']);
+    const eventId = body.eventId === null ? null : body.eventId ? String(body.eventId) : undefined;
+    await this.prisma.$executeRaw`
+      UPDATE provider_discounts
+      SET
+        code = CASE WHEN ${body.code !== undefined} THEN ${String(body.code ?? '').toUpperCase()} ELSE code END,
+        percent = CASE WHEN ${body.percent !== undefined} THEN ${Math.round(Number(body.percent ?? 0))} ELSE percent END,
+        max_uses = CASE WHEN ${body.maxUses !== undefined} THEN ${Math.round(Number(body.maxUses ?? 0))} ELSE max_uses END,
+        active = CASE WHEN ${body.active !== undefined} THEN ${Boolean(body.active)} ELSE active END,
+        event_id = CASE WHEN ${body.eventId !== undefined} THEN ${eventId ? `${eventId}` : null}::uuid ELSE event_id END,
+        updated_at = now()
+      WHERE id = ${discountId}::uuid
+        AND provider_id = ${member.providerId}::uuid
+    `;
+    return { updated: true };
+  }
+
+  async deleteProviderDiscount(userId: string, discountId: string) {
+    const member = await this.requireMembership(userId, ['owner', 'admin']);
+    await this.prisma.$executeRaw`
+      DELETE FROM provider_discounts
+      WHERE id = ${discountId}::uuid
+        AND provider_id = ${member.providerId}::uuid
+    `;
+    return { deleted: true };
   }
 
   async getProviderEvent(userId: string, eventId: string) {
     const member = await this.requireMembership(userId);
     const event = await this.prisma.event.findFirst({
       where: { id: eventId, providerId: member.providerId },
+      include: {
+        media: {
+          orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+          select: { id: true, url: true, sortOrder: true },
+        },
+      },
     });
     if (!event) throw new NotFoundException('Evento no encontrado');
 
@@ -304,6 +758,7 @@ export class ProvidersService {
       attendees: sold,
       scans: scans[0]?.total ?? 0,
       ticketTypes,
+      gallery: (event as any).media ?? [],
     };
   }
 
@@ -352,6 +807,7 @@ export class ProvidersService {
         status = ${String(body.status ?? 'draft')}
       WHERE id = ${created.id}::uuid
     `;
+    await this.syncEventGallery(created.id, body.gallery);
 
     await this.appendActivity(
       member.providerId,
@@ -445,6 +901,7 @@ export class ProvidersService {
         updated_at = now()
       WHERE id = ${eventId}::uuid
     `;
+    await this.syncEventGallery(eventId, body.gallery);
 
     await this.appendActivity(
       member.providerId,

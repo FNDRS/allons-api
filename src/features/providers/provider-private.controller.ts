@@ -37,6 +37,83 @@ export class ProviderPrivateController {
     return this.providersService.getActivity(user.id);
   }
 
+  @Get('profile')
+  async profile(@Req() req: Request) {
+    const user = await this.getUser(req);
+    return this.providersService.getProviderProfile(user.id);
+  }
+
+  @Patch('profile')
+  async updateProfile(
+    @Req() req: Request,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const user = await this.getUser(req);
+    return this.providersService.updateProviderProfile(user.id, body);
+  }
+
+  @Get('staff')
+  async staff(@Req() req: Request) {
+    const user = await this.getUser(req);
+    return this.providersService.listProviderStaff(user.id);
+  }
+
+  @Post('staff')
+  async createStaff(
+    @Req() req: Request,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const user = await this.getUser(req);
+    return this.providersService.upsertProviderStaff(user.id, body);
+  }
+
+  @Patch('staff/:userId')
+  async updateStaff(
+    @Req() req: Request,
+    @Param('userId') userId: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const user = await this.getUser(req);
+    return this.providersService.updateProviderStaff(user.id, userId, body);
+  }
+
+  @Delete('staff/:userId')
+  async removeStaff(@Req() req: Request, @Param('userId') userId: string) {
+    const user = await this.getUser(req);
+    return this.providersService.removeProviderStaff(user.id, userId);
+  }
+
+  @Get('discounts')
+  async listDiscounts(@Req() req: Request) {
+    const user = await this.getUser(req);
+    return this.providersService.listProviderDiscounts(user.id);
+  }
+
+  @Post('discounts')
+  async createDiscount(
+    @Req() req: Request,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const user = await this.getUser(req);
+    return this.providersService.createProviderDiscount(user.id, body);
+  }
+
+  @Patch('discounts/:id')
+  async updateDiscount(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const user = await this.getUser(req);
+    return this.providersService.updateProviderDiscount(user.id, id, body);
+  }
+
+  @Delete('discounts/:id')
+  async deleteDiscount(@Req() req: Request, @Param('id') id: string) {
+    const user = await this.getUser(req);
+    return this.providersService.deleteProviderDiscount(user.id, id);
+  }
+
   @Get('events')
   async listEvents(@Req() req: Request) {
     const user = await this.getUser(req);
