@@ -668,6 +668,44 @@ export class MeService {
         )
       `;
     }
+    await this.ensureProviderSalesTables();
+    if (event.providerId) {
+      const ticketTypeRows = await this.prisma.$queryRaw<
+        Array<{ id: string; price: number }>
+      >`
+        SELECT id, price::float8 AS price
+        FROM provider_event_ticket_types
+        WHERE event_id = ${event.id}::uuid
+          AND active = true
+        ORDER BY
+          CASE kind
+            WHEN 'general' THEN 0
+            WHEN 'early' THEN 1
+            WHEN 'vip' THEN 2
+            ELSE 3
+          END ASC,
+          created_at ASC
+        LIMIT 1
+      `;
+      const selected = ticketTypeRows[0];
+      if (selected?.id) {
+        await this.prisma.$executeRaw`
+          UPDATE provider_event_ticket_types
+          SET sold_count = sold_count + ${quantity},
+              updated_at = now()
+          WHERE id = ${selected.id}::uuid
+        `;
+      }
+      await this.prisma.$executeRaw`
+        INSERT INTO provider_activity_log (provider_id, type, message, meta)
+        VALUES (
+          ${event.providerId}::uuid,
+          'sale',
+          ${`Venta registrada: ${quantity} ticket(s) para ${event.title}`},
+          ${selected ? `L. ${Number(selected.price).toFixed(2)}` : null}
+        )
+      `;
+    }
     const referralApplied =
       existingTicketCount === 0
         ? await this.applyReferralForFirstPaidTicket(userId)
@@ -829,6 +867,34 @@ export class MeService {
         provider_id uuid NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now(),
         PRIMARY KEY (user_id, provider_id)
+      )
+    `;
+  }
+
+  private async ensureProviderSalesTables() {
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS provider_event_ticket_types (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        provider_id uuid NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+        event_id uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        kind text NOT NULL DEFAULT 'general',
+        price numeric(12,2) NOT NULL DEFAULT 0,
+        total integer NOT NULL DEFAULT 0,
+        sold_count integer NOT NULL DEFAULT 0,
+        active boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `;
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS provider_activity_log (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        provider_id uuid NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+        type text NOT NULL,
+        message text NOT NULL,
+        meta text,
+        created_at timestamptz NOT NULL DEFAULT now()
       )
     `;
   }
