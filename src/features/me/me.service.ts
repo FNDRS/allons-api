@@ -1310,7 +1310,7 @@ export class MeService {
   ) {
     await this.ensureProviderFollowsTable();
     const providerRows = await this.prisma.$queryRaw<Array<{ provider_id: string }>>`
-      SELECT provider_id
+      SELECT DISTINCT provider_id
       FROM provider_follows
       WHERE user_id = ${userId}::uuid
     `;

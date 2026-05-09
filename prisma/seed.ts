@@ -374,6 +374,297 @@ async function main() {
       ],
     });
   }
+
+  // Seed provider MVP for marlon+comercio1@allosapp.com.
+  // If auth user ID is known in the environment, use it to keep membership aligned.
+  const marlonUserId =
+    process.env.SEED_MARLON_USER_ID ?? '11111111-1111-4111-8111-111111111111';
+  const marlonProviderHandle = 'marlon-comercio1';
+  const marlonProviderName = 'Comercio Marlon';
+
+  await prisma.$executeRaw`
+    INSERT INTO profiles (user_id, full_name, username, location, avatar_color)
+    VALUES (
+      ${marlonUserId}::uuid,
+      ${marlonProviderName},
+      ${'marlon_comercio1'},
+      ${'Tegucigalpa'},
+      ${'#F67010'}
+    )
+    ON CONFLICT (user_id)
+    DO UPDATE SET
+      full_name = EXCLUDED.full_name,
+      username = EXCLUDED.username,
+      location = EXCLUDED.location,
+      avatar_color = EXCLUDED.avatar_color,
+      updated_at = now()
+  `;
+
+  await prisma.provider.upsert({
+    where: { handle: marlonProviderHandle },
+    update: {
+      name: marlonProviderName,
+      description: 'Eventos, experiencias y activaciones para comunidad local.',
+      websiteUrl: 'https://allonsapp.com',
+    },
+    create: {
+      id: marlonUserId,
+      handle: marlonProviderHandle,
+      name: marlonProviderName,
+      description: 'Eventos, experiencias y activaciones para comunidad local.',
+      websiteUrl: 'https://allonsapp.com',
+    },
+  });
+
+  const marlonProvider = await prisma.provider.findUniqueOrThrow({
+    where: { handle: marlonProviderHandle },
+    select: { id: true },
+  });
+
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS provider_members (
+      provider_id uuid NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+      user_id uuid NOT NULL,
+      role text NOT NULL DEFAULT 'owner',
+      active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (provider_id, user_id)
+    )
+  `;
+  await prisma.$executeRaw`
+    INSERT INTO provider_members (provider_id, user_id, role, active)
+    VALUES (${marlonProvider.id}::uuid, ${marlonUserId}::uuid, 'owner', true)
+    ON CONFLICT (provider_id, user_id)
+    DO UPDATE SET role = 'owner', active = true, updated_at = now()
+  `;
+
+  await prisma.$executeRaw`
+    ALTER TABLE events
+    ADD COLUMN IF NOT EXISTS event_type text NOT NULL DEFAULT 'single'
+  `;
+  await prisma.$executeRaw`
+    ALTER TABLE events
+    ADD COLUMN IF NOT EXISTS recurrence text
+  `;
+  await prisma.$executeRaw`
+    ALTER TABLE events
+    ADD COLUMN IF NOT EXISTS recurrence_custom jsonb
+  `;
+  await prisma.$executeRaw`
+    ALTER TABLE events
+    ADD COLUMN IF NOT EXISTS ticket_mode text NOT NULL DEFAULT 'paid'
+  `;
+  await prisma.$executeRaw`
+    ALTER TABLE events
+    ADD COLUMN IF NOT EXISTS capacity integer NOT NULL DEFAULT 0
+  `;
+  await prisma.$executeRaw`
+    ALTER TABLE events
+    ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'draft'
+  `;
+
+  const marlonEventDefs = [
+    {
+      title: 'Clase funcional sunrise',
+      city: 'Tegucigalpa',
+      venue: 'Parque La Leona',
+      dayOffset: 2,
+      hour: 6,
+      status: 'published',
+      capacity: 80,
+    },
+    {
+      title: 'Masterclass de cocina urbana',
+      city: 'Tegucigalpa',
+      venue: 'Distrito Food Hall',
+      dayOffset: 5,
+      hour: 18,
+      status: 'published',
+      capacity: 50,
+    },
+    {
+      title: 'Networking pymes y creadores',
+      city: 'San Pedro Sula',
+      venue: 'Hub Norte',
+      dayOffset: 8,
+      hour: 19,
+      status: 'draft',
+      capacity: 120,
+    },
+  ];
+
+  for (const def of marlonEventDefs) {
+    const start = atHour(def.dayOffset, def.hour);
+    const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+    const existing = await prisma.event.findFirst({
+      where: { providerId: marlonProvider.id, title: def.title },
+      select: { id: true },
+    });
+    const event = existing
+      ? await prisma.event.update({
+          where: { id: existing.id },
+          data: {
+            title: def.title,
+            description: `${def.title} · cupos limitados.`,
+            startsAt: start,
+            endsAt: end,
+            city: def.city,
+            venue: def.venue,
+            address: `${def.venue}, ${def.city}`,
+            themeColor: '#F67010',
+            createdBy: marlonUserId,
+          },
+        })
+      : await prisma.event.create({
+          data: {
+            providerId: marlonProvider.id,
+            title: def.title,
+            description: `${def.title} · cupos limitados.`,
+            startsAt: start,
+            endsAt: end,
+            city: def.city,
+            venue: def.venue,
+            address: `${def.venue}, ${def.city}`,
+            themeColor: '#F67010',
+            createdBy: marlonUserId,
+          },
+        });
+
+    await prisma.$executeRaw`
+      UPDATE events
+      SET
+        event_type = 'single',
+        ticket_mode = 'paid',
+        capacity = ${def.capacity},
+        status = ${def.status}
+      WHERE id = ${event.id}::uuid
+    `;
+
+    await prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS provider_event_ticket_types (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        provider_id uuid NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+        event_id uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        name text NOT NULL,
+        kind text NOT NULL DEFAULT 'general',
+        price numeric(12,2) NOT NULL DEFAULT 0,
+        total integer NOT NULL DEFAULT 0,
+        sold_count integer NOT NULL DEFAULT 0,
+        active boolean NOT NULL DEFAULT true,
+        created_at timestamptz NOT NULL DEFAULT now(),
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `;
+    await prisma.$executeRaw`
+      INSERT INTO provider_event_ticket_types (
+        provider_id, event_id, name, kind, price, total, sold_count, active
+      )
+      VALUES (
+        ${marlonProvider.id}::uuid,
+        ${event.id}::uuid,
+        ${'General'},
+        ${'general'},
+        ${180},
+        ${def.capacity},
+        ${Math.max(6, Math.floor(def.capacity * 0.15))},
+        true
+      )
+      ON CONFLICT DO NOTHING
+    `;
+    await prisma.$executeRaw`
+      INSERT INTO provider_event_ticket_types (
+        provider_id, event_id, name, kind, price, total, sold_count, active
+      )
+      VALUES (
+        ${marlonProvider.id}::uuid,
+        ${event.id}::uuid,
+        ${'VIP'},
+        ${'vip'},
+        ${350},
+        ${Math.max(10, Math.floor(def.capacity * 0.2))},
+        ${Math.max(2, Math.floor(def.capacity * 0.05))},
+        true
+      )
+      ON CONFLICT DO NOTHING
+    `;
+  }
+
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS provider_scan_records (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      provider_id uuid NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+      event_id uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      ticket_id uuid,
+      ticket_code text NOT NULL,
+      attendee_name text,
+      ticket_type text,
+      scanned_by uuid NOT NULL,
+      status text NOT NULL,
+      scanned_at timestamptz NOT NULL DEFAULT now()
+    )
+  `;
+  const marlonEvents = await prisma.event.findMany({
+    where: { providerId: marlonProvider.id },
+    select: { id: true, title: true },
+    take: 5,
+  });
+  for (const evt of marlonEvents) {
+    await prisma.$executeRaw`
+      INSERT INTO provider_scan_records (
+        provider_id,
+        event_id,
+        ticket_code,
+        attendee_name,
+        ticket_type,
+        scanned_by,
+        status
+      )
+      VALUES (
+        ${marlonProvider.id}::uuid,
+        ${evt.id}::uuid,
+        ${`seed-${evt.id.slice(0, 8)}`},
+        ${'Asistente Seed'},
+        ${'General'},
+        ${marlonUserId}::uuid,
+        ${'valid'}
+      )
+      ON CONFLICT DO NOTHING
+    `;
+  }
+
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS provider_activity_log (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      provider_id uuid NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+      type text NOT NULL,
+      message text NOT NULL,
+      meta text,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
+  `;
+  await prisma.$executeRaw`
+    INSERT INTO provider_activity_log (provider_id, type, message, meta)
+    VALUES
+      (${marlonProvider.id}::uuid, 'event', 'Seed inicial del panel provider', 'marlon+comercio1@allosapp.com'),
+      (${marlonProvider.id}::uuid, 'sale', 'Ventas de ejemplo cargadas', 'dataset-seed'),
+      (${marlonProvider.id}::uuid, 'scan', 'Escaneos de ejemplo cargados', 'dataset-seed')
+    ON CONFLICT DO NOTHING
+  `;
+
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS provider_follows (
+      user_id uuid NOT NULL,
+      provider_id uuid NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY (user_id, provider_id)
+    )
+  `;
+  await prisma.$executeRaw`
+    INSERT INTO provider_follows (user_id, provider_id)
+    VALUES (${marlonUserId}::uuid, ${marlonProvider.id}::uuid)
+    ON CONFLICT (user_id, provider_id) DO NOTHING
+  `;
 }
 
 main()
