@@ -16,6 +16,7 @@ interface ProviderMembership {
 interface EventAggregateRow {
   event_id: string;
   sold_count: number;
+  total_tickets: number;
   scanned_count: number;
   revenue: number;
 }
@@ -347,12 +348,14 @@ export class ProvidersService {
       SELECT
         e.id AS event_id,
         COALESCE(tt.sold_count, 0)::int AS sold_count,
+        COALESCE(tt.total_tickets, 0)::int AS total_tickets,
         COALESCE(sc.scanned_count, 0)::int AS scanned_count,
         COALESCE(tt.revenue, 0)::float8 AS revenue
       FROM events e
       LEFT JOIN (
         SELECT
           event_id,
+          SUM(total)::int AS total_tickets,
           SUM(sold_count)::int AS sold_count,
           SUM((sold_count * price))::float8 AS revenue
         FROM provider_event_ticket_types
@@ -390,6 +393,8 @@ export class ProvidersService {
       const agg = aggregates.get(event.id);
       const ticketsSold = agg?.sold_count ?? 0;
       const scans = agg?.scanned_count ?? 0;
+      const declaredCapacity = Number((event as any).capacity ?? 0);
+      const capacityFromTickets = Number(agg?.total_tickets ?? 0);
       return {
         ...event,
         status: this.toEventStatus((event as any).status),
@@ -397,7 +402,7 @@ export class ProvidersService {
         recurrence: (event as any).recurrence ?? null,
         recurrenceCustom: (event as any).recurrenceCustom ?? null,
         ticketMode: (event as any).ticketMode ?? 'paid',
-        capacity: Number((event as any).capacity ?? 0),
+        capacity: declaredCapacity > 0 ? declaredCapacity : capacityFromTickets,
         ticketsSold,
         revenue: Number(agg?.revenue ?? 0),
         attendees: ticketsSold,
@@ -634,16 +639,29 @@ export class ProvidersService {
 
   async removeProviderStaff(userId: string, targetUserId: string) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
+    const existing = await this.prisma.$queryRaw<Array<{ user_id: string; role: string }>>`
+      SELECT user_id, role
+      FROM provider_members
+      WHERE provider_id = ${member.providerId}::uuid
+        AND user_id = ${targetUserId}::uuid
+      LIMIT 1
+    `;
+    if (!existing[0]) throw new NotFoundException('Miembro no encontrado');
+    if (existing[0].role === 'owner') {
+      throw new BadRequestException('No puedes eliminar al owner del comercio');
+    }
+    if (targetUserId === userId) {
+      throw new BadRequestException('No puedes eliminar tu propio usuario');
+    }
     await this.prisma.$executeRaw`
-      UPDATE provider_members
-      SET active = false, updated_at = now()
+      DELETE FROM provider_members
       WHERE provider_id = ${member.providerId}::uuid
         AND user_id = ${targetUserId}::uuid
     `;
     await this.appendActivity(
       member.providerId,
       'staff',
-      `Miembro desactivado: ${targetUserId}`,
+      `Miembro eliminado: ${targetUserId}`,
       targetUserId,
     );
     return { deleted: true };
@@ -806,11 +824,17 @@ export class ProvidersService {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
     const title = String(body.title ?? '').trim();
     if (!title) throw new BadRequestException('title es requerido');
+    const creatorProfile = await this.prisma.profile.findUnique({
+      where: { userId },
+      select: { userId: true },
+    });
 
     const created = await this.prisma.event.create({
       data: {
         providerId: member.providerId,
-        createdBy: userId,
+        // `events.created_by` has an FK to `profiles.user_id`; avoid P2003 when
+        // account exists in auth but profile row has not been created yet.
+        createdBy: creatorProfile?.userId ?? null,
         title,
         description: body.description ? String(body.description) : null,
         startsAt: body.startsAt ? new Date(String(body.startsAt)) : null,
@@ -956,7 +980,30 @@ export class ProvidersService {
       select: { id: true, title: true },
     });
     if (!event) throw new NotFoundException('Evento no encontrado');
-    await this.prisma.event.delete({ where: { id: event.id } });
+    await this.prisma.$transaction(async (tx) => {
+      // Keep discounts but detach them from deleted event.
+      await tx.$executeRaw`
+        UPDATE provider_discounts
+        SET event_id = NULL, updated_at = now()
+        WHERE provider_id = ${member.providerId}::uuid
+          AND event_id = ${event.id}::uuid
+      `;
+      // Defensive cleanup: older deployments may not have cascade constraints.
+      await tx.$executeRaw`
+        DELETE FROM provider_scan_records
+        WHERE provider_id = ${member.providerId}::uuid
+          AND event_id = ${event.id}::uuid
+      `;
+      await tx.$executeRaw`
+        DELETE FROM provider_event_ticket_types
+        WHERE provider_id = ${member.providerId}::uuid
+          AND event_id = ${event.id}::uuid
+      `;
+      await tx.eventMedia.deleteMany({ where: { eventId: event.id } });
+      await tx.eventInterest.deleteMany({ where: { eventId: event.id } });
+      await tx.eventAttendee.deleteMany({ where: { eventId: event.id } });
+      await tx.event.delete({ where: { id: event.id } });
+    });
     await this.appendActivity(
       member.providerId,
       'event',

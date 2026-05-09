@@ -90,6 +90,12 @@ model Event {
   petFriendly      Boolean   @default(false) @map("pet_friendly")
   parkingAvailable Boolean   @default(false) @map("parking_available")
   minAge           Int?      @map("min_age")
+  eventType        String    @default("single") @map("event_type")
+  recurrence       String?
+  recurrenceCustom Json?     @map("recurrence_custom")
+  ticketMode       String    @default("paid") @map("ticket_mode")
+  capacity         Int       @default(0)
+  status           String    @default("draft")
   createdBy        String?   @map("created_by") @db.Uuid
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
