@@ -622,6 +622,7 @@ export class ProvidersService {
       invited_by: userId,
       invited_at: new Date().toISOString(),
     };
+    const temporaryPassword = this.generateTemporaryPassword();
 
     let status: 'invited' | 'updated' = 'invited';
     let invitedUserId: string | null = null;
@@ -643,7 +644,13 @@ export class ProvidersService {
       const updated = await this.supabaseAdmin.db.auth.admin.updateUserById(
         match.id,
         {
-          user_metadata: { ...(match.user_metadata ?? {}), ...metadata },
+          password: temporaryPassword,
+          user_metadata: {
+            ...(match.user_metadata ?? {}),
+            ...metadata,
+            login_email: email,
+            temporary_password: temporaryPassword,
+          },
         },
       );
       if (updated.error) {
@@ -655,7 +662,11 @@ export class ProvidersService {
       const invited = await this.supabaseAdmin.db.auth.admin.inviteUserByEmail(
         email,
         {
-          data: metadata,
+          data: {
+            ...metadata,
+            login_email: email,
+            temporary_password: temporaryPassword,
+          },
           redirectTo,
         },
       );
@@ -664,6 +675,17 @@ export class ProvidersService {
       }
       invitedUserId = invited.data.user?.id ?? null;
       invitedEmail = invited.data.user?.email ?? email;
+      if (invitedUserId) {
+        const setPassword = await this.supabaseAdmin.db.auth.admin.updateUserById(
+          invitedUserId,
+          {
+            password: temporaryPassword,
+          },
+        );
+        if (setPassword.error) {
+          throw new BadRequestException(setPassword.error.message);
+        }
+      }
     }
 
     if (!invitedUserId) {
@@ -683,7 +705,13 @@ export class ProvidersService {
       status,
       userId: invitedUserId,
       email: invitedEmail,
+      temporaryPassword,
     };
+  }
+
+  private generateTemporaryPassword() {
+    const random = Math.random().toString(36).slice(2, 10);
+    return `Allons#${random}9`;
   }
 
   async updateProviderStaff(
