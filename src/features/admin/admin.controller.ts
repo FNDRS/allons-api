@@ -15,6 +15,7 @@ import type {
   AdminEventActionResponse,
   AdminEventListItem,
   AdminEventListResponse,
+  AdminOverviewMetricsResponse,
 } from './admin.types';
 
 const ALLOWED_STATUSES = new Set([
@@ -29,6 +30,45 @@ const ALLOWED_STATUSES = new Set([
 @Controller('admin')
 export class AdminController {
   constructor(private readonly prisma: PrismaService) {}
+
+  @Get('overview-metrics')
+  async getOverviewMetrics(): Promise<AdminOverviewMetricsResponse> {
+    const from = new Date();
+    from.setDate(from.getDate() - 30);
+
+    const activeEventsPromise = this.prisma.event.count({
+      where: {
+        status: 'published',
+        OR: [{ endsAt: null }, { endsAt: { gte: new Date() } }],
+      },
+    });
+    const tickets30dPromise = this.prisma.ticket.count({
+      where: { createdAt: { gte: from } },
+    });
+
+    const scans30dPromise = this.prisma
+      .$queryRaw<Array<{ total: number }>>`
+        SELECT COUNT(*)::int AS total
+        FROM provider_scan_records
+        WHERE status = 'valid'
+          AND scanned_at >= ${from}::timestamptz
+      `
+      .then((rows) => Number(rows[0]?.total ?? 0))
+      .catch(() => 0);
+
+    const [activeEvents, tickets30d, scans30d] = await Promise.all([
+      activeEventsPromise,
+      tickets30dPromise,
+      scans30dPromise,
+    ]);
+
+    return {
+      activeEvents,
+      tickets30d,
+      scans30d,
+      gmv30d: null,
+    };
+  }
 
   @Get('events')
   async listEvents(

@@ -31,3 +31,10 @@ export interface AdminEventActionResponse {
   id: string;
   status: string;
 }
+
+export interface AdminOverviewMetricsResponse {
+  activeEvents: number;
+  tickets30d: number;
+  scans30d: number;
+  gmv30d: number | null;
+}
