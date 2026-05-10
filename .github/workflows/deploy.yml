@@ -23,6 +23,8 @@ jobs:
       APP_RUNNER_SERVICE_NAME: allons-api
       # Optional: set this GitHub secret to skip ListServices permission.
       APP_RUNNER_SERVICE_ARN: ${{ secrets.APP_RUNNER_SERVICE_ARN }}
+      # Shared secret used by allons-admin -> allons-api admin endpoints.
+      ADMIN_API_SECRET: ${{ secrets.ADMIN_API_SECRET }}
 
     steps:
       - name: Checkout
@@ -110,7 +112,13 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           SERVICE_ARN="${{ steps.apprunner.outputs.service_arn }}"
-          SOURCE_CONFIGURATION="{\"ImageRepository\":{\"ImageIdentifier\":\"$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG\",\"ImageRepositoryType\":\"ECR\",\"ImageConfiguration\":{\"Port\":\"3000\"}},\"AuthenticationConfiguration\":{\"AccessRoleArn\":\"arn:aws:iam::851725556357:role/AppRunnerECRAccessRole-allons-api\"},\"AutoDeploymentsEnabled\":true}"
+          if [ -z "$ADMIN_API_SECRET" ]; then
+            echo "Missing required GitHub secret: ADMIN_API_SECRET" >&2
+            echo "Add it in repo settings and rerun deploy." >&2
+            exit 1
+          fi
+
+          SOURCE_CONFIGURATION="{\"ImageRepository\":{\"ImageIdentifier\":\"$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG\",\"ImageRepositoryType\":\"ECR\",\"ImageConfiguration\":{\"Port\":\"3000\",\"RuntimeEnvironmentVariables\":{\"ADMIN_API_SECRET\":\"$ADMIN_API_SECRET\"}}},\"AuthenticationConfiguration\":{\"AccessRoleArn\":\"arn:aws:iam::851725556357:role/AppRunnerECRAccessRole-allons-api\"},\"AutoDeploymentsEnabled\":true}"
 
           for i in $(seq 1 8); do
             set +e
