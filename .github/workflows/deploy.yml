@@ -79,14 +79,64 @@ jobs:
           docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
+      - name: Wait for App Runner to be stable before update
+        run: |
+          SERVICE_ARN="${{ steps.apprunner.outputs.service_arn }}"
+          for i in $(seq 1 40); do
+            STATUS=$(aws apprunner describe-service \
+              --service-arn "$SERVICE_ARN" \
+              --query "Service.Status" \
+              --output text)
+            echo "Pre-update App Runner status: $STATUS"
+
+            if [ "$STATUS" = "RUNNING" ]; then
+              exit 0
+            fi
+
+            if [ "$STATUS" = "CREATE_FAILED" ] || [ "$STATUS" = "DELETE_FAILED" ]; then
+              echo "Service entered failed state before update: $STATUS" >&2
+              exit 1
+            fi
+
+            sleep 15
+          done
+
+          echo "Timed out waiting for service to be RUNNING before update." >&2
+          exit 1
+
       - name: Update App Runner service to new image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          aws apprunner update-service \
-            --service-arn "${{ steps.apprunner.outputs.service_arn }}" \
-            --source-configuration "{\"ImageRepository\":{\"ImageIdentifier\":\"$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG\",\"ImageRepositoryType\":\"ECR\",\"ImageConfiguration\":{\"Port\":\"3000\"}},\"AuthenticationConfiguration\":{\"AccessRoleArn\":\"arn:aws:iam::851725556357:role/AppRunnerECRAccessRole-allons-api\"},\"AutoDeploymentsEnabled\":true}"
+          SERVICE_ARN="${{ steps.apprunner.outputs.service_arn }}"
+          SOURCE_CONFIGURATION="{\"ImageRepository\":{\"ImageIdentifier\":\"$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG\",\"ImageRepositoryType\":\"ECR\",\"ImageConfiguration\":{\"Port\":\"3000\"}},\"AuthenticationConfiguration\":{\"AccessRoleArn\":\"arn:aws:iam::851725556357:role/AppRunnerECRAccessRole-allons-api\"},\"AutoDeploymentsEnabled\":true}"
+
+          for i in $(seq 1 8); do
+            set +e
+            OUT=$(aws apprunner update-service \
+              --service-arn "$SERVICE_ARN" \
+              --source-configuration "$SOURCE_CONFIGURATION" 2>&1)
+            STATUS=$?
+            set -e
+
+            if [ $STATUS -eq 0 ]; then
+              echo "$OUT"
+              exit 0
+            fi
+
+            echo "$OUT"
+            if echo "$OUT" | rg -q "InvalidStateException|OPERATION_IN_PROGRESS"; then
+              echo "Service busy, retrying update in 20s... ($i/8)"
+              sleep 20
+              continue
+            fi
+
+            exit $STATUS
+          done
+
+          echo "Could not update service after retries due to App Runner busy state." >&2
+          exit 1
 
       - name: Wait for App Runner service to become RUNNING
         run: |
