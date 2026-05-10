@@ -20,6 +20,9 @@ jobs:
     env:
       AWS_REGION: us-east-2
       ECR_REPOSITORY: allons-api
+      APP_RUNNER_SERVICE_NAME: allons-api
+      # Optional: set this GitHub secret to skip ListServices permission.
+      APP_RUNNER_SERVICE_ARN: ${{ secrets.APP_RUNNER_SERVICE_ARN }}
 
     steps:
       - name: Checkout
@@ -38,12 +41,32 @@ jobs:
       - name: Resolve App Runner service ARN
         id: apprunner
         run: |
+          if [ -n "$APP_RUNNER_SERVICE_ARN" ]; then
+            echo "Using APP_RUNNER_SERVICE_ARN from secrets."
+            echo "service_arn=$APP_RUNNER_SERVICE_ARN" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          set +e
           SERVICE_ARN=$(aws apprunner list-services \
             --region "$AWS_REGION" \
-            --query "ServiceSummaryList[?ServiceName=='allons-api'].ServiceArn | [0]" \
-            --output text)
+            --query "ServiceSummaryList[?ServiceName=='$APP_RUNNER_SERVICE_NAME'].ServiceArn | [0]" \
+            --output text 2>&1)
+          STATUS=$?
+          set -e
+
+          if [ $STATUS -ne 0 ]; then
+            echo "Failed to resolve App Runner service ARN by name." >&2
+            echo "$SERVICE_ARN" >&2
+            echo "" >&2
+            echo "Fix one of these:" >&2
+            echo "1) Add GitHub secret APP_RUNNER_SERVICE_ARN with your full service ARN." >&2
+            echo "2) Grant the deploy role this permission: apprunner:ListServices." >&2
+            exit $STATUS
+          fi
+
           if [ -z "$SERVICE_ARN" ] || [ "$SERVICE_ARN" = "None" ]; then
-            echo "App Runner service 'allons-api' not found in region $AWS_REGION" >&2
+            echo "App Runner service '$APP_RUNNER_SERVICE_NAME' not found in region $AWS_REGION" >&2
             exit 1
           fi
           echo "service_arn=$SERVICE_ARN" >> "$GITHUB_OUTPUT"
