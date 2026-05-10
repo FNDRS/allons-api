@@ -1,5 +1,4 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import type { PrismaService } from '../../prisma/prisma.service';
 import type { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { FriendsService } from './friends.service';
 
@@ -46,10 +45,7 @@ describe('FriendsService', () => {
     const supabaseAdmin = {
       db: { auth: { admin: {} } },
     } as unknown as SupabaseAdminService;
-    const service = new FriendsService(
-      prisma as unknown as PrismaService,
-      supabaseAdmin,
-    );
+    const service = new FriendsService(prisma, supabaseAdmin);
 
     const res = await service.listFriends('u1', 'ana');
     expect(res).toHaveLength(1);
@@ -87,10 +83,7 @@ describe('FriendsService', () => {
       },
     } as unknown as SupabaseAdminService;
 
-    const service = new FriendsService(
-      prisma as unknown as PrismaService,
-      supabaseAdmin,
-    );
+    const service = new FriendsService(prisma, supabaseAdmin);
     const res = await service.listSuggestions('u1', 'ana');
     expect(res).toHaveLength(1);
     expect(res[0]?.userId).toBe('u2');
@@ -102,7 +95,7 @@ describe('FriendsService', () => {
       db: { auth: { admin: { getUserById: jest.fn() } } },
     } as any;
     const service = new FriendsService(
-      prisma as unknown as PrismaService,
+      prisma,
       supabaseAdmin as SupabaseAdminService,
     );
 
@@ -133,7 +126,7 @@ describe('FriendsService', () => {
       data: { user: null },
     });
     const service = new FriendsService(
-      prisma as unknown as PrismaService,
+      prisma,
       supabaseAdmin as SupabaseAdminService,
     );
     const result = await service.addFriend('u1', 'p1');

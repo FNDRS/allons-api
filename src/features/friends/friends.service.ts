@@ -231,7 +231,10 @@ export class FriendsService {
     return Boolean(rows[0]?.exists);
   }
 
-  async listProviderFollowers(providerId: string, query?: string): Promise<ProviderFollowersDto> {
+  async listProviderFollowers(
+    providerId: string,
+    query?: string,
+  ): Promise<ProviderFollowersDto> {
     await this.ensureProviderFollowsTable();
     const provider = await this.prisma.provider.findUnique({
       where: { id: providerId },

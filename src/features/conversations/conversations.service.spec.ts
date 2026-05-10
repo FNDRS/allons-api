@@ -13,11 +13,12 @@ function makePrisma() {
   return {
     $executeRaw: jest.fn(() => Promise.resolve(1)),
     $queryRaw: jest.fn(() => Promise.resolve([])),
+    provider: { findUnique: jest.fn(() => Promise.resolve(null)) },
     profile: { findUnique: jest.fn() },
     conversationMember: {
       findFirst: jest.fn(),
       findUnique: jest.fn(),
-      findMany: jest.fn(),
+      findMany: jest.fn(() => Promise.resolve([])),
     },
     conversation: {
       create: jest.fn(),

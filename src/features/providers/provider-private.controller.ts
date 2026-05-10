@@ -136,7 +136,10 @@ export class ProviderPrivateController {
   }
 
   @Post('events')
-  async createEvent(@Req() req: Request, @Body() body: Record<string, unknown>) {
+  async createEvent(
+    @Req() req: Request,
+    @Body() body: Record<string, unknown>,
+  ) {
     const user = await this.getUser(req);
     return this.providersService.createProviderEvent(user.id, body);
   }
@@ -190,7 +193,10 @@ export class ProviderPrivateController {
   }
 
   @Post('scans/validate')
-  async validateScan(@Req() req: Request, @Body() body: Record<string, unknown>) {
+  async validateScan(
+    @Req() req: Request,
+    @Body() body: Record<string, unknown>,
+  ) {
     const user = await this.getUser(req);
     return this.providersService.validateScan(user.id, body);
   }
@@ -216,6 +222,6 @@ export class ProviderPrivateController {
     @Body() body: { amount?: number; method?: string },
   ) {
     const user = await this.getUser(req);
-    return this.providersService.requestPayout(user.id, body as Record<string, unknown>);
+    return this.providersService.requestPayout(user.id, body);
   }
 }

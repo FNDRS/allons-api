@@ -239,9 +239,7 @@ export class ProvidersService {
       select: { fullName: true, username: true },
     });
     const providerName =
-      profile?.fullName?.trim() ||
-      profile?.username?.trim() ||
-      'Mi comercio';
+      profile?.fullName?.trim() || profile?.username?.trim() || 'Mi comercio';
 
     const provider = await this.prisma.provider.create({
       data: {
@@ -305,6 +303,14 @@ export class ProvidersService {
       : 'draft';
   }
 
+  private safeString(raw: unknown): string {
+    if (typeof raw === 'string') return raw;
+    if (typeof raw === 'number') return String(raw);
+    if (typeof raw === 'boolean') return raw ? 'true' : 'false';
+    if (typeof raw === 'bigint') return String(raw);
+    return '';
+  }
+
   private normalizeGalleryUrls(raw: unknown): string[] {
     if (!Array.isArray(raw)) return [];
     const unique = new Set<string>();
@@ -313,7 +319,9 @@ export class ProvidersService {
         typeof item === 'string'
           ? item
           : item && typeof item === 'object' && 'url' in item
-            ? String((item as { url?: unknown }).url ?? '')
+            ? typeof (item as { url?: unknown }).url === 'string'
+              ? ((item as { url?: string }).url ?? '')
+              : ''
             : '';
       const url = candidate.trim();
       if (url) unique.add(url);
@@ -338,14 +346,14 @@ export class ProvidersService {
   }
 
   private mapRoleToMemberRole(raw: unknown): ProviderRole {
-    const role = String(raw ?? '').toLowerCase();
+    const role = this.safeString(raw).toLowerCase();
     if (role === 'owner') return 'owner';
     if (role === 'admin' || role === 'finance') return 'admin';
     return 'staff_scanner';
   }
 
   private mapMemberRoleToClientRole(raw: unknown): 'scanner' | 'admin' {
-    const role = String(raw ?? '').toLowerCase();
+    const role = this.safeString(raw).toLowerCase();
     return role === 'staff_scanner' ? 'scanner' : 'admin';
   }
 
@@ -432,7 +440,9 @@ export class ProvidersService {
       },
     });
     if (!provider) throw new NotFoundException('Provider no encontrado');
-    const settings = await this.prisma.$queryRaw<Array<{ logo_color: string | null }>>`
+    const settings = await this.prisma.$queryRaw<
+      Array<{ logo_color: string | null }>
+    >`
       SELECT logo_color
       FROM provider_brand_settings
       WHERE provider_id = ${member.providerId}::uuid
@@ -446,44 +456,48 @@ export class ProvidersService {
 
   async updateProviderProfile(userId: string, body: Record<string, unknown>) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
-    if (body.name !== undefined && !String(body.name ?? '').trim()) {
+    if (body.name !== undefined && !this.safeString(body.name).trim()) {
       throw new BadRequestException('name es requerido');
     }
     await this.prisma.provider.update({
       where: { id: member.providerId },
       data: {
         name:
-          body.name !== undefined ? String(body.name ?? '').trim() : undefined,
+          body.name !== undefined
+            ? this.safeString(body.name).trim()
+            : undefined,
         handle:
           body.handle === null
             ? null
             : body.handle
-              ? String(body.handle).trim().replace(/^@+/, '')
+              ? this.safeString(body.handle).trim().replace(/^@+/, '')
               : undefined,
         description:
           body.description === null
             ? null
             : body.description
-              ? String(body.description)
+              ? this.safeString(body.description)
               : undefined,
         websiteUrl:
           body.websiteUrl === null
             ? null
             : body.websiteUrl
-              ? String(body.websiteUrl)
+              ? this.safeString(body.websiteUrl)
               : undefined,
         logoUrl:
           body.logoUrl === null
             ? null
             : body.logoUrl
-              ? String(body.logoUrl)
+              ? this.safeString(body.logoUrl)
               : undefined,
       },
     });
     if (body.brandLogoColor !== undefined) {
+      const brandLogoColor =
+        this.safeString(body.brandLogoColor).trim() || '#F67010';
       await this.prisma.$executeRaw`
         INSERT INTO provider_brand_settings (provider_id, logo_color, updated_at)
-        VALUES (${member.providerId}::uuid, ${String(body.brandLogoColor ?? '#F67010')}, now())
+        VALUES (${member.providerId}::uuid, ${brandLogoColor}, now())
         ON CONFLICT (provider_id)
         DO UPDATE SET logo_color = EXCLUDED.logo_color, updated_at = now()
       `;
@@ -552,7 +566,7 @@ export class ProvidersService {
 
   async upsertProviderStaff(userId: string, body: Record<string, unknown>) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
-    const targetUserId = String(body.userId ?? '').trim();
+    const targetUserId = this.safeString(body.userId).trim();
     if (!targetUserId) {
       throw new BadRequestException('userId es requerido');
     }
@@ -566,10 +580,10 @@ export class ProvidersService {
         ${targetUserId}::uuid,
         ${role},
         true,
-        ${body.name ? String(body.name) : null},
-        ${body.email ? String(body.email).toLowerCase() : null},
-        ${body.phone ? String(body.phone) : null},
-        ${body.avatarColor ? String(body.avatarColor) : null},
+        ${body.name ? this.safeString(body.name) : null},
+        ${body.email ? this.safeString(body.email).toLowerCase() : null},
+        ${body.phone ? this.safeString(body.phone) : null},
+        ${body.avatarColor ? this.safeString(body.avatarColor) : null},
         now()
       )
       ON CONFLICT (provider_id, user_id)
@@ -585,7 +599,7 @@ export class ProvidersService {
     await this.appendActivity(
       member.providerId,
       'staff',
-      `Miembro actualizado: ${body.name ? String(body.name) : targetUserId}`,
+      `Miembro actualizado: ${body.name ? this.safeString(body.name) : targetUserId}`,
       targetUserId,
     );
     return this.listProviderStaff(userId);
@@ -593,16 +607,20 @@ export class ProvidersService {
 
   async inviteProviderStaff(userId: string, body: Record<string, unknown>) {
     await this.requireMembership(userId, ['owner', 'admin']);
-    const email = String(body.email ?? '')
-      .trim()
-      .toLowerCase();
-    const name = String(body.name ?? '').trim();
-    const role = String(body.role ?? 'scanner').toLowerCase();
-    const phone = body.phone ? String(body.phone) : null;
-    const avatarColor = body.avatarColor ? String(body.avatarColor) : null;
-    const brandName = body.brandName ? String(body.brandName) : null;
-    const brandHandle = body.brandHandle ? String(body.brandHandle) : null;
-    const redirectTo = body.redirectTo ? String(body.redirectTo) : undefined;
+    const email = this.safeString(body.email).trim().toLowerCase();
+    const name = this.safeString(body.name).trim();
+    const role = (this.safeString(body.role) || 'scanner').toLowerCase();
+    const phone = body.phone ? this.safeString(body.phone) : null;
+    const avatarColor = body.avatarColor
+      ? this.safeString(body.avatarColor)
+      : null;
+    const brandName = body.brandName ? this.safeString(body.brandName) : null;
+    const brandHandle = body.brandHandle
+      ? this.safeString(body.brandHandle)
+      : null;
+    const redirectTo = body.redirectTo
+      ? this.safeString(body.redirectTo)
+      : undefined;
 
     if (!email || !name) {
       throw new BadRequestException('email y name son requeridos');
@@ -676,12 +694,10 @@ export class ProvidersService {
       invitedUserId = invited.data.user?.id ?? null;
       invitedEmail = invited.data.user?.email ?? email;
       if (invitedUserId) {
-        const setPassword = await this.supabaseAdmin.db.auth.admin.updateUserById(
-          invitedUserId,
-          {
+        const setPassword =
+          await this.supabaseAdmin.db.auth.admin.updateUserById(invitedUserId, {
             password: temporaryPassword,
-          },
-        );
+          });
         if (setPassword.error) {
           throw new BadRequestException(setPassword.error.message);
         }
@@ -689,7 +705,9 @@ export class ProvidersService {
     }
 
     if (!invitedUserId) {
-      throw new BadRequestException('No fue posible resolver el usuario invitado');
+      throw new BadRequestException(
+        'No fue posible resolver el usuario invitado',
+      );
     }
 
     await this.upsertProviderStaff(userId, {
@@ -720,7 +738,8 @@ export class ProvidersService {
     body: Record<string, unknown>,
   ) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
-    const role = body.role !== undefined ? this.mapRoleToMemberRole(body.role) : null;
+    const role =
+      body.role !== undefined ? this.mapRoleToMemberRole(body.role) : null;
     const existing = await this.prisma.$queryRaw<Array<{ user_id: string }>>`
       SELECT user_id
       FROM provider_members
@@ -738,19 +757,19 @@ export class ProvidersService {
           ELSE active
         END,
         full_name = CASE
-          WHEN ${body.name !== undefined} THEN ${body.name ? String(body.name) : null}
+          WHEN ${body.name !== undefined} THEN ${body.name ? this.safeString(body.name) : null}
           ELSE full_name
         END,
         email = CASE
-          WHEN ${body.email !== undefined} THEN ${body.email ? String(body.email).toLowerCase() : null}
+          WHEN ${body.email !== undefined} THEN ${body.email ? this.safeString(body.email).toLowerCase() : null}
           ELSE email
         END,
         phone = CASE
-          WHEN ${body.phone !== undefined} THEN ${body.phone ? String(body.phone) : null}
+          WHEN ${body.phone !== undefined} THEN ${body.phone ? this.safeString(body.phone) : null}
           ELSE phone
         END,
         avatar_color = CASE
-          WHEN ${body.avatarColor !== undefined} THEN ${body.avatarColor ? String(body.avatarColor) : null}
+          WHEN ${body.avatarColor !== undefined} THEN ${body.avatarColor ? this.safeString(body.avatarColor) : null}
           ELSE avatar_color
         END,
         updated_at = now()
@@ -768,7 +787,9 @@ export class ProvidersService {
 
   async removeProviderStaff(userId: string, targetUserId: string) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
-    const existing = await this.prisma.$queryRaw<Array<{ user_id: string; role: string }>>`
+    const existing = await this.prisma.$queryRaw<
+      Array<{ user_id: string; role: string }>
+    >`
       SELECT user_id, role
       FROM provider_members
       WHERE provider_id = ${member.providerId}::uuid
@@ -841,7 +862,7 @@ export class ProvidersService {
 
   async createProviderDiscount(userId: string, body: Record<string, unknown>) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
-    const code = String(body.code ?? '').trim().toUpperCase();
+    const code = this.safeString(body.code).trim().toUpperCase();
     if (!code || code.length < 3) {
       throw new BadRequestException('code inválido');
     }
@@ -850,7 +871,7 @@ export class ProvidersService {
       throw new BadRequestException('percent inválido');
     }
     const maxUses = Math.max(1, Number(body.maxUses ?? 1));
-    const eventId = body.eventId ? String(body.eventId) : null;
+    const eventId = body.eventId ? this.safeString(body.eventId) : null;
     await this.prisma.$executeRaw`
       INSERT INTO provider_discounts (
         provider_id, event_id, code, percent, max_uses, uses, active, created_by, updated_at
@@ -882,11 +903,16 @@ export class ProvidersService {
     body: Record<string, unknown>,
   ) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
-    const eventId = body.eventId === null ? null : body.eventId ? String(body.eventId) : undefined;
+    const eventId =
+      body.eventId === null
+        ? null
+        : body.eventId
+          ? this.safeString(body.eventId)
+          : undefined;
     await this.prisma.$executeRaw`
       UPDATE provider_discounts
       SET
-        code = CASE WHEN ${body.code !== undefined} THEN ${String(body.code ?? '').toUpperCase()} ELSE code END,
+        code = CASE WHEN ${body.code !== undefined} THEN ${this.safeString(body.code).toUpperCase()} ELSE code END,
         percent = CASE WHEN ${body.percent !== undefined} THEN ${Math.round(Number(body.percent ?? 0))} ELSE percent END,
         max_uses = CASE WHEN ${body.maxUses !== undefined} THEN ${Math.round(Number(body.maxUses ?? 0))} ELSE max_uses END,
         active = CASE WHEN ${body.active !== undefined} THEN ${Boolean(body.active)} ELSE active END,
@@ -946,15 +972,12 @@ export class ProvidersService {
     };
   }
 
-  async createProviderEvent(
-    userId: string,
-    body: Record<string, unknown>,
-  ) {
-    const title = String(body.title ?? '').trim();
+  async createProviderEvent(userId: string, body: Record<string, unknown>) {
+    const title = this.safeString(body.title).trim();
     this.logger.log(
       `createProviderEvent:start userId=${userId} title="${title}" eventType=${String(
-        body.eventType ?? 'single',
-      )} status=${String(body.status ?? 'draft')}`,
+        this.safeString(body.eventType) || 'single',
+      )} status=${this.safeString(body.status) || 'draft'}`,
     );
     try {
       const member = await this.requireMembership(userId, ['owner', 'admin']);
@@ -974,14 +997,24 @@ export class ProvidersService {
           // account exists in auth but profile row has not been created yet.
           createdBy: creatorProfile?.userId ?? null,
           title,
-          description: body.description ? String(body.description) : null,
-          startsAt: body.startsAt ? new Date(String(body.startsAt)) : null,
-          endsAt: body.endsAt ? new Date(String(body.endsAt)) : null,
-          city: body.city ? String(body.city) : null,
-          venue: body.venue ? String(body.venue) : null,
-          address: body.address ? String(body.address) : null,
-          coverImageUrl: body.coverImageUrl ? String(body.coverImageUrl) : null,
-          themeColor: body.themeColor ? String(body.themeColor) : null,
+          description: body.description
+            ? this.safeString(body.description)
+            : null,
+          startsAt: (() => {
+            const raw = this.safeString(body.startsAt).trim();
+            return raw ? new Date(raw) : null;
+          })(),
+          endsAt: (() => {
+            const raw = this.safeString(body.endsAt).trim();
+            return raw ? new Date(raw) : null;
+          })(),
+          city: body.city ? this.safeString(body.city) : null,
+          venue: body.venue ? this.safeString(body.venue) : null,
+          address: body.address ? this.safeString(body.address) : null,
+          coverImageUrl: body.coverImageUrl
+            ? this.safeString(body.coverImageUrl)
+            : null,
+          themeColor: body.themeColor ? this.safeString(body.themeColor) : null,
           smokingAllowed: Boolean(body.smokingAllowed),
           petFriendly: Boolean(body.petFriendly),
           parkingAvailable: Boolean(body.parkingAvailable),
@@ -993,21 +1026,19 @@ export class ProvidersService {
       await this.prisma.$executeRaw`
         UPDATE events
         SET
-          event_type = ${String(body.eventType ?? 'single')},
-          recurrence = ${
-            body.recurrence ? String(body.recurrence) : null
-          },
+          event_type = ${this.safeString(body.eventType) || 'single'},
+          recurrence = ${body.recurrence ? this.safeString(body.recurrence) : null},
           recurrence_custom = ${
-            body.recurrenceCustom
-              ? JSON.stringify(body.recurrenceCustom)
-              : null
+            body.recurrenceCustom ? JSON.stringify(body.recurrenceCustom) : null
           }::jsonb,
-          ticket_mode = ${String(body.ticketMode ?? 'paid')},
+          ticket_mode = ${this.safeString(body.ticketMode) || 'paid'},
           capacity = ${Number(body.capacity ?? 0)},
-          status = ${String(body.status ?? 'draft')}
+          status = ${this.safeString(body.status) || 'draft'}
         WHERE id = ${created.id}::uuid
       `;
-      this.logger.debug(`createProviderEvent:metadata-updated eventId=${created.id}`);
+      this.logger.debug(
+        `createProviderEvent:metadata-updated eventId=${created.id}`,
+      );
 
       await this.syncEventGallery(created.id, body.gallery);
       this.logger.debug(
@@ -1044,35 +1075,50 @@ export class ProvidersService {
     await this.prisma.event.update({
       where: { id: eventId },
       data: {
-        title: body.title ? String(body.title) : undefined,
+        title: body.title ? this.safeString(body.title) : undefined,
         description:
           body.description === null
             ? null
             : body.description
-              ? String(body.description)
+              ? this.safeString(body.description)
               : undefined,
-        startsAt: body.startsAt ? new Date(String(body.startsAt)) : undefined,
-        endsAt: body.endsAt ? new Date(String(body.endsAt)) : undefined,
-        city: body.city === null ? null : body.city ? String(body.city) : undefined,
+        startsAt: (() => {
+          const raw = this.safeString(body.startsAt).trim();
+          return raw ? new Date(raw) : undefined;
+        })(),
+        endsAt: (() => {
+          const raw = this.safeString(body.endsAt).trim();
+          return raw ? new Date(raw) : undefined;
+        })(),
+        city:
+          body.city === null
+            ? null
+            : body.city
+              ? this.safeString(body.city)
+              : undefined,
         venue:
-          body.venue === null ? null : body.venue ? String(body.venue) : undefined,
+          body.venue === null
+            ? null
+            : body.venue
+              ? this.safeString(body.venue)
+              : undefined,
         address:
           body.address === null
             ? null
             : body.address
-              ? String(body.address)
+              ? this.safeString(body.address)
               : undefined,
         coverImageUrl:
           body.coverImageUrl === null
             ? null
             : body.coverImageUrl
-              ? String(body.coverImageUrl)
+              ? this.safeString(body.coverImageUrl)
               : undefined,
         themeColor:
           body.themeColor === null
             ? null
             : body.themeColor
-              ? String(body.themeColor)
+              ? this.safeString(body.themeColor)
               : undefined,
         smokingAllowed:
           typeof body.smokingAllowed === 'boolean'
@@ -1096,20 +1142,20 @@ export class ProvidersService {
     await this.prisma.$executeRaw`
       UPDATE events
       SET
-        event_type = COALESCE(${body.eventType ? String(body.eventType) : null}, event_type),
-        recurrence = CASE WHEN ${body.recurrence !== undefined} THEN ${body.recurrence ? String(body.recurrence) : null} ELSE recurrence END,
+        event_type = COALESCE(${body.eventType ? this.safeString(body.eventType) : null}, event_type),
+        recurrence = CASE WHEN ${body.recurrence !== undefined} THEN ${body.recurrence ? this.safeString(body.recurrence) : null} ELSE recurrence END,
         recurrence_custom = CASE
           WHEN ${body.recurrenceCustom !== undefined}
           THEN ${body.recurrenceCustom ? JSON.stringify(body.recurrenceCustom) : null}::jsonb
           ELSE recurrence_custom
         END,
-        ticket_mode = COALESCE(${body.ticketMode ? String(body.ticketMode) : null}, ticket_mode),
+        ticket_mode = COALESCE(${body.ticketMode ? this.safeString(body.ticketMode) : null}, ticket_mode),
         capacity = CASE
           WHEN ${body.capacity !== undefined}
           THEN ${Number(body.capacity ?? 0)}
           ELSE capacity
         END,
-        status = COALESCE(${body.status ? String(body.status) : null}, status),
+        status = COALESCE(${body.status ? this.safeString(body.status) : null}, status),
         updated_at = now()
       WHERE id = ${eventId}::uuid
     `;
@@ -1206,7 +1252,7 @@ export class ProvidersService {
     body: Record<string, unknown>,
   ) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
-    const name = String(body.name ?? '').trim();
+    const name = this.safeString(body.name).trim();
     if (!name) throw new BadRequestException('name es requerido');
     await this.prisma.$executeRaw`
       INSERT INTO provider_event_ticket_types (
@@ -1216,7 +1262,7 @@ export class ProvidersService {
         ${member.providerId}::uuid,
         ${eventId}::uuid,
         ${name},
-        ${String(body.kind ?? 'general')},
+        ${this.safeString(body.kind) || 'general'},
         ${Number(body.price ?? 0)},
         ${Number(body.total ?? 0)},
         0,
@@ -1241,8 +1287,8 @@ export class ProvidersService {
     await this.prisma.$executeRaw`
       UPDATE provider_event_ticket_types
       SET
-        name = COALESCE(${body.name ? String(body.name) : null}, name),
-        kind = COALESCE(${body.kind ? String(body.kind) : null}, kind),
+        name = COALESCE(${body.name ? this.safeString(body.name) : null}, name),
+        kind = COALESCE(${body.kind ? this.safeString(body.kind) : null}, kind),
         price = CASE WHEN ${body.price !== undefined} THEN ${Number(body.price ?? 0)} ELSE price END,
         total = CASE WHEN ${body.total !== undefined} THEN ${Number(body.total ?? 0)} ELSE total END,
         active = CASE WHEN ${body.active !== undefined} THEN ${Boolean(body.active)} ELSE active END,
@@ -1286,8 +1332,8 @@ export class ProvidersService {
       'admin',
       'staff_scanner',
     ]);
-    const eventId = String(body.eventId ?? '').trim();
-    const ticketCode = String(body.ticketCode ?? '').trim();
+    const eventId = this.safeString(body.eventId).trim();
+    const ticketCode = this.safeString(body.ticketCode).trim();
     if (!eventId || !ticketCode) {
       throw new BadRequestException('eventId y ticketCode son requeridos');
     }
@@ -1300,7 +1346,7 @@ export class ProvidersService {
     const ticketId = this.parseTicketId(ticketCode);
     let status: 'valid' | 'duplicate' | 'invalid' = 'invalid';
     let attendeeName = 'Invitado';
-    let ticketType = 'General';
+    const ticketType = 'General';
 
     if (ticketId) {
       const ticket = await this.prisma.ticket.findFirst({
@@ -1417,7 +1463,13 @@ export class ProvidersService {
   async getActivity(userId: string) {
     const member = await this.requireMembership(userId);
     return this.prisma.$queryRaw<
-      Array<{ id: string; type: string; message: string; meta: string | null; date: Date }>
+      Array<{
+        id: string;
+        type: string;
+        message: string;
+        meta: string | null;
+        date: Date;
+      }>
     >`
       SELECT
         id,
@@ -1453,7 +1505,10 @@ export class ProvidersService {
     `;
     const pendingBalance = Number(pendingRows[0]?.total ?? 0);
     const paidOut = Number(completedRows[0]?.total ?? 0);
-    const availableBalance = Math.max(gross - feeAmount - pendingBalance - paidOut, 0);
+    const availableBalance = Math.max(
+      gross - feeAmount - pendingBalance - paidOut,
+      0,
+    );
 
     const payouts = await this.listPayouts(userId);
     const activity = await this.getActivity(userId);
@@ -1509,7 +1564,8 @@ export class ProvidersService {
   async requestPayout(userId: string, body: Record<string, unknown>) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
     const amount = Number(body.amount ?? 0);
-    const method = String(body.method ?? '').trim() || 'BAC Honduras • ****4521';
+    const method =
+      this.safeString(body.method).trim() || 'BAC Honduras • ****4521';
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException('amount inválido');
     }

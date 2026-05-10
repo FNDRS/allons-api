@@ -69,7 +69,10 @@ export class MeController {
   }
 
   @Post('referrals/capture')
-  async captureReferral(@Req() req: Request, @Body() body: CaptureReferralBody) {
+  async captureReferral(
+    @Req() req: Request,
+    @Body() body: CaptureReferralBody,
+  ) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
@@ -251,6 +254,9 @@ export class MeController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
-    return this.meService.listFollowedOrganizerEvents(user.id, { cities, types });
+    return this.meService.listFollowedOrganizerEvents(user.id, {
+      cities,
+      types,
+    });
   }
 }

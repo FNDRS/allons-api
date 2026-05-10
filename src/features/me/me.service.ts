@@ -191,7 +191,13 @@ export class MeService {
         cohortEnabled: false,
         myCode: null,
         config,
-        invited: { total: 0, pending: 0, applied: 0, invalidated: 0, events: [] },
+        invited: {
+          total: 0,
+          pending: 0,
+          applied: 0,
+          invalidated: 0,
+          events: [],
+        },
         myBenefit: {
           eligible: false,
           status: null,
@@ -223,8 +229,12 @@ export class MeService {
       LIMIT 1
     `;
     const myBenefit = myBenefitRows[0] ?? null;
-    const pendingCount = invitedRows.filter((row) => row.status === 'pending').length;
-    const appliedCount = invitedRows.filter((row) => row.status === 'applied').length;
+    const pendingCount = invitedRows.filter(
+      (row) => row.status === 'pending',
+    ).length;
+    const appliedCount = invitedRows.filter(
+      (row) => row.status === 'applied',
+    ).length;
     const invalidatedCount = invitedRows.filter(
       (row) => row.status === 'invalidated',
     ).length;
@@ -252,8 +262,11 @@ export class MeService {
           Boolean(myBenefit) &&
           myBenefit.used_count < myBenefit.max_uses,
         status: myClaim?.status ?? null,
-        discountValueCents: myBenefit?.discount_value ?? config.discountValueCents,
-        consumed: Boolean(myBenefit && myBenefit.used_count >= myBenefit.max_uses),
+        discountValueCents:
+          myBenefit?.discount_value ?? config.discountValueCents,
+        consumed: Boolean(
+          myBenefit && myBenefit.used_count >= myBenefit.max_uses,
+        ),
       },
     };
   }
@@ -321,7 +334,9 @@ export class MeService {
     `;
     const claimId = insertedRows[0]?.id;
     if (!claimId) {
-      throw new InternalServerErrorException('No se pudo registrar el referido.');
+      throw new InternalServerErrorException(
+        'No se pudo registrar el referido.',
+      );
     }
     const config = this.getReferralConfig();
     await this.prisma.$executeRaw`
@@ -365,7 +380,9 @@ export class MeService {
         reason: 'Referidos desactivados para esta cuenta.',
       };
     }
-    const ticketsCount = await this.prisma.ticket.count({ where: { ownerId: userId } });
+    const ticketsCount = await this.prisma.ticket.count({
+      where: { ownerId: userId },
+    });
     if (ticketsCount > 0) {
       return {
         enabled: true,
@@ -569,7 +586,9 @@ export class MeService {
     await this.ensureReferralTables();
     const referralCodeInput = options?.referralCode?.trim();
     if (referralCodeInput) {
-      await this.captureReferralCode(userId, referralCodeInput).catch(() => null);
+      await this.captureReferralCode(userId, referralCodeInput).catch(
+        () => null,
+      );
     }
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
@@ -1309,7 +1328,9 @@ export class MeService {
     },
   ) {
     await this.ensureProviderFollowsTable();
-    const providerRows = await this.prisma.$queryRaw<Array<{ provider_id: string }>>`
+    const providerRows = await this.prisma.$queryRaw<
+      Array<{ provider_id: string }>
+    >`
       SELECT DISTINCT provider_id
       FROM provider_follows
       WHERE user_id = ${userId}::uuid

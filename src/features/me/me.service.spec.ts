@@ -23,6 +23,7 @@ function makePrisma() {
     ticket: {
       findMany: jest.fn(),
       findUnique: jest.fn(),
+      count: jest.fn(() => Promise.resolve(0)),
       delete: jest.fn(),
     },
     conversationMember: {
