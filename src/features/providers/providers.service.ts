@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -24,6 +25,7 @@ interface EventAggregateRow {
 @Injectable()
 export class ProvidersService {
   private infraReady = false;
+  private readonly logger = new Logger(ProvidersService.name);
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -821,62 +823,84 @@ export class ProvidersService {
     userId: string,
     body: Record<string, unknown>,
   ) {
-    const member = await this.requireMembership(userId, ['owner', 'admin']);
     const title = String(body.title ?? '').trim();
-    if (!title) throw new BadRequestException('title es requerido');
-    const creatorProfile = await this.prisma.profile.findUnique({
-      where: { userId },
-      select: { userId: true },
-    });
-
-    const created = await this.prisma.event.create({
-      data: {
-        providerId: member.providerId,
-        // `events.created_by` has an FK to `profiles.user_id`; avoid P2003 when
-        // account exists in auth but profile row has not been created yet.
-        createdBy: creatorProfile?.userId ?? null,
-        title,
-        description: body.description ? String(body.description) : null,
-        startsAt: body.startsAt ? new Date(String(body.startsAt)) : null,
-        endsAt: body.endsAt ? new Date(String(body.endsAt)) : null,
-        city: body.city ? String(body.city) : null,
-        venue: body.venue ? String(body.venue) : null,
-        address: body.address ? String(body.address) : null,
-        coverImageUrl: body.coverImageUrl ? String(body.coverImageUrl) : null,
-        themeColor: body.themeColor ? String(body.themeColor) : null,
-        smokingAllowed: Boolean(body.smokingAllowed),
-        petFriendly: Boolean(body.petFriendly),
-        parkingAvailable: Boolean(body.parkingAvailable),
-        minAge: body.minAge ? Number(body.minAge) : null,
-      },
-    });
-
-    await this.prisma.$executeRaw`
-      UPDATE events
-      SET
-        event_type = ${String(body.eventType ?? 'single')},
-        recurrence = ${
-          body.recurrence ? String(body.recurrence) : null
-        },
-        recurrence_custom = ${
-          body.recurrenceCustom
-            ? JSON.stringify(body.recurrenceCustom)
-            : null
-        }::jsonb,
-        ticket_mode = ${String(body.ticketMode ?? 'paid')},
-        capacity = ${Number(body.capacity ?? 0)},
-        status = ${String(body.status ?? 'draft')}
-      WHERE id = ${created.id}::uuid
-    `;
-    await this.syncEventGallery(created.id, body.gallery);
-
-    await this.appendActivity(
-      member.providerId,
-      'event',
-      `Evento creado: ${created.title}`,
-      created.id,
+    this.logger.log(
+      `createProviderEvent:start userId=${userId} title="${title}" eventType=${String(
+        body.eventType ?? 'single',
+      )} status=${String(body.status ?? 'draft')}`,
     );
-    return this.getProviderEvent(userId, created.id);
+    try {
+      const member = await this.requireMembership(userId, ['owner', 'admin']);
+      if (!title) throw new BadRequestException('title es requerido');
+      const creatorProfile = await this.prisma.profile.findUnique({
+        where: { userId },
+        select: { userId: true },
+      });
+      this.logger.debug(
+        `createProviderEvent:membership providerId=${member.providerId} creatorProfile=${creatorProfile?.userId ? 'found' : 'missing'}`,
+      );
+
+      const created = await this.prisma.event.create({
+        data: {
+          providerId: member.providerId,
+          // `events.created_by` has an FK to `profiles.user_id`; avoid P2003 when
+          // account exists in auth but profile row has not been created yet.
+          createdBy: creatorProfile?.userId ?? null,
+          title,
+          description: body.description ? String(body.description) : null,
+          startsAt: body.startsAt ? new Date(String(body.startsAt)) : null,
+          endsAt: body.endsAt ? new Date(String(body.endsAt)) : null,
+          city: body.city ? String(body.city) : null,
+          venue: body.venue ? String(body.venue) : null,
+          address: body.address ? String(body.address) : null,
+          coverImageUrl: body.coverImageUrl ? String(body.coverImageUrl) : null,
+          themeColor: body.themeColor ? String(body.themeColor) : null,
+          smokingAllowed: Boolean(body.smokingAllowed),
+          petFriendly: Boolean(body.petFriendly),
+          parkingAvailable: Boolean(body.parkingAvailable),
+          minAge: body.minAge ? Number(body.minAge) : null,
+        },
+      });
+      this.logger.log(`createProviderEvent:created eventId=${created.id}`);
+
+      await this.prisma.$executeRaw`
+        UPDATE events
+        SET
+          event_type = ${String(body.eventType ?? 'single')},
+          recurrence = ${
+            body.recurrence ? String(body.recurrence) : null
+          },
+          recurrence_custom = ${
+            body.recurrenceCustom
+              ? JSON.stringify(body.recurrenceCustom)
+              : null
+          }::jsonb,
+          ticket_mode = ${String(body.ticketMode ?? 'paid')},
+          capacity = ${Number(body.capacity ?? 0)},
+          status = ${String(body.status ?? 'draft')}
+        WHERE id = ${created.id}::uuid
+      `;
+      this.logger.debug(`createProviderEvent:metadata-updated eventId=${created.id}`);
+
+      await this.syncEventGallery(created.id, body.gallery);
+      this.logger.debug(
+        `createProviderEvent:gallery-synced eventId=${created.id} galleryCount=${Array.isArray(body.gallery) ? body.gallery.length : 0}`,
+      );
+
+      await this.appendActivity(
+        member.providerId,
+        'event',
+        `Evento creado: ${created.title}`,
+        created.id,
+      );
+      return this.getProviderEvent(userId, created.id);
+    } catch (error: any) {
+      this.logger.error(
+        `createProviderEvent:failed userId=${userId} title="${title}" message=${error?.message ?? 'unknown'}`,
+        error?.stack,
+      );
+      throw error;
+    }
   }
 
   async updateProviderEvent(
