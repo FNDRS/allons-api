@@ -10,6 +10,7 @@ import { InterestsModule } from './features/interests/interests.module';
 import { FriendsModule } from './features/friends/friends.module';
 import { ConversationsModule } from './features/conversations/conversations.module';
 import { MeModule } from './features/me/me.module';
+import { AdminModule } from './features/admin/admin.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -26,6 +27,7 @@ import { AppService } from './app.service';
     FriendsModule,
     ConversationsModule,
     MeModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],
