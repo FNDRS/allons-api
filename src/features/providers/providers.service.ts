@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 
 type ProviderRole = 'owner' | 'admin' | 'staff_scanner';
 
@@ -27,7 +28,10 @@ export class ProvidersService {
   private infraReady = false;
   private readonly logger = new Logger(ProvidersService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly supabaseAdmin: SupabaseAdminService,
+  ) {}
 
   private async ensureInfrastructure() {
     if (this.infraReady) return;
@@ -585,6 +589,101 @@ export class ProvidersService {
       targetUserId,
     );
     return this.listProviderStaff(userId);
+  }
+
+  async inviteProviderStaff(userId: string, body: Record<string, unknown>) {
+    await this.requireMembership(userId, ['owner', 'admin']);
+    const email = String(body.email ?? '')
+      .trim()
+      .toLowerCase();
+    const name = String(body.name ?? '').trim();
+    const role = String(body.role ?? 'scanner').toLowerCase();
+    const phone = body.phone ? String(body.phone) : null;
+    const avatarColor = body.avatarColor ? String(body.avatarColor) : null;
+    const brandName = body.brandName ? String(body.brandName) : null;
+    const brandHandle = body.brandHandle ? String(body.brandHandle) : null;
+    const redirectTo = body.redirectTo ? String(body.redirectTo) : undefined;
+
+    if (!email || !name) {
+      throw new BadRequestException('email y name son requeridos');
+    }
+    if (!['scanner', 'admin', 'finance'].includes(role)) {
+      throw new BadRequestException('role inválido');
+    }
+
+    const metadata = {
+      role: 'staff',
+      full_name: name,
+      phone,
+      staff_role: role,
+      avatar_color: avatarColor,
+      brand_name: brandName,
+      brand_handle: brandHandle,
+      invited_by: userId,
+      invited_at: new Date().toISOString(),
+    };
+
+    let status: 'invited' | 'updated' = 'invited';
+    let invitedUserId: string | null = null;
+    let invitedEmail = email;
+
+    const lookup = await this.supabaseAdmin.db.auth.admin.listUsers({
+      page: 1,
+      perPage: 200,
+    });
+    if (lookup.error) {
+      throw new BadRequestException(lookup.error.message);
+    }
+    const match = lookup.data.users.find(
+      (row) => row.email?.toLowerCase() === email,
+    );
+
+    if (match) {
+      status = 'updated';
+      const updated = await this.supabaseAdmin.db.auth.admin.updateUserById(
+        match.id,
+        {
+          user_metadata: { ...(match.user_metadata ?? {}), ...metadata },
+        },
+      );
+      if (updated.error) {
+        throw new BadRequestException(updated.error.message);
+      }
+      invitedUserId = updated.data.user?.id ?? match.id;
+      invitedEmail = updated.data.user?.email ?? match.email ?? email;
+    } else {
+      const invited = await this.supabaseAdmin.db.auth.admin.inviteUserByEmail(
+        email,
+        {
+          data: metadata,
+          redirectTo,
+        },
+      );
+      if (invited.error) {
+        throw new BadRequestException(invited.error.message);
+      }
+      invitedUserId = invited.data.user?.id ?? null;
+      invitedEmail = invited.data.user?.email ?? email;
+    }
+
+    if (!invitedUserId) {
+      throw new BadRequestException('No fue posible resolver el usuario invitado');
+    }
+
+    await this.upsertProviderStaff(userId, {
+      userId: invitedUserId,
+      name,
+      email: invitedEmail,
+      phone,
+      role: role === 'admin' ? 'admin' : 'scanner',
+      avatarColor,
+    });
+
+    return {
+      status,
+      userId: invitedUserId,
+      email: invitedEmail,
+    };
   }
 
   async updateProviderStaff(

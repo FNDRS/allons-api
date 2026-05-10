@@ -67,6 +67,15 @@ export class ProviderPrivateController {
     return this.providersService.upsertProviderStaff(user.id, body);
   }
 
+  @Post('staff/invite')
+  async inviteStaff(
+    @Req() req: Request,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const user = await this.getUser(req);
+    return this.providersService.inviteProviderStaff(user.id, body);
+  }
+
   @Patch('staff/:userId')
   async updateStaff(
     @Req() req: Request,
