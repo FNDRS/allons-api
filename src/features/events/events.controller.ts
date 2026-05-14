@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Controller,
   Get,
   NotFoundException,
@@ -12,6 +13,10 @@ import { parseDate, parseList } from './events.types';
 export class EventsController {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Inclusive filters (`city` / `cities`) are mutually exclusive with `exclude_cities`;
+   * sending both yields HTTP 400.
+   */
   private buildWhere(params: {
     city?: string;
     cities?: string | string[];
@@ -27,6 +32,12 @@ export class EventsController {
     const types = parseList(params.types);
     const from = parseDate(params.from);
     const to = parseDate(params.to);
+
+    if (cities.length > 0 && excludeCities.length > 0) {
+      throw new BadRequestException(
+        'Usa city/cities (inclusivo) o exclude_cities (exclusivo); no ambos a la vez.',
+      );
+    }
 
     let cityClause: Record<string, unknown> = {};
     if (excludeCities.length > 0) {
@@ -63,11 +74,19 @@ export class EventsController {
   async list(
     @Query('city') city?: string,
     @Query('cities') cities?: string | string[],
+    @Query('exclude_cities') exclude_cities?: string | string[],
     @Query('types') types?: string | string[],
     @Query('from') from?: string,
     @Query('to') to?: string,
   ) {
-    const where = this.buildWhere({ city, cities, types, from, to });
+    const where = this.buildWhere({
+      city,
+      cities,
+      excludeCities: exclude_cities,
+      types,
+      from,
+      to,
+    });
 
     return this.prisma.event
       .findMany({
@@ -86,9 +105,14 @@ export class EventsController {
   @Get('top')
   async top(
     @Query('cities') cities?: string | string[],
+    @Query('exclude_cities') exclude_cities?: string | string[],
     @Query('types') types?: string | string[],
   ) {
-    const where = this.buildWhere({ cities, types });
+    const where = this.buildWhere({
+      cities,
+      excludeCities: exclude_cities,
+      types,
+    });
 
     return this.prisma.event
       .findMany({

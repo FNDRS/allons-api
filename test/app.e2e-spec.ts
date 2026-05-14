@@ -164,6 +164,14 @@ describe('AppController (e2e)', () => {
     );
   });
 
+  it('/events/friends (GET) rejects cities together with exclude_cities', async () => {
+    prismaMock.event.findMany.mockClear();
+    await request(app.getHttpServer())
+      .get('/events/friends?cities=Tegucigalpa&exclude_cities=San Pedro Sula')
+      .expect(400);
+    expect(prismaMock.event.findMany).not.toHaveBeenCalled();
+  });
+
   it('/events/friends (GET) returns friends events', async () => {
     prismaMock.event.findMany.mockResolvedValueOnce([]);
     await request(app.getHttpServer()).get('/events/friends').expect(200);
