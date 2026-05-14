@@ -581,6 +581,7 @@ export class MeService {
       email?: string | null;
       holders?: Array<{ name?: string; email?: string }>;
       referralCode?: string;
+      paymentOrderId?: string | null;
     },
   ) {
     await this.ensureReferralTables();
@@ -651,6 +652,7 @@ export class MeService {
       INSERT INTO tickets (
         owner_id,
         event_id,
+        payment_order_id,
         title,
         theme_color,
         attendee_count
@@ -658,6 +660,7 @@ export class MeService {
       SELECT
         ${userId}::uuid,
         ${event.id}::uuid,
+        ${options?.paymentOrderId ?? null}::uuid,
         ${event.title},
         ${event.themeColor},
         1

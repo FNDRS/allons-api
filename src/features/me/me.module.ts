@@ -7,5 +7,6 @@ import { ConversationsModule } from '../conversations/conversations.module';
   imports: [ConversationsModule],
   controllers: [MeController],
   providers: [MeService],
+  exports: [MeService],
 })
 export class MeModule {}

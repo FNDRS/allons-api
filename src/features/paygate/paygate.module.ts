@@ -5,11 +5,10 @@ import { PaygateConfigService } from './paygate.config';
 import { PaygateController } from './paygate.controller';
 import { PaygateService } from './paygate.service';
 import { PaygateSignatureVerifier } from './paygate.signature';
-import { PaygateWebhookController } from './paygate.webhook.controller';
 
 @Module({
   imports: [HttpModule],
-  controllers: [PaygateController, PaygateWebhookController],
+  controllers: [PaygateController],
   providers: [
     PaygateConfigService,
     PaygateClient,
