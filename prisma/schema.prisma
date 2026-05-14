@@ -31,6 +31,7 @@ model Profile {
   conversations ConversationMember[]
   sentMessages  Message[]
   notifications Notification[]
+  paymentOrders PaymentOrder[]
 
   @@map("profiles")
 }
@@ -100,12 +101,13 @@ model Event {
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  provider  Provider?       @relation(fields: [providerId], references: [id], onDelete: SetNull)
-  creator   Profile?        @relation("events_created_by", fields: [createdBy], references: [userId], onDelete: SetNull)
-  attendees EventAttendee[]
-  interests EventInterest[]
-  media     EventMedia[]
-  tickets   Ticket[]
+  provider      Provider?       @relation(fields: [providerId], references: [id], onDelete: SetNull)
+  creator       Profile?        @relation("events_created_by", fields: [createdBy], references: [userId], onDelete: SetNull)
+  attendees     EventAttendee[]
+  interests     EventInterest[]
+  media         EventMedia[]
+  tickets       Ticket[]
+  paymentOrders PaymentOrder[]
 
   @@index([startsAt])
   @@index([providerId])
@@ -170,20 +172,23 @@ enum TicketTab {
 }
 
 model Ticket {
-  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  ownerId       String    @map("owner_id") @db.Uuid
-  eventId       String?   @map("event_id") @db.Uuid
-  title         String
-  tab           TicketTab @default(eventos)
-  themeColor    String?   @map("theme_color")
-  attendeeCount Int       @default(0) @map("attendee_count")
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId        String    @map("owner_id") @db.Uuid
+  eventId        String?   @map("event_id") @db.Uuid
+  paymentOrderId String?   @map("payment_order_id") @db.Uuid
+  title          String
+  tab            TicketTab @default(eventos)
+  themeColor     String?   @map("theme_color")
+  attendeeCount  Int       @default(0) @map("attendee_count")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  owner Profile @relation(fields: [ownerId], references: [userId], onDelete: Cascade)
-  event Event?  @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  owner        Profile       @relation(fields: [ownerId], references: [userId], onDelete: Cascade)
+  event        Event?        @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  paymentOrder PaymentOrder? @relation(fields: [paymentOrderId], references: [id], onDelete: SetNull)
 
   @@index([ownerId])
   @@index([eventId])
+  @@index([paymentOrderId])
   @@map("tickets")
 }
 
@@ -243,4 +248,40 @@ model Notification {
 
   @@index([userId, createdAt(sort: Desc)])
   @@map("notifications")
+}
+
+enum PaymentOrderStatus {
+  pending_payment
+  paid
+  failed
+  cancelled
+  refunded
+
+  @@map("payment_order_status")
+}
+
+model PaymentOrder {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String             @map("user_id") @db.Uuid
+  eventId           String             @map("event_id") @db.Uuid
+  entryTypeId       String?            @map("entry_type_id") @db.Uuid
+  quantity          Int                @default(1)
+  amountCents       Int                @map("amount_cents")
+  currency          String             @default("HNL") @db.VarChar(3)
+  status            PaymentOrderStatus @default(pending_payment)
+  paygateLinkId     String?            @unique @map("paygate_link_id")
+  paygatePaymentId  String?            @unique @map("paygate_payment_id")
+  paygateRawWebhook Json?              @map("paygate_raw_webhook")
+  expiresAt         DateTime?          @map("expires_at") @db.Timestamptz(6)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user    Profile  @relation(fields: [userId], references: [userId], onDelete: Restrict)
+  event   Event    @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  tickets Ticket[]
+
+  @@index([userId])
+  @@index([eventId])
+  @@index([status])
+  @@map("payment_orders")
 }
