@@ -3,15 +3,12 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { PaygateConfigService } from './paygate.config';
 import { PaygateWebhookSignatureError } from './paygate.errors';
 
-/**
- * Default header Paygate is expected to send the HMAC in. The actual
- * header name and algorithm haven't been confirmed against a real
- * sandbox webhook yet, so both are working assumptions: adjust when
- * the first captured payload contradicts them.
- */
-const DEFAULT_SIGNATURE_HEADER = 'x-paygate-signature';
-
+// Clinpays/Paygate webhook signing.
+// Header format: `t=<unix_ts>,v1=<hexsig>[,v1=<hexsig_old>]`
+// Signed payload: `${t}.${rawBody}`
+const DEFAULT_SIGNATURE_HEADER = 'x-clinpays-webhook-signature';
 const DEFAULT_ALGORITHM = 'sha256';
+const DEFAULT_TOLERANCE_SECONDS = 5 * 60;
 
 export interface VerifySignatureInput {
   /**
@@ -57,26 +54,63 @@ export class PaygateSignatureVerifier {
       );
     }
 
-    const provided = extractHeader(input.headers, this.headerName);
-    if (!provided) {
+    const signatureHeader = extractHeader(input.headers, this.headerName);
+    if (!signatureHeader) {
       throw new PaygateWebhookSignatureError(
         'missing_header',
         `Missing signature header "${this.headerName}"`,
       );
     }
 
-    const expected = createHmac(DEFAULT_ALGORITHM, secret)
-      .update(input.rawBody)
-      .digest('hex');
-
-    if (!safeEqualHex(expected, provided)) {
-      this.logger.warn('Paygate webhook signature mismatch');
+    const parsed = parseClinpaysSignatureHeader(signatureHeader);
+    if (!parsed) {
       throw new PaygateWebhookSignatureError(
         'mismatch',
-        'Computed HMAC does not match the signature header',
+        'Malformed signature header',
+      );
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    if (Math.abs(now - parsed.timestamp) > DEFAULT_TOLERANCE_SECONDS) {
+      throw new PaygateWebhookSignatureError(
+        'mismatch',
+        'Webhook timestamp outside tolerance window',
+      );
+    }
+
+    const signedPayload = `${parsed.timestamp}.${input.rawBody.toString('utf8')}`;
+    const expected = createHmac(DEFAULT_ALGORITHM, secret)
+      .update(signedPayload)
+      .digest('hex');
+
+    const ok = parsed.signatures.some((sig) => safeEqualHex(expected, sig));
+    if (!ok) {
+      this.logger.warn('Clinpays webhook signature mismatch');
+      throw new PaygateWebhookSignatureError(
+        'mismatch',
+        'Computed HMAC does not match any signature in the header',
       );
     }
   }
+}
+
+function parseClinpaysSignatureHeader(header: string): {
+  timestamp: number;
+  signatures: string[];
+} | null {
+  const parts = header
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const tPart = parts.find((p) => p.startsWith('t='));
+  const timestamp = tPart ? Number(tPart.slice(2)) : NaN;
+  if (!Number.isFinite(timestamp)) return null;
+  const sigs = parts
+    .filter((p) => p.startsWith('v1='))
+    .map((p) => p.slice(3))
+    .filter(Boolean);
+  if (sigs.length === 0) return null;
+  return { timestamp, signatures: sigs };
 }
 
 function extractHeader(

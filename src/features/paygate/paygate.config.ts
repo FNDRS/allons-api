@@ -5,6 +5,11 @@ export interface PaygateConfig {
   apiBase: string | null;
   bearerToken: string | null;
   webhookSecret: string | null;
+  /**
+   * When true, webhook accepts requests without PAYGATE_WEBHOOK_SECRET (local/dev only).
+   * Production must keep this false or unset and configure a real secret.
+   */
+  allowUnsignedWebhooks: boolean;
   linkExpirationHours: number;
   currency: string;
 }
@@ -31,6 +36,10 @@ export class PaygateConfigService {
 
   get webhookSecret(): string | null {
     return this.cached.webhookSecret;
+  }
+
+  get allowUnsignedWebhooks(): boolean {
+    return this.cached.allowUnsignedWebhooks;
   }
 
   get linkExpirationHours(): number {
@@ -61,6 +70,12 @@ export class PaygateConfigService {
     const rawSecret = config.get<string>('PAYGATE_WEBHOOK_SECRET');
     const webhookSecret = rawSecret?.trim() ? rawSecret.trim() : null;
 
+    const allowUnsignedRaw = config.get<string>(
+      'PAYGATE_WEBHOOK_ALLOW_UNSIGNED',
+    );
+    const allowUnsignedWebhooks =
+      allowUnsignedRaw?.trim().toLowerCase() === 'true';
+
     const rawCurrency = config.get<string>('PAYGATE_CURRENCY');
     const currency = (rawCurrency ?? DEFAULT_CURRENCY).toUpperCase();
 
@@ -71,6 +86,7 @@ export class PaygateConfigService {
       apiBase,
       bearerToken,
       webhookSecret,
+      allowUnsignedWebhooks,
       linkExpirationHours,
       currency,
     };

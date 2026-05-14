@@ -6,6 +6,10 @@ import type { Request } from 'express';
 import { PaygateConfigService } from './paygate.config';
 import { PaygateSignatureVerifier } from './paygate.signature';
 import { PaygateWebhookController } from './paygate.webhook.controller';
+import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
+import { MeService } from '../me/me.service';
+import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
+import { PrismaService } from '../../prisma/prisma.service';
 
 async function buildController(env: Record<string, string | undefined>) {
   const moduleRef = await Test.createTestingModule({
@@ -13,6 +17,30 @@ async function buildController(env: Record<string, string | undefined>) {
     providers: [
       PaygateConfigService,
       PaygateSignatureVerifier,
+      {
+        provide: PaymentOrdersRepository,
+        useValue: {
+          findById: jest.fn(),
+          findByPaygateLinkId: jest.fn(),
+          findByPaygatePaymentId: jest.fn(),
+          transitionStatus: jest.fn(),
+        },
+      },
+      {
+        provide: MeService,
+        useValue: { createTicket: jest.fn() },
+      },
+      {
+        provide: SupabaseAdminService,
+        useValue: { db: { auth: { admin: { getUserById: jest.fn() } } } },
+      },
+      {
+        provide: PrismaService,
+        useValue: {
+          event: { findUnique: jest.fn() },
+          ticket: { count: jest.fn() },
+        },
+      },
       {
         provide: ConfigService,
         useValue: { get: (key: string) => env[key] },
@@ -34,12 +62,28 @@ const SECRET = 'webhook-secret';
 const BODY = '{"_id":"abc","status":"APPROVED"}';
 const RAW = Buffer.from(BODY, 'utf8');
 
+function signatureHeader(ts: number) {
+  const signedPayload = `${ts}.${BODY}`;
+  const sig = createHmac('sha256', SECRET).update(signedPayload).digest('hex');
+  return `t=${ts},v1=${sig}`;
+}
+
 describe('PaygateWebhookController', () => {
-  it('accepts with a warning when PAYGATE_WEBHOOK_SECRET is unset', async () => {
+  it('rejects when the webhook secret is unset and unsigned mode is off', async () => {
+    const controller = await buildController({});
+
+    expect(() => controller.handleWebhook(fakeReq(RAW), {})).toThrow(
+      UnauthorizedException,
+    );
+  });
+
+  it('accepts with a warning when PAYGATE_WEBHOOK_ALLOW_UNSIGNED=true', async () => {
     const warn = jest
       .spyOn(Logger.prototype, 'warn')
       .mockImplementation(() => {});
-    const controller = await buildController({});
+    const controller = await buildController({
+      PAYGATE_WEBHOOK_ALLOW_UNSIGNED: 'true',
+    });
 
     const result = controller.handleWebhook(fakeReq(RAW), {});
 
@@ -54,25 +98,32 @@ describe('PaygateWebhookController', () => {
     const controller = await buildController({
       PAYGATE_WEBHOOK_SECRET: SECRET,
     });
-    const sig = createHmac('sha256', SECRET).update(BODY).digest('hex');
+    const now = 1_700_000_000;
+    jest.spyOn(Date, 'now').mockReturnValue(now * 1000);
 
     const result = controller.handleWebhook(fakeReq(RAW), {
-      'x-paygate-signature': sig,
+      'x-clinpays-webhook-signature': signatureHeader(now),
     });
 
     expect(result).toEqual({ ok: true });
+
+    jest.restoreAllMocks();
   });
 
   it('rejects with 401 when the secret is set but the signature is wrong', async () => {
     const controller = await buildController({
       PAYGATE_WEBHOOK_SECRET: SECRET,
     });
+    const now = 1_700_000_000;
+    jest.spyOn(Date, 'now').mockReturnValue(now * 1000);
 
     expect(() =>
       controller.handleWebhook(fakeReq(RAW), {
-        'x-paygate-signature': 'deadbeef'.repeat(8),
+        'x-clinpays-webhook-signature': `t=${now},v1=${'deadbeef'.repeat(8)}`,
       }),
     ).toThrow(UnauthorizedException);
+
+    jest.restoreAllMocks();
   });
 
   it('rejects with 401 when the signature header is missing entirely', async () => {
@@ -89,13 +140,15 @@ describe('PaygateWebhookController', () => {
     const controller = await buildController({
       PAYGATE_WEBHOOK_SECRET: SECRET,
     });
+    const now = 1_700_000_000;
+    jest.spyOn(Date, 'now').mockReturnValue(now * 1000);
 
     expect(() =>
       controller.handleWebhook(fakeReq(undefined), {
-        'x-paygate-signature': createHmac('sha256', SECRET)
-          .update(BODY)
-          .digest('hex'),
+        'x-clinpays-webhook-signature': signatureHeader(now),
       }),
     ).toThrow(UnauthorizedException);
+
+    jest.restoreAllMocks();
   });
 });
