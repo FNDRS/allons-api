@@ -127,6 +127,7 @@ export class PaygateWebhookController {
       typeof payload.orderReference === 'string'
         ? payload.orderReference
         : null;
+    const webhookId = firstHeader(headers, 'x-clinpays-webhook-id');
 
     if (!paygateId) {
       this.logger.warn('Paygate webhook missing _id; ignoring');
@@ -135,12 +136,15 @@ export class PaygateWebhookController {
 
     const order = await this.findOrder({ paygateId, orderRef });
     if (!order) {
-      const webhookId = firstHeader(headers, 'x-clinpays-webhook-id');
       this.logger.warn(
         `Paygate webhook for unknown order (paygateId=${paygateId}${orderRef ? `, orderReference=${orderRef}` : ''}${webhookId ? `, webhookId=${webhookId}` : ''})`,
       );
       return;
     }
+
+    this.logger.log(
+      `Paygate webhook mapped order=${order.id} status=${rawStatus} paygateId=${paygateId}${webhookId ? ` webhookId=${webhookId}` : ''}`,
+    );
 
     const nextStatus = mapWebhookStatus(rawStatus);
     if (!nextStatus) {

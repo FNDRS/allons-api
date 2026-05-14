@@ -170,6 +170,9 @@ export class PaymentOrdersRepository {
 
       if (result.count === 0) {
         const exists = await this.findById(id);
+        this.logger.debug(
+          `transitionStatus noop order=${id} status=${payload.status} reason=${exists ? 'not_pending' : 'not_found'}`,
+        );
         return {
           applied: false,
           reason: exists ? 'not_pending' : 'not_found',
@@ -179,6 +182,9 @@ export class PaymentOrdersRepository {
       const order = await this.prisma.paymentOrder.findUniqueOrThrow({
         where: { id },
       });
+      this.logger.log(
+        `transitionStatus applied order=${id} status=${payload.status} paygatePaymentId=${payload.paygatePaymentId ?? '—'}`,
+      );
       return { applied: true, order };
     } catch (err) {
       if (

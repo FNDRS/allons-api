@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Logger,
   Param,
   Post,
   Req,
@@ -29,6 +30,8 @@ import { MePaymentsService } from './me-payments.service';
 @ApiBearerAuth('bearer')
 @Controller('me/payments')
 export class MePaymentsController {
+  private readonly logger = new Logger(MePaymentsController.name);
+
   constructor(
     private readonly payments: MePaymentsService,
     private readonly supabaseAdmin: SupabaseAdminService,
@@ -64,6 +67,10 @@ export class MePaymentsController {
       typeof body.quantity === 'number' && Number.isFinite(body.quantity)
         ? Math.floor(body.quantity)
         : 1;
+
+    this.logger.log(
+      `initiatePayment user=${user.id} event=${body.eventId} qty=${quantity}`,
+    );
     return this.payments.initiatePayment(user.id, {
       eventId: body.eventId,
       entryTypeId:
@@ -92,6 +99,7 @@ export class MePaymentsController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
+    this.logger.debug(`getOrder user=${user.id} order=${orderId}`);
     return this.payments.getOrder(user.id, orderId);
   }
 
@@ -106,6 +114,7 @@ export class MePaymentsController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
+    this.logger.debug(`listOrders user=${user.id}`);
     return this.payments.listOrders(user.id);
   }
 }

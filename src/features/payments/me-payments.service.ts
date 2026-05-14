@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -19,6 +20,8 @@ interface InitiateInput {
 
 @Injectable()
 export class MePaymentsService {
+  private readonly logger = new Logger(MePaymentsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly paygate: PaygateService,
@@ -27,6 +30,9 @@ export class MePaymentsService {
   ) {}
 
   async initiatePayment(userId: string, input: InitiateInput) {
+    this.logger.log(
+      `initiatePayment start user=${userId} event=${input.eventId} qty=${input.quantity}`,
+    );
     const event = await this.prisma.event.findUnique({
       where: { id: input.eventId },
     });
@@ -79,6 +85,10 @@ export class MePaymentsService {
       amount: Number((amountCents / 100).toFixed(2)),
       currency: 'HNL',
     });
+
+    this.logger.log(
+      `initiatePayment paygateLink created event=${event.id} paygateLinkId=${link.id} amountCents=${amountCents} discountCents=${discountCents}`,
+    );
 
     const expiresAt = new Date(
       Date.now() + link.expirationHours * 60 * 60 * 1000,
