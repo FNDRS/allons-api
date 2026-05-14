@@ -3,7 +3,12 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody: true keeps the original request bytes available on
+  // RawBodyRequest<Request>.rawBody. Required by the Paygate webhook
+  // controller to verify the HMAC signature against the exact bytes
+  // Paygate signed (re-serializing JSON would produce a different
+  // payload and break the signature check).
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   app.enableCors();
 
   const config = new DocumentBuilder()
