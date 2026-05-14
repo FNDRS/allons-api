@@ -5,6 +5,7 @@
  *   DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  *   ALLOW_DEV_DATABASE_RESET=yes
  *   DEV_SEED_PASSWORD=...   — password assigned to each seeded login
+ *   DEV_SEED_EMAIL_PREFIX=demo — optional email local-part prefix (default demo → demo+cliente@…)
  *
  * Run: cd allons-api && pnpm db:seed:dev-reset
  */
@@ -12,9 +13,10 @@
 import { createClient } from '@supabase/supabase-js';
 import { PrismaClient } from '../../generated/prisma';
 
-const EMAIL_CLIENTE = 'demo+cliente@allonsapp.com';
-const EMAIL_COMERCIO = 'demo+comercio@allonsapp.com';
-const EMAIL_STAFF = 'demo+staff@allonsapp.com';
+const seedEmailPrefix = (process.env.DEV_SEED_EMAIL_PREFIX ?? 'demo').trim() || 'demo';
+const EMAIL_CLIENTE = `${seedEmailPrefix}+cliente@allonsapp.com`;
+const EMAIL_COMERCIO = `${seedEmailPrefix}+comercio@allonsapp.com`;
+const EMAIL_STAFF = `${seedEmailPrefix}+staff@allonsapp.com`;
 
 const prisma = new PrismaClient();
 
