@@ -11,6 +11,7 @@ import { FriendsModule } from './features/friends/friends.module';
 import { ConversationsModule } from './features/conversations/conversations.module';
 import { MeModule } from './features/me/me.module';
 import { AdminModule } from './features/admin/admin.module';
+import { PaygateModule } from './features/paygate/paygate.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -28,6 +29,7 @@ import { AppService } from './app.service';
     ConversationsModule,
     MeModule,
     AdminModule,
+    PaygateModule,
   ],
   controllers: [AppController],
   providers: [AppService],
