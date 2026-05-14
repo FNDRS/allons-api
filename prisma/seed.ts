@@ -375,19 +375,18 @@ async function main() {
     });
   }
 
-  // Seed provider MVP for marlon+comercio1@allosapp.com.
-  // If auth user ID is known in the environment, use it to keep membership aligned.
-  const marlonUserId =
-    process.env.SEED_MARLON_USER_ID ?? '11111111-1111-4111-8111-111111111111';
-  const marlonProviderHandle = 'marlon-comercio1';
-  const marlonProviderName = 'Comercio Marlon';
+  // Provider panel MVP seed: align with a real Supabase auth user id via env (optional).
+  const demoPanelOwnerId =
+    process.env.SEED_DEMO_PROVIDER_USER_ID ?? '11111111-1111-4111-8111-111111111111';
+  const demoPanelHandle = 'demo-panel-comercio';
+  const demoPanelProviderName = 'Comercio demo (panel)';
 
   await prisma.$executeRaw`
     INSERT INTO profiles (user_id, full_name, username, location, avatar_color)
     VALUES (
-      ${marlonUserId}::uuid,
-      ${marlonProviderName},
-      ${'marlon_comercio1'},
+      ${demoPanelOwnerId}::uuid,
+      ${demoPanelProviderName},
+      ${'demo_comercio_panel'},
       ${'Tegucigalpa'},
       ${'#F67010'}
     )
@@ -401,23 +400,23 @@ async function main() {
   `;
 
   await prisma.provider.upsert({
-    where: { handle: marlonProviderHandle },
+    where: { handle: demoPanelHandle },
     update: {
-      name: marlonProviderName,
+      name: demoPanelProviderName,
       description: 'Eventos, experiencias y activaciones para comunidad local.',
       websiteUrl: 'https://allonsapp.com',
     },
     create: {
-      id: marlonUserId,
-      handle: marlonProviderHandle,
-      name: marlonProviderName,
+      id: demoPanelOwnerId,
+      handle: demoPanelHandle,
+      name: demoPanelProviderName,
       description: 'Eventos, experiencias y activaciones para comunidad local.',
       websiteUrl: 'https://allonsapp.com',
     },
   });
 
-  const marlonProvider = await prisma.provider.findUniqueOrThrow({
-    where: { handle: marlonProviderHandle },
+  const demoPanelProvider = await prisma.provider.findUniqueOrThrow({
+    where: { handle: demoPanelHandle },
     select: { id: true },
   });
 
@@ -434,7 +433,7 @@ async function main() {
   `;
   await prisma.$executeRaw`
     INSERT INTO provider_members (provider_id, user_id, role, active)
-    VALUES (${marlonProvider.id}::uuid, ${marlonUserId}::uuid, 'owner', true)
+    VALUES (${demoPanelProvider.id}::uuid, ${demoPanelOwnerId}::uuid, 'owner', true)
     ON CONFLICT (provider_id, user_id)
     DO UPDATE SET role = 'owner', active = true, updated_at = now()
   `;
@@ -464,7 +463,7 @@ async function main() {
     ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'draft'
   `;
 
-  const marlonEventDefs = [
+  const demoPanelEventDefs = [
     {
       title: 'Clase funcional sunrise',
       city: 'Tegucigalpa',
@@ -494,11 +493,11 @@ async function main() {
     },
   ];
 
-  for (const def of marlonEventDefs) {
+  for (const def of demoPanelEventDefs) {
     const start = atHour(def.dayOffset, def.hour);
     const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
     const existing = await prisma.event.findFirst({
-      where: { providerId: marlonProvider.id, title: def.title },
+      where: { providerId: demoPanelProvider.id, title: def.title },
       select: { id: true },
     });
     const event = existing
@@ -513,12 +512,12 @@ async function main() {
             venue: def.venue,
             address: `${def.venue}, ${def.city}`,
             themeColor: '#F67010',
-            createdBy: marlonUserId,
+            createdBy: demoPanelOwnerId,
           },
         })
       : await prisma.event.create({
           data: {
-            providerId: marlonProvider.id,
+            providerId: demoPanelProvider.id,
             title: def.title,
             description: `${def.title} · cupos limitados.`,
             startsAt: start,
@@ -527,7 +526,7 @@ async function main() {
             venue: def.venue,
             address: `${def.venue}, ${def.city}`,
             themeColor: '#F67010',
-            createdBy: marlonUserId,
+            createdBy: demoPanelOwnerId,
           },
         });
 
@@ -561,7 +560,7 @@ async function main() {
         provider_id, event_id, name, kind, price, total, sold_count, active
       )
       VALUES (
-        ${marlonProvider.id}::uuid,
+        ${demoPanelProvider.id}::uuid,
         ${event.id}::uuid,
         ${'General'},
         ${'general'},
@@ -577,7 +576,7 @@ async function main() {
         provider_id, event_id, name, kind, price, total, sold_count, active
       )
       VALUES (
-        ${marlonProvider.id}::uuid,
+        ${demoPanelProvider.id}::uuid,
         ${event.id}::uuid,
         ${'VIP'},
         ${'vip'},
@@ -604,12 +603,12 @@ async function main() {
       scanned_at timestamptz NOT NULL DEFAULT now()
     )
   `;
-  const marlonEvents = await prisma.event.findMany({
-    where: { providerId: marlonProvider.id },
+  const demoPanelEvents = await prisma.event.findMany({
+    where: { providerId: demoPanelProvider.id },
     select: { id: true, title: true },
     take: 5,
   });
-  for (const evt of marlonEvents) {
+  for (const evt of demoPanelEvents) {
     await prisma.$executeRaw`
       INSERT INTO provider_scan_records (
         provider_id,
@@ -621,12 +620,12 @@ async function main() {
         status
       )
       VALUES (
-        ${marlonProvider.id}::uuid,
+        ${demoPanelProvider.id}::uuid,
         ${evt.id}::uuid,
         ${`seed-${evt.id.slice(0, 8)}`},
         ${'Asistente Seed'},
         ${'General'},
-        ${marlonUserId}::uuid,
+        ${demoPanelOwnerId}::uuid,
         ${'valid'}
       )
       ON CONFLICT DO NOTHING
@@ -646,9 +645,9 @@ async function main() {
   await prisma.$executeRaw`
     INSERT INTO provider_activity_log (provider_id, type, message, meta)
     VALUES
-      (${marlonProvider.id}::uuid, 'event', 'Seed inicial del panel provider', 'marlon+comercio1@allosapp.com'),
-      (${marlonProvider.id}::uuid, 'sale', 'Ventas de ejemplo cargadas', 'dataset-seed'),
-      (${marlonProvider.id}::uuid, 'scan', 'Escaneos de ejemplo cargados', 'dataset-seed')
+      (${demoPanelProvider.id}::uuid, 'event', 'Seed inicial del panel provider', 'demo+comercio1@allonsapp.com'),
+      (${demoPanelProvider.id}::uuid, 'sale', 'Ventas de ejemplo cargadas', 'dataset-seed'),
+      (${demoPanelProvider.id}::uuid, 'scan', 'Escaneos de ejemplo cargados', 'dataset-seed')
     ON CONFLICT DO NOTHING
   `;
 
@@ -662,7 +661,7 @@ async function main() {
   `;
   await prisma.$executeRaw`
     INSERT INTO provider_follows (user_id, provider_id)
-    VALUES (${marlonUserId}::uuid, ${marlonProvider.id}::uuid)
+    VALUES (${demoPanelOwnerId}::uuid, ${demoPanelProvider.id}::uuid)
     ON CONFLICT (user_id, provider_id) DO NOTHING
   `;
 }

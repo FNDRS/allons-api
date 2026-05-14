@@ -23,7 +23,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "db:seed:dev-reset": "ts-node --transpile-only prisma/scripts/dev-reset-seed.ts"
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.1",
