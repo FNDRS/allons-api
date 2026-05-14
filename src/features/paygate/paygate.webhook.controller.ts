@@ -8,7 +8,7 @@ import {
   UnauthorizedException,
   type RawBodyRequest,
 } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiBody, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { PaygateConfigService } from './paygate.config';
 import { PaygateWebhookSignatureError } from './paygate.errors';
@@ -17,6 +17,7 @@ import type { PaygateWebhookPayload } from './paygate.types';
 import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
 import { MeService } from '../me/me.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
+import { PrismaService } from '../../prisma/prisma.service';
 
 @ApiTags('webhooks')
 @Controller('webhooks/paygate')
@@ -29,6 +30,7 @@ export class PaygateWebhookController {
     private readonly orders: PaymentOrdersRepository,
     private readonly me: MeService,
     private readonly supabaseAdmin: SupabaseAdminService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @Post()
@@ -36,7 +38,26 @@ export class PaygateWebhookController {
   @ApiOperation({
     summary: 'Paygate (Clinpays) webhook receiver',
     description:
-      'Public endpoint Paygate calls when a payment status changes. If PAYGATE_WEBHOOK_SECRET is configured, the request must carry a valid signature in `X-Clinpays-Webhook-Signature`; otherwise the request is rejected with 401. When the secret is unset, the request is accepted with a warning log so payloads can be inspected before signature validation is enforced.',
+      'Endpoint público que Paygate invoca al cambiar el estado de un cobro. **Sin** `Authorization: Bearer` de usuario. Con `PAYGATE_WEBHOOK_SECRET` definido, el cuerpo crudo debe enviarse firmado (p. ej. cabecera `X-Clinpays-Webhook-Signature`). Sin secreto, las peticiones se rechazan salvo `PAYGATE_WEBHOOK_ALLOW_UNSIGNED=true` (solo entornos de desarrollo).',
+  })
+  @ApiHeader({
+    name: 'X-Clinpays-Webhook-Signature',
+    required: false,
+    description:
+      'Firma HMAC del cuerpo crudo cuando el secreto webhook está configurado.',
+  })
+  @ApiBody({
+    description:
+      'JSON del evento Paygate (estructura según documentación merchant).',
+    schema: {
+      type: 'object',
+      additionalProperties: true,
+      example: {
+        paymentId: 'paygate-payment-id',
+        linkId: 'paygate-link-id',
+        status: 'APPROVED',
+      },
+    },
   })
   handleWebhook(
     @Req() req: RawBodyRequest<Request>,
@@ -70,9 +91,13 @@ export class PaygateWebhookController {
         }
         throw err;
       }
+    } else if (!this.cfg.allowUnsignedWebhooks) {
+      throw new UnauthorizedException(
+        'Paygate webhook signing is not configured (set PAYGATE_WEBHOOK_SECRET, or PAYGATE_WEBHOOK_ALLOW_UNSIGNED=true only for local development)',
+      );
     } else {
       this.logger.warn(
-        'Paygate webhook accepted WITHOUT signature verification (PAYGATE_WEBHOOK_SECRET not set). Set the secret to enable strict validation.',
+        'Paygate webhook accepted WITHOUT signature verification (PAYGATE_WEBHOOK_ALLOW_UNSIGNED=true). Never enable this in production.',
       );
     }
 
@@ -99,7 +124,9 @@ export class PaygateWebhookController {
       typeof payload.status === 'string' ? payload.status.toUpperCase() : '';
     const paygateId = typeof payload._id === 'string' ? payload._id : null;
     const orderRef =
-      typeof payload.orderReference === 'string' ? payload.orderReference : null;
+      typeof payload.orderReference === 'string'
+        ? payload.orderReference
+        : null;
 
     if (!paygateId) {
       this.logger.warn('Paygate webhook missing _id; ignoring');
@@ -136,6 +163,25 @@ export class PaygateWebhookController {
 
     if (nextStatus !== 'paid') return;
 
+    const eventRow = await this.prisma.event.findUnique({
+      where: { id: order.eventId },
+    });
+    if (!eventRow) {
+      this.logger.error(
+        `Paid order ${order.id} references missing event ${order.eventId}; cannot create tickets`,
+      );
+      return;
+    }
+    const sold = await this.prisma.ticket.count({
+      where: { eventId: order.eventId },
+    });
+    if (eventRow.capacity > 0 && sold + order.quantity > eventRow.capacity) {
+      this.logger.error(
+        `Refusing ticket issuance for paid order ${order.id}: event ${order.eventId} capacity ${eventRow.capacity}, sold ${sold}, order quantity ${order.quantity}`,
+      );
+      return;
+    }
+
     // Create tickets on successful payment.
     try {
       const { data, error } =
@@ -144,13 +190,23 @@ export class PaygateWebhookController {
         throw new Error('No se pudo obtener el email del usuario');
       }
 
+      const buyerName =
+        typeof (data.user.user_metadata as { name?: unknown })?.name ===
+        'string'
+          ? String((data.user.user_metadata as { name: string }).name)
+          : null;
+      const holderTemplate = {
+        email: data.user.email,
+        ...(buyerName ? { name: buyerName } : {}),
+      };
+      const holders = Array.from({ length: order.quantity }, () => ({
+        ...holderTemplate,
+      }));
+
       await this.me.createTicket(order.userId, order.eventId, order.quantity, {
         email: data.user.email,
-        name:
-          typeof (data.user.user_metadata as any)?.name === 'string'
-            ? String((data.user.user_metadata as any).name)
-            : null,
-        holders: [],
+        name: buyerName,
+        holders,
         paymentOrderId: order.id,
       });
     } catch (err) {

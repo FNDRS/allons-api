@@ -6,8 +6,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { MeService } from '../me/me.service';
 import { PaygateService } from '../paygate/paygate.service';
 import { PaymentOrdersRepository } from './payment-orders.repository';
+
+interface InitiateInput {
+  eventId: string;
+  entryTypeId?: string | null;
+  quantity: number;
+  referralCode?: string | null;
+}
 
 @Injectable()
 export class MePaymentsService {
@@ -15,13 +23,10 @@ export class MePaymentsService {
     private readonly prisma: PrismaService,
     private readonly paygate: PaygateService,
     private readonly orders: PaymentOrdersRepository,
+    private readonly me: MeService,
   ) {}
 
-  async initiatePayment(userId: string, input: {
-    eventId: string;
-    entryTypeId?: string | null;
-    quantity: number;
-  }) {
+  async initiatePayment(userId: string, input: InitiateInput) {
     const event = await this.prisma.event.findUnique({
       where: { id: input.eventId },
     });
@@ -32,7 +37,7 @@ export class MePaymentsService {
       throw new BadRequestException('quantity debe estar entre 1 y 20');
     }
 
-    if ((event as any).ticketMode === 'free') {
+    if ((event as unknown as { ticketMode?: string }).ticketMode === 'free') {
       throw new BadRequestException(
         'Este evento no requiere pago (ticketMode=free)',
       );
@@ -52,14 +57,32 @@ export class MePaymentsService {
       throw new BadRequestException('No hay cupo disponible');
     }
 
-    const amountCents = unitPriceCents * quantity;
+    const grossAmountCents = unitPriceCents * quantity;
+    const referralCode = nonEmptyTrim(input.referralCode);
+    const { amountCents, discountCents } = await this.applyReferralDiscount(
+      userId,
+      grossAmountCents,
+      referralCode,
+    );
+
+    if (amountCents <= 0) {
+      // Paygate refuses zero/negative amounts. A 100%-off referral would
+      // need a separate "free reservation" path that bypasses the
+      // gateway entirely — out of scope here.
+      throw new BadRequestException(
+        'El total a cobrar quedó en 0; usa la reserva gratuita en su lugar',
+      );
+    }
+
     const link = await this.paygate.createPaymentLink({
       description: `Ticket - ${event.title}`,
       amount: Number((amountCents / 100).toFixed(2)),
       currency: 'HNL',
     });
 
-    const expiresAt = new Date(Date.now() + link.expirationHours * 60 * 60 * 1000);
+    const expiresAt = new Date(
+      Date.now() + link.expirationHours * 60 * 60 * 1000,
+    );
 
     const order = await this.orders.create({
       userId,
@@ -78,17 +101,22 @@ export class MePaymentsService {
       amountCents: order.amountCents,
       currency: order.currency,
       expiresAt: order.expiresAt?.toISOString() ?? expiresAt.toISOString(),
+      discount: discountCents > 0 ? { cents: discountCents } : null,
     };
   }
 
   async getOrder(userId: string, orderId: string) {
     const order = await this.orders.findById(orderId);
     if (!order) throw new NotFoundException('Orden no encontrada');
-    if (order.userId !== userId) throw new ForbiddenException('Acceso denegado');
+    if (order.userId !== userId) {
+      throw new ForbiddenException('Acceso denegado');
+    }
 
     const now = new Date();
     const computedStatus =
-      order.status === 'pending_payment' && order.expiresAt && order.expiresAt < now
+      order.status === 'pending_payment' &&
+      order.expiresAt &&
+      order.expiresAt < now
         ? 'cancelled'
         : order.status;
 
@@ -122,8 +150,37 @@ export class MePaymentsService {
     };
   }
 
+  /**
+   * Resolves the discount the user is eligible for and subtracts it
+   * from the gross amount. Capturing the referral code is best-effort
+   * (a bad code shouldn't block paid checkout) but a successful
+   * capture is what makes the user's claim eligible going forward.
+   */
+  private async applyReferralDiscount(
+    userId: string,
+    grossAmountCents: number,
+    referralCode: string | null,
+  ): Promise<{ amountCents: number; discountCents: number }> {
+    if (referralCode) {
+      await this.me.captureReferralCode(userId, referralCode).catch(() => null);
+    }
+
+    const preview = await this.me.getReferralCheckoutPreview(userId);
+    if (!preview.eligible || preview.discountValueCents <= 0) {
+      return { amountCents: grossAmountCents, discountCents: 0 };
+    }
+
+    const discountCents = Math.min(
+      preview.discountValueCents,
+      grossAmountCents,
+    );
+    return {
+      amountCents: grossAmountCents - discountCents,
+      discountCents,
+    };
+  }
+
   private async getEventUnitPriceCents(eventId: string): Promise<number> {
-    // Reuse the same ticket-type selection heuristic as MeService.
     try {
       const rows = await this.prisma.$queryRaw<Array<{ price: number }>>`
         SELECT price::float8 AS price
@@ -143,10 +200,16 @@ export class MePaymentsService {
       const price = rows[0]?.price;
       if (!Number.isFinite(price)) return 0;
       return Math.round(Number(price) * 100);
-    } catch (err) {
+    } catch {
       throw new InternalServerErrorException(
         'No se pudo determinar el precio del ticket para el evento',
       );
     }
   }
+}
+
+function nonEmptyTrim(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }

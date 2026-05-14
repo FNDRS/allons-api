@@ -9,6 +9,7 @@ import { PaygateWebhookController } from './paygate.webhook.controller';
 import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
 import { MeService } from '../me/me.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
+import { PrismaService } from '../../prisma/prisma.service';
 
 async function buildController(env: Record<string, string | undefined>) {
   const moduleRef = await Test.createTestingModule({
@@ -32,6 +33,13 @@ async function buildController(env: Record<string, string | undefined>) {
       {
         provide: SupabaseAdminService,
         useValue: { db: { auth: { admin: { getUserById: jest.fn() } } } },
+      },
+      {
+        provide: PrismaService,
+        useValue: {
+          event: { findUnique: jest.fn() },
+          ticket: { count: jest.fn() },
+        },
       },
       {
         provide: ConfigService,
@@ -61,11 +69,21 @@ function signatureHeader(ts: number) {
 }
 
 describe('PaygateWebhookController', () => {
-  it('accepts with a warning when PAYGATE_WEBHOOK_SECRET is unset', async () => {
+  it('rejects when the webhook secret is unset and unsigned mode is off', async () => {
+    const controller = await buildController({});
+
+    expect(() => controller.handleWebhook(fakeReq(RAW), {})).toThrow(
+      UnauthorizedException,
+    );
+  });
+
+  it('accepts with a warning when PAYGATE_WEBHOOK_ALLOW_UNSIGNED=true', async () => {
     const warn = jest
       .spyOn(Logger.prototype, 'warn')
       .mockImplementation(() => {});
-    const controller = await buildController({});
+    const controller = await buildController({
+      PAYGATE_WEBHOOK_ALLOW_UNSIGNED: 'true',
+    });
 
     const result = controller.handleWebhook(fakeReq(RAW), {});
 

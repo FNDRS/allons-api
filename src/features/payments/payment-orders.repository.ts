@@ -64,6 +64,67 @@ export class PaymentOrdersRepository {
     });
   }
 
+  listForEvent(eventId: string): Promise<PaymentOrder[]> {
+    return this.prisma.paymentOrder.findMany({
+      where: { eventId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Aggregated counters and paid GMV (in cents) for a single event.
+   * The provider dashboard uses this; we keep aggregation in SQL so
+   * we don't pull every row into memory just to sum amounts.
+   */
+  async summaryForEvent(eventId: string): Promise<{
+    paidCount: number;
+    pendingCount: number;
+    failedCount: number;
+    cancelledCount: number;
+    refundedCount: number;
+    paidAmountCents: number;
+  }> {
+    const grouped = await this.prisma.paymentOrder.groupBy({
+      by: ['status'],
+      where: { eventId },
+      _count: { _all: true },
+      _sum: { amountCents: true },
+    });
+
+    const summary = {
+      paidCount: 0,
+      pendingCount: 0,
+      failedCount: 0,
+      cancelledCount: 0,
+      refundedCount: 0,
+      paidAmountCents: 0,
+    };
+
+    for (const row of grouped) {
+      const count = row._count?._all ?? 0;
+      switch (row.status) {
+        case 'paid':
+          summary.paidCount = count;
+          summary.paidAmountCents = row._sum?.amountCents ?? 0;
+          break;
+        case 'pending_payment':
+          summary.pendingCount = count;
+          break;
+        case 'failed':
+          summary.failedCount = count;
+          break;
+        case 'cancelled':
+          summary.cancelledCount = count;
+          break;
+        case 'refunded':
+          summary.refundedCount = count;
+          break;
+      }
+    }
+
+    return summary;
+  }
+
   /**
    * Returns pending orders whose payment link has expired past the
    * given grace period. Use for a periodic sweeper that flips them to

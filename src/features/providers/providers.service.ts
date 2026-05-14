@@ -201,6 +201,31 @@ export class ProvidersService {
     this.infraReady = true;
   }
 
+  /**
+   * Public lookup that mirrors `ensureDefaultMembership` without the
+   * side effects (no auto-provisioning of legacy providers, no profile
+   * mutation). Use when callers only need to know which provider the
+   * user manages, not bootstrap one.
+   */
+  async getMembership(userId: string): Promise<ProviderMembership | null> {
+    await this.ensureInfrastructure();
+    const rows = await this.prisma.$queryRaw<ProviderMembership[]>`
+      SELECT provider_id AS "providerId", role
+      FROM provider_members
+      WHERE user_id = ${userId}::uuid
+        AND active = true
+      ORDER BY
+        CASE role
+          WHEN 'owner' THEN 0
+          WHEN 'admin' THEN 1
+          ELSE 2
+        END ASC,
+        created_at ASC
+      LIMIT 1
+    `;
+    return rows[0] ?? null;
+  }
+
   private async ensureDefaultMembership(
     userId: string,
   ): Promise<ProviderMembership | null> {

@@ -611,6 +611,7 @@ export class MeService {
 
     const fallbackName = nonEmptyOrUndefined(options?.name) ?? 'Invitado';
     const fallbackEmail = nonEmptyOrUndefined(options?.email);
+    const buyersEmailNorm = fallbackEmail?.trim().toLowerCase() ?? '';
     const holders = Array.from({ length: quantity }, (_, idx) => {
       const holder = providedHolders[idx];
       const name = nonEmptyOrUndefined(holder?.name) ?? fallbackName;
@@ -634,9 +635,14 @@ export class MeService {
     for (const holder of holders) {
       const normalized = holder.email.trim().toLowerCase();
       if (seenEmails.has(normalized)) {
-        throw new BadRequestException(
-          'No puedes comprar esta invitación ya tienes una invitación asignada para este evento.',
-        );
+        const isRepeatBuyerEmail =
+          Boolean(buyersEmailNorm) && normalized === buyersEmailNorm;
+        if (!isRepeatBuyerEmail) {
+          throw new BadRequestException(
+            'No puedes comprar esta invitación ya tienes una invitación asignada para este evento.',
+          );
+        }
+        continue;
       }
       seenEmails.add(normalized);
     }
