@@ -29,7 +29,7 @@ export class PaygateService {
   ) {}
 
   // ===================================================================
-  // Health (Phase 0)
+  // Health
   // ===================================================================
 
   async health(): Promise<PaygateHealthResponse> {
@@ -125,7 +125,7 @@ export class PaygateService {
   }
 
   // ===================================================================
-  // Payment links (Phase 1)
+  // Payment links
   // ===================================================================
 
   /**
@@ -159,8 +159,8 @@ export class PaygateService {
   }
 
   /**
-   * Fetches the current state of a payment link by Paygate ID. Used as
-   * a backup path when a webhook is delayed/missed (see Phase 3).
+   * Fetches the current state of a payment link by Paygate ID. Useful
+   * as a backup path when an expected webhook is delayed or missed.
    */
   async getPaymentLinkDetail(paygateId: string): Promise<PaygatePaymentLink> {
     const raw = await this.client.get<PaygatePaymentLinkRaw>(

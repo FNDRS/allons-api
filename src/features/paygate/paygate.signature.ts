@@ -4,17 +4,13 @@ import { PaygateConfigService } from './paygate.config';
 import { PaygateWebhookSignatureError } from './paygate.errors';
 
 /**
- * Default header Paygate is expected to send the HMAC in. We don't have
- * confirmation from the sandbox portal yet — see
- * docs/paygate-webhook-contract.md. Phase 3 will pin this down with a
- * real captured webhook; until then this is the working assumption.
+ * Default header Paygate is expected to send the HMAC in. The actual
+ * header name and algorithm haven't been confirmed against a real
+ * sandbox webhook yet, so both are working assumptions: adjust when
+ * the first captured payload contradicts them.
  */
 const DEFAULT_SIGNATURE_HEADER = 'x-paygate-signature';
 
-/**
- * Algorithm used to compute the HMAC. Same caveat as the header name —
- * adjust here when Paygate confirms.
- */
 const DEFAULT_ALGORITHM = 'sha256';
 
 export interface VerifySignatureInput {
@@ -33,8 +29,8 @@ export interface VerifySignatureInput {
  * Behavior:
  *  - If `PAYGATE_WEBHOOK_SECRET` is unset, `verify()` throws
  *    `PaygateWebhookSignatureError('missing_secret')`. Callers can
- *    catch and decide whether to accept the request anyway (useful for
- *    Phase 0 payload capture).
+ *    catch and decide whether to accept the request anyway (useful
+ *    while capturing payloads before the secret has been provisioned).
  *  - If the secret is set but the signature header is missing,
  *    throws `'missing_header'`.
  *  - If the computed HMAC doesn't match the header (constant-time

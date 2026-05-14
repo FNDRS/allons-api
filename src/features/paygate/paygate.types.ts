@@ -1,5 +1,5 @@
 // =====================================================================
-// Health (Phase 0)
+// Health
 // =====================================================================
 
 export type PaygateConnectivity =
@@ -35,7 +35,7 @@ export interface PaygateHealthResponse {
 }
 
 // =====================================================================
-// Payment links — POST /pos/payment (Phase 1)
+// Payment links — POST /pos/payment
 // =====================================================================
 
 export type PaygateCurrency = 'HNL' | 'USD';
@@ -102,7 +102,7 @@ export interface PaygatePaymentLinkRaw {
 }
 
 // =====================================================================
-// Webhook payload (placeholder Phase 1 — finalized in Phase 3)
+// Webhook payload
 // =====================================================================
 
 /**
@@ -120,9 +120,8 @@ export type PaygateWebhookKnownStatus =
   (typeof PAYGATE_WEBHOOK_KNOWN_STATUSES)[number];
 
 /**
- * Expected shape of the Paygate webhook payload. Until we capture a
- * real sandbox webhook (see docs/paygate-webhook-contract.md) these
- * fields are tentative.
+ * Expected shape of the Paygate webhook payload. Tentative until a
+ * real sandbox webhook has been captured and inspected.
  */
 export interface PaygateWebhookPayload {
   /** Paygate charge ID once confirmed. */
