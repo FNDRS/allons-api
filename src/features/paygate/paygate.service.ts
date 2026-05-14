@@ -1,17 +1,25 @@
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { firstValueFrom } from 'rxjs';
-import { AxiosError } from 'axios';
+import axios from 'axios';
 import { PaygateConfigService } from './paygate.config';
 import type {
   PaygateConnectivity,
   PaygateHealthResponse,
 } from './paygate.types';
 
+const CONNECTIVITY_TIMEOUT_MS = 5_000;
+const HEALTH_CACHE_TTL_MS = 30_000;
+
+interface CachedHealth {
+  response: PaygateHealthResponse;
+  expiresAt: number;
+}
+
 @Injectable()
 export class PaygateService {
   private readonly logger = new Logger(PaygateService.name);
-  private readonly connectivityTimeoutMs = 5_000;
+  private cachedHealth: CachedHealth | null = null;
 
   constructor(
     private readonly cfg: PaygateConfigService,
@@ -19,6 +27,11 @@ export class PaygateService {
   ) {}
 
   async health(): Promise<PaygateHealthResponse> {
+    const now = Date.now();
+    if (this.cachedHealth && this.cachedHealth.expiresAt > now) {
+      return { ...this.cachedHealth.response, cached: true };
+    }
+
     const snapshot = this.cfg.snapshot();
     const missing = {
       apiBase: !snapshot.apiBase,
@@ -26,30 +39,39 @@ export class PaygateService {
       webhookSecret: !snapshot.webhookSecret,
     };
 
-    const connectivity = await this.probeConnectivity();
+    const connectivity = await this.probeConnectivity(snapshot);
 
-    return {
-      configured: this.cfg.isFullyConfigured(),
+    const response: PaygateHealthResponse = {
+      configured: Boolean(snapshot.apiBase && snapshot.bearerToken),
       apiBase: snapshot.apiBase,
       currency: snapshot.currency,
       linkExpirationHours: snapshot.linkExpirationHours,
       missing,
       connectivity,
-      checkedAt: new Date().toISOString(),
+      checkedAt: new Date(now).toISOString(),
+      cached: false,
     };
+
+    this.cachedHealth = {
+      response,
+      expiresAt: now + HEALTH_CACHE_TTL_MS,
+    };
+
+    return response;
   }
 
-  private async probeConnectivity(): Promise<PaygateConnectivity> {
-    const apiBase = this.cfg.apiBase;
+  private async probeConnectivity(
+    snapshot: ReturnType<PaygateConfigService['snapshot']>,
+  ): Promise<PaygateConnectivity> {
+    const { apiBase, bearerToken } = snapshot;
     if (!apiBase) {
       return { status: 'skipped', reason: 'PAYGATE_API_BASE no configurado' };
     }
 
     const url = `${apiBase}/pos?limit=1`;
     const headers: Record<string, string> = { Accept: 'application/json' };
-    const token = this.cfg.bearerToken;
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
+    if (bearerToken) {
+      headers.Authorization = `Bearer ${bearerToken}`;
     }
 
     const startedAt = Date.now();
@@ -57,7 +79,7 @@ export class PaygateService {
       const response = await firstValueFrom(
         this.http.get(url, {
           headers,
-          timeout: this.connectivityTimeoutMs,
+          timeout: CONNECTIVITY_TIMEOUT_MS,
           validateStatus: () => true,
         }),
       );
@@ -76,20 +98,29 @@ export class PaygateService {
         };
       }
       return {
-        status: 'unreachable',
+        status: 'unexpected_status',
+        httpStatus: response.status,
         latencyMs,
-        message: `Paygate respondió con HTTP ${response.status}`,
+        message: `Paygate respondió con HTTP ${response.status} (no clasificado)`,
       };
     } catch (err) {
       const latencyMs = Date.now() - startedAt;
-      const message =
-        err instanceof AxiosError
-          ? err.code === 'ECONNABORTED'
-            ? `Timeout (${this.connectivityTimeoutMs}ms)`
-            : (err.message ?? 'Error de red')
-          : 'Error desconocido al conectar con Paygate';
+      const message = this.describeNetworkError(err);
       this.logger.warn(`Paygate connectivity probe failed: ${message}`);
       return { status: 'unreachable', latencyMs, message };
     }
+  }
+
+  private describeNetworkError(err: unknown): string {
+    if (axios.isAxiosError(err)) {
+      if (err.code === 'ECONNABORTED') {
+        return `Timeout (${CONNECTIVITY_TIMEOUT_MS}ms)`;
+      }
+      return err.message || err.code || 'Error de red';
+    }
+    if (err instanceof Error) {
+      return err.message;
+    }
+    return 'Error desconocido al conectar con Paygate';
   }
 }

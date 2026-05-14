@@ -12,7 +12,7 @@ export class PaygateController {
   @ApiOperation({
     summary: 'Verifica configuración de Paygate y conectividad sandbox/prod',
     description:
-      'No requiere autenticación de usuario. Útil para diagnosticar si las credenciales sandbox de Paygate están bien configuradas. Hace un GET a /pos?limit=1 contra el API base configurado.',
+      'Endpoint de diagnóstico. Hace un GET a /pos?limit=1 contra el API base configurado y reporta el estado. El resultado se cachea 30s en memoria para evitar fan-out hacia Paygate ante requests masivos; `cached: true` indica que el cuerpo viene del cache.',
   })
   async health(): Promise<PaygateHealthResponse> {
     return this.paygate.health();

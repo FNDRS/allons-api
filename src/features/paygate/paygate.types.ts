@@ -12,6 +12,12 @@ export type PaygateConnectivity =
       latencyMs: number;
       message: string;
     }
+  | {
+      status: 'unexpected_status';
+      httpStatus: number;
+      latencyMs: number;
+      message: string;
+    }
   | { status: 'unreachable'; latencyMs: number; message: string }
   | { status: 'skipped'; reason: string };
 
@@ -23,4 +29,5 @@ export interface PaygateHealthResponse {
   missing: PaygateHealthMissing;
   connectivity: PaygateConnectivity;
   checkedAt: string;
+  cached: boolean;
 }

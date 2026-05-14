@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 export interface PaygateConfig {
@@ -9,47 +9,84 @@ export interface PaygateConfig {
   currency: string;
 }
 
+const DEFAULT_LINK_EXPIRATION_HOURS = 2;
+const DEFAULT_CURRENCY = 'HNL';
+
 @Injectable()
 export class PaygateConfigService {
-  constructor(private readonly config: ConfigService) {}
+  private readonly logger = new Logger(PaygateConfigService.name);
+  private readonly cached: PaygateConfig;
+
+  constructor(config: ConfigService) {
+    this.cached = this.load(config);
+  }
 
   get apiBase(): string | null {
-    const raw = this.config.get<string>('PAYGATE_API_BASE');
-    if (!raw) return null;
-    return raw.trim().replace(/\/+$/, '');
+    return this.cached.apiBase;
   }
 
   get bearerToken(): string | null {
-    const raw = this.config.get<string>('PAYGATE_BEARER_TOKEN');
-    return raw && raw.trim().length > 0 ? raw.trim() : null;
+    return this.cached.bearerToken;
   }
 
   get webhookSecret(): string | null {
-    const raw = this.config.get<string>('PAYGATE_WEBHOOK_SECRET');
-    return raw && raw.trim().length > 0 ? raw.trim() : null;
+    return this.cached.webhookSecret;
   }
 
   get linkExpirationHours(): number {
-    const raw = this.config.get<string>('PAYGATE_LINK_EXPIRATION_HOURS');
-    const parsed = raw ? Number.parseInt(raw, 10) : NaN;
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 2;
+    return this.cached.linkExpirationHours;
   }
 
   get currency(): string {
-    return (this.config.get<string>('PAYGATE_CURRENCY') ?? 'HNL').toUpperCase();
+    return this.cached.currency;
   }
 
   snapshot(): PaygateConfig {
-    return {
-      apiBase: this.apiBase,
-      bearerToken: this.bearerToken,
-      webhookSecret: this.webhookSecret,
-      linkExpirationHours: this.linkExpirationHours,
-      currency: this.currency,
-    };
+    return { ...this.cached };
   }
 
   isFullyConfigured(): boolean {
-    return Boolean(this.apiBase && this.bearerToken);
+    return Boolean(this.cached.apiBase && this.cached.bearerToken);
+  }
+
+  private load(config: ConfigService): PaygateConfig {
+    const rawApiBase = config.get<string>('PAYGATE_API_BASE');
+    const apiBase = rawApiBase?.trim()
+      ? rawApiBase.trim().replace(/\/+$/, '')
+      : null;
+
+    const rawToken = config.get<string>('PAYGATE_BEARER_TOKEN');
+    const bearerToken = rawToken?.trim() ? rawToken.trim() : null;
+
+    const rawSecret = config.get<string>('PAYGATE_WEBHOOK_SECRET');
+    const webhookSecret = rawSecret?.trim() ? rawSecret.trim() : null;
+
+    const rawCurrency = config.get<string>('PAYGATE_CURRENCY');
+    const currency = (rawCurrency ?? DEFAULT_CURRENCY).toUpperCase();
+
+    const rawExpiration = config.get<string>('PAYGATE_LINK_EXPIRATION_HOURS');
+    const linkExpirationHours = this.parseExpirationHours(rawExpiration);
+
+    return {
+      apiBase,
+      bearerToken,
+      webhookSecret,
+      linkExpirationHours,
+      currency,
+    };
+  }
+
+  private parseExpirationHours(raw: string | undefined): number {
+    if (raw === undefined || raw === null || raw.trim() === '') {
+      return DEFAULT_LINK_EXPIRATION_HOURS;
+    }
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      this.logger.warn(
+        `PAYGATE_LINK_EXPIRATION_HOURS="${raw}" no es un entero positivo; usando default ${DEFAULT_LINK_EXPIRATION_HOURS}h. Configura un valor válido para evitar expiraciones inesperadas en payment links.`,
+      );
+      return DEFAULT_LINK_EXPIRATION_HOURS;
+    }
+    return parsed;
   }
 }
