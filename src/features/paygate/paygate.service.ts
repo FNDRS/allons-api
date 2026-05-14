@@ -1,11 +1,16 @@
-import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
-import { firstValueFrom } from 'rxjs';
-import axios from 'axios';
+import { PaygateClient } from './paygate.client';
 import { PaygateConfigService } from './paygate.config';
-import type { PaygateConnectivity, PaygateHealthResponse } from './paygate.types';
+import { PaygateApiError, PaygateNetworkError } from './paygate.errors';
+import type {
+  CreatePaymentLinkInput,
+  PaygateConnectivity,
+  PaygateHealthResponse,
+  PaygatePaymentLink,
+  PaygatePaymentLinkRaw,
+} from './paygate.types';
 
-const CONNECTIVITY_TIMEOUT_MS = 5_000;
+const HEALTH_PROBE_TIMEOUT_MS = 5_000;
 const HEALTH_CACHE_TTL_MS = 30_000;
 
 interface CachedHealth {
@@ -20,8 +25,12 @@ export class PaygateService {
 
   constructor(
     private readonly cfg: PaygateConfigService,
-    private readonly http: HttpService,
+    private readonly client: PaygateClient,
   ) {}
+
+  // ===================================================================
+  // Health
+  // ===================================================================
 
   async health(): Promise<PaygateHealthResponse> {
     const now = Date.now();
@@ -36,7 +45,7 @@ export class PaygateService {
       webhookSecret: !snapshot.webhookSecret,
     };
 
-    const connectivity = await this.probeConnectivity(snapshot);
+    const connectivity = await this.probeConnectivity();
 
     const response: PaygateHealthResponse = {
       configured: Boolean(snapshot.apiBase && snapshot.bearerToken),
@@ -57,67 +66,132 @@ export class PaygateService {
     return response;
   }
 
-  private async probeConnectivity(
-    snapshot: ReturnType<PaygateConfigService['snapshot']>,
-  ): Promise<PaygateConnectivity> {
-    const { apiBase, bearerToken } = snapshot;
-    if (!apiBase) {
-      return { status: 'skipped', reason: 'PAYGATE_API_BASE no configurado' };
+  private async probeConnectivity(): Promise<PaygateConnectivity> {
+    if (!this.cfg.apiBase) {
+      return { status: 'skipped', reason: 'PAYGATE_API_BASE not configured' };
     }
-
-    const url = `${apiBase}/pos?limit=1`;
-    const headers: Record<string, string> = { Accept: 'application/json' };
-    if (bearerToken) {
-      headers.Authorization = `Bearer ${bearerToken}`;
+    if (!this.cfg.bearerToken) {
+      return {
+        status: 'unauthorized',
+        httpStatus: 401,
+        latencyMs: 0,
+        message: 'PAYGATE_BEARER_TOKEN not configured',
+      };
     }
 
     const startedAt = Date.now();
     try {
-      const response = await firstValueFrom(
-        this.http.get(url, {
-          headers,
-          timeout: CONNECTIVITY_TIMEOUT_MS,
-          validateStatus: () => true,
-        }),
-      );
-      const latencyMs = Date.now() - startedAt;
-
-      if (response.status === 200) {
-        return { status: 'ok', httpStatus: 200, latencyMs };
-      }
-      if (response.status === 401 || response.status === 403) {
-        return {
-          status: 'unauthorized',
-          httpStatus: response.status,
-          latencyMs,
-          message:
-            'Paygate respondió pero el bearer token es inválido o no fue enviado',
-        };
-      }
+      await this.client.get('/pos?limit=1', {
+        timeoutMs: HEALTH_PROBE_TIMEOUT_MS,
+      });
       return {
-        status: 'unexpected_status',
-        httpStatus: response.status,
-        latencyMs,
-        message: `Paygate respondió con HTTP ${response.status} (no clasificado)`,
+        status: 'ok',
+        httpStatus: 200,
+        latencyMs: Date.now() - startedAt,
       };
     } catch (err) {
       const latencyMs = Date.now() - startedAt;
-      const message = this.describeNetworkError(err);
-      this.logger.warn(`Paygate connectivity probe failed: ${message}`);
-      return { status: 'unreachable', latencyMs, message };
+      if (err instanceof PaygateApiError) {
+        if (err.httpStatus === 401 || err.httpStatus === 403) {
+          return {
+            status: 'unauthorized',
+            httpStatus: err.httpStatus,
+            latencyMs,
+            message:
+              err.message ||
+              'Paygate rejected the request; bearer token is invalid or absent',
+          };
+        }
+        return {
+          status: 'unexpected_status',
+          httpStatus: err.httpStatus,
+          latencyMs,
+          message: err.message,
+        };
+      }
+      if (err instanceof PaygateNetworkError) {
+        this.logger.warn(`Paygate connectivity probe failed: ${err.message}`);
+        return { status: 'unreachable', latencyMs, message: err.message };
+      }
+      this.logger.warn(
+        `Paygate connectivity probe failed unexpectedly: ${String(err)}`,
+      );
+      return {
+        status: 'unreachable',
+        latencyMs,
+        message: 'Unknown error talking to Paygate',
+      };
     }
   }
 
-  private describeNetworkError(err: unknown): string {
-    if (axios.isAxiosError(err)) {
-      if (err.code === 'ECONNABORTED') {
-        return `Timeout (${CONNECTIVITY_TIMEOUT_MS}ms)`;
-      }
-      return err.message || err.code || 'Error de red';
-    }
-    if (err instanceof Error) {
-      return err.message;
-    }
-    return 'Error desconocido al conectar con Paygate';
+  // ===================================================================
+  // Payment links
+  // ===================================================================
+
+  /**
+   * Creates a single-payment hosted link in Paygate.
+   *
+   * Falls back to `PAYGATE_CURRENCY` and `PAYGATE_LINK_EXPIRATION_HOURS`
+   * from config when the input omits them. Returns a normalized
+   * `PaygatePaymentLink` (Paygate's `_id` is exposed as `id`).
+   */
+  async createPaymentLink(
+    input: CreatePaymentLinkInput,
+  ): Promise<PaygatePaymentLink> {
+    const expirationHours =
+      input.expirationHours ?? this.cfg.linkExpirationHours;
+    const currency = input.currency ?? (this.cfg.currency as 'HNL' | 'USD');
+
+    const body = {
+      description: input.description,
+      amount: input.amount,
+      currency,
+      tax: input.tax ?? 0,
+      expires: true,
+      expiration: expirationHours,
+    };
+
+    const raw = await this.client.post<PaygatePaymentLinkRaw>(
+      '/pos/payment',
+      body,
+    );
+    return mapPaymentLink(raw);
   }
+
+  /**
+   * Fetches the current state of a payment link by Paygate ID. Useful
+   * as a backup path when an expected webhook is delayed or missed.
+   */
+  async getPaymentLinkDetail(paygateId: string): Promise<PaygatePaymentLink> {
+    const raw = await this.client.get<PaygatePaymentLinkRaw>(
+      `/pos/${encodeURIComponent(paygateId)}`,
+    );
+    return mapPaymentLink(raw);
+  }
+
+  /**
+   * Cancels a payment link in Paygate. Idempotent on our side: Paygate
+   * may return 404 if the link is already cancelled — callers should
+   * decide whether that's an error in their context.
+   */
+  async cancelPaymentLink(paygateId: string): Promise<void> {
+    await this.client.delete<unknown>(`/pos/${encodeURIComponent(paygateId)}`);
+  }
+}
+
+function mapPaymentLink(raw: PaygatePaymentLinkRaw): PaygatePaymentLink {
+  return {
+    id: raw._id,
+    link: raw.link ?? '',
+    amount: raw.amount,
+    subtotal: raw.subtotal,
+    tax: raw.tax,
+    description: raw.description,
+    expires: raw.expires,
+    expirationHours: raw.expiration,
+    currency: raw.currency,
+    numberOfProcesses: raw.numberOfProcesses,
+    isOpenAmount: raw.isOpenAmount,
+    status: raw.status,
+  };
 }

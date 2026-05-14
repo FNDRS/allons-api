@@ -138,7 +138,11 @@ export class EventsController {
     @Query('exclude_cities') exclude_cities?: string | string[],
     @Query('types') types?: string | string[],
   ) {
-    const where = this.buildWhere({ cities, excludeCities: exclude_cities, types });
+    const where = this.buildWhere({
+      cities,
+      excludeCities: exclude_cities,
+      types,
+    });
 
     return this.prisma.event
       .findMany({
