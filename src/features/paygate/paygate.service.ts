@@ -3,10 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { firstValueFrom } from 'rxjs';
 import axios from 'axios';
 import { PaygateConfigService } from './paygate.config';
-import type {
-  PaygateConnectivity,
-  PaygateHealthResponse,
-} from './paygate.types';
+import type { PaygateConnectivity, PaygateHealthResponse } from './paygate.types';
 
 const CONNECTIVITY_TIMEOUT_MS = 5_000;
 const HEALTH_CACHE_TTL_MS = 30_000;

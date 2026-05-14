@@ -1,14 +1,9 @@
-export interface PaygateHealthMissing {
-  apiBase: boolean;
-  bearerToken: boolean;
-  webhookSecret: boolean;
-}
-
 export type PaygateConnectivity =
-  | { status: 'ok'; httpStatus: number; latencyMs: number }
+  | { status: 'skipped'; reason: string }
+  | { status: 'ok'; httpStatus: 200; latencyMs: number }
   | {
       status: 'unauthorized';
-      httpStatus: number;
+      httpStatus: 401 | 403;
       latencyMs: number;
       message: string;
     }
@@ -18,15 +13,18 @@ export type PaygateConnectivity =
       latencyMs: number;
       message: string;
     }
-  | { status: 'unreachable'; latencyMs: number; message: string }
-  | { status: 'skipped'; reason: string };
+  | { status: 'unreachable'; latencyMs: number; message: string };
 
 export interface PaygateHealthResponse {
   configured: boolean;
   apiBase: string | null;
   currency: string;
   linkExpirationHours: number;
-  missing: PaygateHealthMissing;
+  missing: {
+    apiBase: boolean;
+    bearerToken: boolean;
+    webhookSecret: boolean;
+  };
   connectivity: PaygateConnectivity;
   checkedAt: string;
   cached: boolean;

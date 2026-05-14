@@ -29,6 +29,7 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -36,7 +37,25 @@ jobs:
       - name: Prisma Generate
         run: pnpm exec prisma generate
 
-      - name: CI
+      - name: ESLint (no autofix)
         env:
           CI: true
-        run: pnpm run ci
+        run: pnpm run lint:check
+
+      - name: Prettier
+        run: pnpm run format:check
+
+      - name: Unit tests
+        env:
+          CI: true
+        run: pnpm run test
+
+      - name: E2E tests
+        env:
+          CI: true
+        run: pnpm run test:e2e
+
+      - name: Build (Nest compile)
+        env:
+          CI: true
+        run: pnpm run build
