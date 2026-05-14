@@ -83,7 +83,7 @@ export class PaygateConfigService {
     const parsed = Number.parseInt(raw, 10);
     if (!Number.isFinite(parsed) || parsed <= 0) {
       this.logger.warn(
-        `PAYGATE_LINK_EXPIRATION_HOURS="${raw}" no es un entero positivo; usando default ${DEFAULT_LINK_EXPIRATION_HOURS}h. Configura un valor válido para evitar expiraciones inesperadas en payment links.`,
+        `PAYGATE_LINK_EXPIRATION_HOURS="${raw}" is not a positive integer; falling back to default ${DEFAULT_LINK_EXPIRATION_HOURS}h. Set a valid value to avoid unexpected payment-link expirations.`,
       );
       return DEFAULT_LINK_EXPIRATION_HOURS;
     }

@@ -10,9 +10,9 @@ export class PaygateController {
 
   @Get('health')
   @ApiOperation({
-    summary: 'Verifica configuración de Paygate y conectividad sandbox/prod',
+    summary: 'Paygate configuration and connectivity probe',
     description:
-      'Endpoint de diagnóstico. Hace un GET a /pos?limit=1 contra el API base configurado y reporta el estado. El resultado se cachea 30s en memoria para evitar fan-out hacia Paygate ante requests masivos; `cached: true` indica que el cuerpo viene del cache.',
+      'Diagnostic endpoint: GET /pos?limit=1 against the configured Paygate base URL and returns status. The response is cached in memory (~30s) to avoid fan-out under load; `cached: true` means the payload came from cache.',
   })
   async health(): Promise<PaygateHealthResponse> {
     return this.paygate.health();

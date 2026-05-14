@@ -12,6 +12,7 @@ import { ConversationsModule } from './features/conversations/conversations.modu
 import { MeModule } from './features/me/me.module';
 import { AdminModule } from './features/admin/admin.module';
 import { PaygateModule } from './features/paygate/paygate.module';
+import { PaymentsModule } from './features/payments/payments.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -30,6 +31,7 @@ import { AppService } from './app.service';
     MeModule,
     AdminModule,
     PaygateModule,
+    PaymentsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
