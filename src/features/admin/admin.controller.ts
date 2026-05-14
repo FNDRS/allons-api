@@ -46,8 +46,7 @@ export class AdminController {
       where: { createdAt: { gte: from } },
     });
 
-    const scans30dPromise = this.prisma
-      .$queryRaw<Array<{ total: number }>>`
+    const scans30dPromise = this.prisma.$queryRaw<Array<{ total: number }>>`
         SELECT COUNT(*)::int AS total
         FROM provider_scan_records
         WHERE status = 'valid'

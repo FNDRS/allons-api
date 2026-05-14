@@ -28,7 +28,9 @@ export class AdminSecretGuard implements CanActivate {
     const expected = this.config.get<string>('ADMIN_API_SECRET') ?? '';
 
     if (!expected) {
-      this.logger.error('ADMIN_API_SECRET is not set — rejecting all admin requests.');
+      this.logger.error(
+        'ADMIN_API_SECRET is not set — rejecting all admin requests.',
+      );
       throw new UnauthorizedException('Admin access not configured');
     }
 
