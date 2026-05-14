@@ -35,7 +35,7 @@ const BODY = '{"_id":"abc","status":"APPROVED"}';
 const RAW = Buffer.from(BODY, 'utf8');
 
 describe('PaygateWebhookController', () => {
-  it('accepts with a warning when PAYGATE_WEBHOOK_SECRET is unset (Phase 0 capture mode)', async () => {
+  it('accepts with a warning when PAYGATE_WEBHOOK_SECRET is unset', async () => {
     const warn = jest
       .spyOn(Logger.prototype, 'warn')
       .mockImplementation(() => {});

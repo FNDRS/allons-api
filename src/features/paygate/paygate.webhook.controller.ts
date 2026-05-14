@@ -29,7 +29,7 @@ export class PaygateWebhookController {
   @ApiOperation({
     summary: 'Paygate (Clinpays) webhook receiver',
     description:
-      'Public endpoint Paygate calls when a payment status changes. If PAYGATE_WEBHOOK_SECRET is configured, the request must carry a valid HMAC signature (default header `x-paygate-signature`); otherwise the request is rejected with 401. When the secret is unset (Phase 0 capture mode) the request is accepted with a warning log so payloads can be inspected before signature validation is enforced. Order-state transitions and ticket creation happen in Phase 3.',
+      'Public endpoint Paygate calls when a payment status changes. If PAYGATE_WEBHOOK_SECRET is configured, the request must carry a valid HMAC signature (default header `x-paygate-signature`); otherwise the request is rejected with 401. When the secret is unset, the request is accepted with a warning log so payloads can be inspected before signature validation is enforced.',
   })
   handleWebhook(
     @Req() req: RawBodyRequest<Request>,
@@ -73,9 +73,9 @@ export class PaygateWebhookController {
       `Paygate webhook received${eventHint ? ` (event=${String(eventHint)})` : ''}`,
     );
 
-    // TODO(phase-3): parse `req.body` as PaygateWebhookPayload, look up
-    // the matching payment_orders row, transition state, and create
-    // tickets. Today we only acknowledge so payloads can be captured.
+    // TODO: parse `req.body` as PaygateWebhookPayload, look up the
+    // matching payment_orders row, transition state, and create tickets.
+    // For now we only acknowledge so payloads can be captured.
 
     return { ok: true };
   }

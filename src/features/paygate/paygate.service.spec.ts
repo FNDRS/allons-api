@@ -27,7 +27,7 @@ const FULL_ENV = {
   PAYGATE_LINK_EXPIRATION_HOURS: '2',
 };
 
-describe('PaygateService.health (Phase 0)', () => {
+describe('PaygateService.health', () => {
   it('returns skipped when PAYGATE_API_BASE is missing', async () => {
     const get = jest.fn();
     const { service } = buildService({}, { get });
@@ -117,7 +117,7 @@ describe('PaygateService.health (Phase 0)', () => {
   });
 });
 
-describe('PaygateService.createPaymentLink (Phase 1)', () => {
+describe('PaygateService.createPaymentLink', () => {
   it('posts to /pos/payment with defaults from config and maps the response', async () => {
     const raw: PaygatePaymentLinkRaw = {
       _id: 'link-1',
@@ -215,7 +215,7 @@ describe('PaygateService.createPaymentLink (Phase 1)', () => {
   });
 });
 
-describe('PaygateService.getPaymentLinkDetail (Phase 1)', () => {
+describe('PaygateService.getPaymentLinkDetail', () => {
   it('GETs /pos/:id and maps the response', async () => {
     const get = jest.fn().mockResolvedValue({
       _id: 'link-1',
@@ -264,7 +264,7 @@ describe('PaygateService.getPaymentLinkDetail (Phase 1)', () => {
   });
 });
 
-describe('PaygateService.cancelPaymentLink (Phase 1)', () => {
+describe('PaygateService.cancelPaymentLink', () => {
   it('DELETEs /pos/:id', async () => {
     const del = jest.fn().mockResolvedValue(undefined);
     const { service } = buildService(FULL_ENV, { delete: del });
