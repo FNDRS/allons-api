@@ -12,9 +12,9 @@
 import { createClient } from '@supabase/supabase-js';
 import { PrismaClient } from '../../generated/prisma';
 
-const EMAIL_CLIENTE = 'demo+cliente@allonsapp.com';
-const EMAIL_COMERCIO = 'demo+comercio@allonsapp.com';
-const EMAIL_STAFF = 'demo+staff@allonsapp.com';
+const EMAIL_CLIENTE = 'marlon.castro+cliente@allonsapp.com';
+const EMAIL_COMERCIO = 'marlon.castro+comercio@allonsapp.com';
+const EMAIL_STAFF = 'marlon.castro+staff@allonsapp.com';
 
 const prisma = new PrismaClient();
 

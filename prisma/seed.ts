@@ -645,7 +645,7 @@ async function main() {
   await prisma.$executeRaw`
     INSERT INTO provider_activity_log (provider_id, type, message, meta)
     VALUES
-      (${demoPanelProvider.id}::uuid, 'event', 'Seed inicial del panel provider', 'demo+comercio1@allonsapp.com'),
+      (${demoPanelProvider.id}::uuid, 'event', 'Seed inicial del panel provider', 'marlon.castro+comercio1@allonsapp.com'),
       (${demoPanelProvider.id}::uuid, 'sale', 'Ventas de ejemplo cargadas', 'dataset-seed'),
       (${demoPanelProvider.id}::uuid, 'scan', 'Escaneos de ejemplo cargados', 'dataset-seed')
     ON CONFLICT DO NOTHING

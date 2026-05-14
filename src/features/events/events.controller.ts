@@ -15,6 +15,7 @@ export class EventsController {
   private buildWhere(params: {
     city?: string;
     cities?: string | string[];
+    excludeCities?: string | string[];
     types?: string | string[];
     from?: string;
     to?: string;
@@ -22,12 +23,20 @@ export class EventsController {
     const cities = [
       ...new Set([params.city, ...parseList(params.cities)]),
     ].filter(Boolean) as string[];
+    const excludeCities = parseList(params.excludeCities);
     const types = parseList(params.types);
     const from = parseDate(params.from);
     const to = parseDate(params.to);
 
+    let cityClause: Record<string, unknown> = {};
+    if (excludeCities.length > 0) {
+      cityClause = { city: { notIn: excludeCities } };
+    } else if (cities.length > 0) {
+      cityClause = { city: { in: cities } };
+    }
+
     return {
-      ...(cities.length > 0 ? { city: { in: cities } } : {}),
+      ...cityClause,
       ...(types.length > 0
         ? {
             interests: {
@@ -102,9 +111,10 @@ export class EventsController {
   @Get('friends')
   async friends(
     @Query('cities') cities?: string | string[],
+    @Query('exclude_cities') exclude_cities?: string | string[],
     @Query('types') types?: string | string[],
   ) {
-    const where = this.buildWhere({ cities, types });
+    const where = this.buildWhere({ cities, excludeCities: exclude_cities, types });
 
     return this.prisma.event
       .findMany({
