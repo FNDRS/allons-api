@@ -47,8 +47,7 @@ export class PaygateWebhookController {
       'HMAC signature of the raw body when the webhook secret is configured.',
   })
   @ApiBody({
-    description:
-      'Paygate event JSON (shape per merchant documentation).',
+    description: 'Paygate event JSON (shape per merchant documentation).',
     schema: {
       type: 'object',
       additionalProperties: true,

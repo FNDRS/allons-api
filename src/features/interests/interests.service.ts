@@ -109,13 +109,12 @@ export class InterestsService {
       slug,
     }));
 
-    const { error: upsertInterestsError } = await db.from('interests').upsert(
-      interestUpsertRows,
-      {
+    const { error: upsertInterestsError } = await db
+      .from('interests')
+      .upsert(interestUpsertRows, {
         onConflict: 'slug',
         ignoreDuplicates: true,
-      },
-    );
+      });
     if (upsertInterestsError)
       throw new InternalServerErrorException(upsertInterestsError.message);
 

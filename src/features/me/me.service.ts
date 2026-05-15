@@ -108,6 +108,11 @@ export class MeService {
    * the first invocation. Subsequent calls in the same process skip
    * the DDL entirely. On Supabase's pooled, cross-region setup these
    * round-trips dominate request latency.
+   *
+   * These booleans are never reset for the lifetime of the process (same
+   * tradeoff as `ProvidersService.infraReady`): other instances or a DB
+   * restore without redeploy would not self-heal via DDL here — prefer
+   * proper migrations for durable schema.
    */
   private infraReady = {
     ticketHolders: false,
@@ -708,16 +713,17 @@ export class MeService {
       }
       seenEmails.add(normalized);
     }
-    for (let i = 0; i < holders.length; i += 1) {
-      const holder = holders[i];
-      await this.timed(correlationId, `assertNoDupe[${i}]`, () =>
-        this.assertNoDuplicateTicketForEventAndEmail(
-          event.id,
-          holder.email,
-          'purchase',
+    await Promise.all(
+      holders.map((holder, i) =>
+        this.timed(correlationId, `assertNoDupe[${i}]`, () =>
+          this.assertNoDuplicateTicketForEventAndEmail(
+            event.id,
+            holder.email,
+            'purchase',
+          ),
         ),
-      );
-    }
+      ),
+    );
 
     // Make sure the provider sales infra exists BEFORE entering the
     // transaction. The DDL is now memoized (no-op after the first call
@@ -732,8 +738,9 @@ export class MeService {
     // and the whole thing is atomic — partial state on failure can't
     // leak (e.g. tickets without holders, or sold_count drift).
     const txResult = await this.timed(correlationId, 'tx.write_bundle', () =>
-      this.prisma.$transaction(async (tx) => {
-        const inserted = await tx.$queryRaw<Array<{ id: string }>>`
+      this.prisma.$transaction(
+        async (tx) => {
+          const inserted = await tx.$queryRaw<Array<{ id: string }>>`
           INSERT INTO tickets (
             owner_id,
             event_id,
@@ -752,23 +759,25 @@ export class MeService {
           FROM generate_series(1, ${quantity}::int)
           RETURNING id
         `;
-        if (inserted.length === 0) {
-          throw new InternalServerErrorException('No se pudo crear el ticket');
-        }
+          if (inserted.length === 0) {
+            throw new InternalServerErrorException(
+              'No se pudo crear el ticket',
+            );
+          }
 
-        const holderValues = Prisma.join(
-          inserted.map((row, i) => {
-            const holder = holders[i];
-            return Prisma.sql`(
+          const holderValues = Prisma.join(
+            inserted.map((row, i) => {
+              const holder = holders[i];
+              return Prisma.sql`(
               ${row.id}::uuid,
               ${holder.name},
               ${holder.email},
               ${holder.holderUserId}::uuid,
               ${holder.holderUserId ? new Date() : null}
             )`;
-          }),
-        );
-        await tx.$executeRaw`
+            }),
+          );
+          await tx.$executeRaw`
           INSERT INTO ticket_holders (
             ticket_id,
             holder_name,
@@ -779,11 +788,11 @@ export class MeService {
           VALUES ${holderValues}
         `;
 
-        let selectedTicketType: { id: string; price: number } | null = null;
-        if (event.providerId) {
-          const ticketTypeRows = await tx.$queryRaw<
-            Array<{ id: string; price: number }>
-          >`
+          let selectedTicketType: { id: string; price: number } | null = null;
+          if (event.providerId) {
+            const ticketTypeRows = await tx.$queryRaw<
+              Array<{ id: string; price: number }>
+            >`
             SELECT id, price::float8 AS price
             FROM provider_event_ticket_types
             WHERE event_id = ${event.id}::uuid
@@ -798,17 +807,17 @@ export class MeService {
               created_at ASC
             LIMIT 1
           `;
-          selectedTicketType = ticketTypeRows[0] ?? null;
+            selectedTicketType = ticketTypeRows[0] ?? null;
 
-          if (selectedTicketType?.id) {
-            await tx.$executeRaw`
+            if (selectedTicketType?.id) {
+              await tx.$executeRaw`
               UPDATE provider_event_ticket_types
               SET sold_count = sold_count + ${quantity},
                   updated_at = now()
               WHERE id = ${selectedTicketType.id}::uuid
             `;
-          }
-          await tx.$executeRaw`
+            }
+            await tx.$executeRaw`
             INSERT INTO provider_activity_log (provider_id, type, message, meta)
             VALUES (
               ${event.providerId}::uuid,
@@ -817,10 +826,17 @@ export class MeService {
               ${selectedTicketType ? `L. ${Number(selectedTicketType.price).toFixed(2)}` : null}
             )
           `;
-        }
+          }
 
-        return { inserted, selectedTicketType };
-      }),
+          return { inserted, selectedTicketType };
+        },
+        {
+          // Interactive tx defaults (~2s wait / ~5s timeout) are too tight for
+          // cross-region pooler latency when several statements run serially.
+          maxWait: 10_000,
+          timeout: 30_000,
+        },
+      ),
     );
     const createdRows = txResult.inserted;
     const referralApplied =

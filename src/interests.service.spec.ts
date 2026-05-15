@@ -80,7 +80,13 @@ describe('InterestsService', () => {
         eq: jest.fn(() => Promise.resolve({ error: null })),
         select: jest.fn(() => c),
         in: jest.fn(() =>
-          Promise.resolve({ data: [{ id: 'i1' }], error: null }),
+          Promise.resolve({
+            data: [
+              { id: 'i1', name: 'music', slug: 'music' },
+              { id: 'i2', name: 'art', slug: 'art' },
+            ],
+            error: null,
+          }),
         ),
         insert: jest.fn(() => Promise.resolve({ error: null })),
       };

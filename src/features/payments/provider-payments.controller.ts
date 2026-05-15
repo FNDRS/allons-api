@@ -22,7 +22,7 @@ export class ProviderPaymentsController {
   @ApiOperation({
     summary: 'Event payments (provider view)',
     description:
-      'Lists an event\'s payment orders plus an aggregated summary (paid GMV, pending, failed). Only the event owner provider.',
+      "Lists an event's payment orders plus an aggregated summary (paid GMV, pending, failed). Only the event owner provider.",
   })
   @ApiParam({ name: 'eventId', format: 'uuid' })
   async listForEvent(@Req() req: Request, @Param('eventId') eventId: string) {
