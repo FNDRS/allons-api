@@ -220,35 +220,37 @@ describe('AppController (e2e)', () => {
       _count: { attendees: 3 },
     });
 
-    prismaMock.$queryRaw.mockResolvedValueOnce([
-      {
-        holder_email: 'a@b.com',
-        holder_name: 'Ana',
-        user_id: null,
-        full_name: null,
-        username: null,
-        avatar_url: null,
-        avatar_color: null,
-      },
-      {
-        holder_email: 'b@b.com',
-        holder_name: 'Beto',
-        user_id: null,
-        full_name: null,
-        username: null,
-        avatar_url: null,
-        avatar_color: null,
-      },
-      {
-        holder_email: 'c@b.com',
-        holder_name: 'Carla',
-        user_id: null,
-        full_name: null,
-        username: null,
-        avatar_url: null,
-        avatar_color: null,
-      },
-    ]);
+    prismaMock.$queryRaw
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          holder_email: 'a@b.com',
+          holder_name: 'Ana',
+          user_id: null,
+          full_name: null,
+          username: null,
+          avatar_url: null,
+          avatar_color: null,
+        },
+        {
+          holder_email: 'b@b.com',
+          holder_name: 'Beto',
+          user_id: null,
+          full_name: null,
+          username: null,
+          avatar_url: null,
+          avatar_color: null,
+        },
+        {
+          holder_email: 'c@b.com',
+          holder_name: 'Carla',
+          user_id: null,
+          full_name: null,
+          username: null,
+          avatar_url: null,
+          avatar_color: null,
+        },
+      ]);
 
     const res = await request(app.getHttpServer())
       .get('/events/e1')

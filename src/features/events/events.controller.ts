@@ -177,6 +177,22 @@ export class EventsController {
 
     if (!event) throw new NotFoundException('Evento no encontrado');
 
+    const ticketTypeRows = await this.prisma.$queryRaw<
+      Array<{ id: string; name: string; price: number }>
+    >`
+      SELECT id, name, price::float8 AS price
+      FROM provider_event_ticket_types
+      WHERE event_id = ${id}::uuid
+        AND active = true
+      ORDER BY created_at ASC
+    `;
+
+    const entryTypes = (ticketTypeRows ?? []).map((row) => ({
+      id: row.id,
+      name: row.name,
+      priceCents: Math.round(Number(row.price) * 100),
+    }));
+
     const attendeeRows = await this.prisma.$queryRaw<
       Array<{
         holder_email: string;
@@ -229,6 +245,7 @@ export class EventsController {
         rating: r.rating,
         createdAt: r.createdAt,
       })),
+      ...(entryTypes.length > 0 ? { entryTypes } : {}),
     };
   }
 }

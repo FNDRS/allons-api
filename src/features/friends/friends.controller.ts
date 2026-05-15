@@ -40,7 +40,7 @@ export class FriendsController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
-    return this.friendsService.listProviderFollowers(user.id, q);
+    return this.friendsService.listFollowersForManagedProvider(user.id, q);
   }
 
   @Post(':friendUserId')

@@ -231,6 +231,39 @@ export class FriendsService {
     return Boolean(rows[0]?.exists);
   }
 
+  /** Primary provider for this user (same ordering as provider panel membership). */
+  private async resolveManagedProviderId(
+    userId: string,
+  ): Promise<string | null> {
+    const rows = await this.prisma.$queryRaw<Array<{ provider_id: string }>>`
+      SELECT provider_id
+      FROM provider_members
+      WHERE user_id = ${userId}::uuid AND active = true
+      ORDER BY
+        CASE role
+          WHEN 'owner' THEN 0
+          WHEN 'admin' THEN 1
+          ELSE 2
+        END ASC,
+        created_at ASC
+      LIMIT 1
+    `;
+    return rows[0]?.provider_id ?? null;
+  }
+
+  /**
+   * Followers of the merchant managed by the authenticated user (provider panel).
+   * Uses `provider_id` from `provider_members`, not `user.id`.
+   */
+  async listFollowersForManagedProvider(
+    userId: string,
+    query?: string,
+  ): Promise<ProviderFollowersDto> {
+    const providerId = await this.resolveManagedProviderId(userId);
+    if (!providerId) return { count: 0, followers: [] };
+    return this.listProviderFollowers(providerId, query);
+  }
+
   async listProviderFollowers(
     providerId: string,
     query?: string,

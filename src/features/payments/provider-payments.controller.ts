@@ -20,9 +20,9 @@ export class ProviderPaymentsController {
 
   @Get('events/:eventId/payments')
   @ApiOperation({
-    summary: 'Pagos de un evento (vista del proveedor)',
+    summary: 'Event payments (provider view)',
     description:
-      'Lista las órdenes de pago de un evento y un resumen agregado (GMV pagado, pendientes, fallidas). Solo el proveedor dueño del evento.',
+      'Lists an event\'s payment orders plus an aggregated summary (paid GMV, pending, failed). Only the event owner provider.',
   })
   @ApiParam({ name: 'eventId', format: 'uuid' })
   async listForEvent(@Req() req: Request, @Param('eventId') eventId: string) {

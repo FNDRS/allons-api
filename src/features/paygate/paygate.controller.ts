@@ -16,7 +16,7 @@ export class PaygateController {
   })
   @ApiOkResponse({
     description:
-      'Configuración (`configured`, `missing`), conectividad (`connectivity`) y metadatos de caché.',
+      'Configuration (`configured`, `missing`), connectivity (`connectivity`), and cache metadata.',
   })
   async health(): Promise<PaygateHealthResponse> {
     return this.paygate.health();
