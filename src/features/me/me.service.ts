@@ -960,14 +960,54 @@ export class MeService {
 
     await this.prisma.ticket.delete({ where: { id: ticket.id } });
 
-    // Surface the cancellation on the provider's activity feed so it
-    // shows up live via Supabase Realtime (the dashboard bell + the
-    // activity-history list both subscribe to provider_activity_log
-    // inserts). Best-effort: the cancel itself already succeeded, so
-    // failing to log shouldn't surface as an error to the buyer.
+    // Surface the cancellation on the provider's activity feed and
+    // free the seat back to availability so a new buyer can claim it.
+    // Both are best-effort: the ticket delete already succeeded, so a
+    // failure here can't be reported as an error to the buyer — the
+    // worst case is that the provider sees stale availability and
+    // needs a manual reconciliation. Both writes invalidate the
+    // realtime feed for the dashboard.
     if (ticket.event?.providerId) {
       await this.ensureProviderSalesTables();
       const eventTitle = ticket.event.title ?? 'evento';
+
+      // Decrement sold_count on the same ticket type the increment
+      // ran against in createTicket. We re-run that same ORDER BY so
+      // the cancel is the mirror image of the sale: in the common case
+      // (one active ticket type, or a "general" + paid types) both
+      // pick the same row. `GREATEST(0, ...)` guards against drift if
+      // the row is somehow already at 0.
+      try {
+        await this.prisma
+          .$executeRaw`
+          WITH selected_type AS (
+            SELECT id
+            FROM provider_event_ticket_types
+            WHERE event_id = ${ticket.event.id}::uuid
+              AND active = true
+            ORDER BY
+              CASE kind
+                WHEN 'general' THEN 0
+                WHEN 'early' THEN 1
+                WHEN 'vip' THEN 2
+                ELSE 3
+              END ASC,
+              created_at ASC
+            LIMIT 1
+          )
+          UPDATE provider_event_ticket_types
+          SET sold_count = GREATEST(0, sold_count - 1),
+              updated_at = now()
+          WHERE id = (SELECT id FROM selected_type)
+        `;
+      } catch (err) {
+        this.logger.warn(
+          `cancelTicket: failed to decrement sold_count for ticket=${ticket.id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+
       try {
         await this.prisma
           .$executeRaw`
