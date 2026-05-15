@@ -978,8 +978,7 @@ export class MeService {
       // pick the same row. `GREATEST(0, ...)` guards against drift if
       // the row is somehow already at 0.
       try {
-        await this.prisma
-          .$executeRaw`
+        await this.prisma.$executeRaw`
           WITH selected_type AS (
             SELECT id
             FROM provider_event_ticket_types
@@ -1009,8 +1008,7 @@ export class MeService {
       }
 
       try {
-        await this.prisma
-          .$executeRaw`
+        await this.prisma.$executeRaw`
           INSERT INTO provider_activity_log (provider_id, type, message, meta)
           VALUES (
             ${ticket.event.providerId}::uuid,
