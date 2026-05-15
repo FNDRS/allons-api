@@ -94,30 +94,53 @@ export class InterestsService {
     if (deleteError)
       throw new InternalServerErrorException(deleteError.message);
 
-    const { error: upsertInterestsError } = await db.from('interests').upsert(
-      normalizedNames.map((name) => ({
-        name,
-        slug: toSlug(name),
-      })),
-      {
-        onConflict: 'name',
+    /** One row per slug so we never hit `interests_slug_key` when names differ but slugs match (e.g. seed `Musica` vs app `Música`). */
+    const slugToDisplayName = new Map<string, string>();
+    for (const name of normalizedNames) {
+      const slug = toSlug(name);
+      if (!slug) {
+        throw new BadRequestException(`Interés inválido: "${name}"`);
+      }
+      if (!slugToDisplayName.has(slug)) slugToDisplayName.set(slug, name);
+    }
+    const slugs = [...slugToDisplayName.keys()];
+    const interestUpsertRows = slugs.map((slug) => ({
+      name: slugToDisplayName.get(slug)!,
+      slug,
+    }));
+
+    const { error: upsertInterestsError } = await db
+      .from('interests')
+      .upsert(interestUpsertRows, {
+        onConflict: 'slug',
         ignoreDuplicates: true,
-      },
-    );
+      });
     if (upsertInterestsError)
       throw new InternalServerErrorException(upsertInterestsError.message);
 
     const { data: interests, error: interestsError } = await db
       .from('interests')
-      .select('id,name')
-      .in('name', normalizedNames);
+      .select('id,name,slug')
+      .in('slug', slugs);
     if (interestsError)
       throw new InternalServerErrorException(interestsError.message);
 
-    const rowsToInsert = (interests ?? []).map((interest: { id: string }) => ({
-      user_id: userId,
-      interest_id: interest.id,
-    }));
+    const seenInterestIds = new Set<string>();
+    const rowsToInsert: { user_id: string; interest_id: string }[] = [];
+    for (const interest of interests ?? []) {
+      if (!interest?.id || seenInterestIds.has(interest.id)) continue;
+      seenInterestIds.add(interest.id);
+      rowsToInsert.push({
+        user_id: userId,
+        interest_id: interest.id,
+      });
+    }
+
+    if (rowsToInsert.length !== slugs.length) {
+      throw new InternalServerErrorException(
+        'No se pudieron resolver todos los intereses tras guardar.',
+      );
+    }
 
     if (rowsToInsert.length > 0) {
       const { error: insertError } = await db

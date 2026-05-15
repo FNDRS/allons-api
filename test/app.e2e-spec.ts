@@ -220,7 +220,7 @@ describe('AppController (e2e)', () => {
       _count: { attendees: 3 },
     });
 
-    prismaMock.$queryRaw.mockResolvedValueOnce([
+    prismaMock.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([
       {
         holder_email: 'a@b.com',
         holder_name: 'Ana',

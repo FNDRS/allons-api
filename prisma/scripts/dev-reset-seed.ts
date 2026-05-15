@@ -4,8 +4,8 @@
  * Env (all required to run):
  *   DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
  *   ALLOW_DEV_DATABASE_RESET=yes
- *   DEV_SEED_PASSWORD=...   — password assigned to each seeded login
- *   DEV_SEED_EMAIL_PREFIX=demo — optional email local-part prefix (default demo → demo+cliente@…)
+ *   DEV_SEED_PASSWORD=...   — temporary password for local accounts created by this script
+ *   DEV_SEED_EMAIL_PREFIX=dev — optional email prefix ({prefix}+cliente|comercio|staff@allonsapp.com); default: dev
  *
  * Run: cd allons-api && pnpm db:seed:dev-reset
  */
@@ -13,10 +13,11 @@
 import { createClient } from '@supabase/supabase-js';
 import { PrismaClient } from '../../generated/prisma';
 
-const seedEmailPrefix = (process.env.DEV_SEED_EMAIL_PREFIX ?? 'demo').trim() || 'demo';
-const EMAIL_CLIENTE = `${seedEmailPrefix}+cliente@allonsapp.com`;
-const EMAIL_COMERCIO = `${seedEmailPrefix}+comercio@allonsapp.com`;
-const EMAIL_STAFF = `${seedEmailPrefix}+staff@allonsapp.com`;
+const devEmailPrefix = (process.env.DEV_SEED_EMAIL_PREFIX ?? 'dev').trim() || 'dev';
+const EMAIL_CLIENTE = `${devEmailPrefix}+cliente@allonsapp.com`;
+const EMAIL_COMERCIO = `${devEmailPrefix}+comercio@allonsapp.com`;
+const EMAIL_STAFF = `${devEmailPrefix}+staff@allonsapp.com`;
+const EMAIL_AMIGO = `${devEmailPrefix}+amigo@allonsapp.com`;
 
 const prisma = new PrismaClient();
 
@@ -120,7 +121,7 @@ async function wipePublicAppTables() {
     try {
       await prisma.$executeRawUnsafe(`DELETE FROM ${table}`);
     } catch {
-      console.warn(`[seed] skip or failed delete: ${table} (missing table?)`);
+      console.warn(`[dev-reset] omitido o falló: ${table} (¿tabla inexistente?)`);
     }
   }
 }
@@ -143,7 +144,7 @@ async function deleteAllAuthUsers() {
     await Promise.all(
       users.map((u) =>
         admin.auth.admin.deleteUser(u.id).catch((e) => {
-          console.warn(`[seed] auth delete warn ${u.id}`, e?.message ?? e);
+          console.warn(`[dev-reset] aviso al borrar usuario ${u.id}`, e?.message ?? e);
         }),
       ),
     );
@@ -203,7 +204,9 @@ async function main() {
   }
   const password = process.env.DEV_SEED_PASSWORD?.trim();
   if (!password || password.length < 8) {
-    throw new Error('Set DEV_SEED_PASSWORD (min 8 chars) for seeded accounts.');
+    throw new Error(
+      'Define DEV_SEED_PASSWORD (mín. 8 caracteres) para las cuentas locales.',
+    );
   }
   if (!process.env.DATABASE_URL) {
     throw new Error('DATABASE_URL is required.');
@@ -212,13 +215,13 @@ async function main() {
     throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.');
   }
 
-  console.log('[seed] wiping app tables…');
+  console.log('[dev-reset] borrando tablas de la app…');
   await wipePublicAppTables();
 
-  console.log('[seed] deleting auth users…');
+  console.log('[dev-reset] eliminando usuarios de autenticación…');
   await deleteAllAuthUsers();
 
-  console.log('[seed] ensure runtime provider DDL…');
+  console.log('[dev-reset] comprobando DDL de proveedor…');
   await ensureRuntimeProviderTables();
 
   const admin = createClient(
@@ -228,7 +231,7 @@ async function main() {
   );
 
   const interestConciertos = await ensureInterest('conciertos', 'Conciertos');
-  const interestMusica = await ensureInterest('musica', 'Musica');
+  const interestMusica = await ensureInterest('musica', 'Música');
   const interestFitness = await ensureInterest(
     'fitness-y-entrenamiento',
     'Fitness y entrenamiento',
@@ -236,11 +239,21 @@ async function main() {
   const interestHack = await ensureInterest('hackathons', 'Hackathons');
   const interestTech = await ensureInterest(
     'ciencia-y-tecnologia',
-    'Ciencia y tecnologia',
+    'Ciencia y tecnología',
+  );
+  const interestComidas = await ensureInterest('comidas', 'Comidas');
+  const interestFerias = await ensureInterest(
+    'ferias-y-convenciones',
+    'Ferias y convenciones',
+  );
+  const interestConferencias = await ensureInterest('conferencias', 'Conferencias');
+  const interestCatas = await ensureInterest(
+    'catas-de-vino-o-cerveza',
+    'Catas de vino o cerveza',
   );
 
-  console.log('[seed] creating Auth users…');
-  const [{ data: uCliente }, { data: uComercio }, { data: uStaff }] =
+  console.log('[dev-reset] creando usuarios de autenticación…');
+  const [{ data: uCliente }, { data: uComercio }, { data: uStaff }, { data: uAmigo }] =
     await Promise.all([
       admin.auth.admin.createUser({
         email: EMAIL_CLIENTE,
@@ -248,8 +261,8 @@ async function main() {
         email_confirm: true,
         user_metadata: {
           role: 'client',
-          full_name: 'Cliente demo',
-          name: 'Cliente demo',
+          full_name: 'Marlon Geovany Castro Mejia',
+          name: 'Marlon Geovany Castro Mejia',
         },
       }),
       admin.auth.admin.createUser({
@@ -258,8 +271,8 @@ async function main() {
         email_confirm: true,
         user_metadata: {
           role: 'provider',
-          full_name: 'Comercio demo',
-          name: 'Comercio demo',
+          full_name: 'Marlon Comercio',
+          name: 'Marlon Comercio',
         },
       }),
       admin.auth.admin.createUser({
@@ -268,9 +281,19 @@ async function main() {
         email_confirm: true,
         user_metadata: {
           role: 'staff',
-          full_name: 'Staff demo',
+          full_name: 'Marlon Staff',
           staff_role: 'scanner',
-          name: 'Staff demo',
+          name: 'Marlon Staff',
+        },
+      }),
+      admin.auth.admin.createUser({
+        email: EMAIL_AMIGO,
+        password,
+        email_confirm: true,
+        user_metadata: {
+          role: 'client',
+          full_name: 'Marlon Amigo',
+          name: 'Marlon Amigo',
         },
       }),
     ]);
@@ -278,47 +301,54 @@ async function main() {
   const idCliente = uCliente?.user?.id;
   const idComercio = uComercio?.user?.id;
   const idStaff = uStaff?.user?.id;
+  const idAmigo = uAmigo?.user?.id;
 
-  if (!idCliente || !idComercio || !idStaff) {
-    console.error(uCliente?.user ?? uCliente, uComercio, uStaff);
+  if (!idCliente || !idComercio || !idStaff || !idAmigo) {
+    console.error(uCliente?.user ?? uCliente, uComercio, uStaff, uAmigo);
     throw new Error('Failed creating one or more auth users.');
   }
 
-  console.log('[seed] profiles…');
+  console.log('[dev-reset] perfiles…');
   await prisma.profile.createMany({
     data: [
       {
         userId: idCliente,
-        fullName: 'Cliente demo',
-        username: 'demo_cliente_seed',
+        fullName: 'Marlon Geovany Castro Mejia',
+        username: 'marlon.castro',
       },
       {
         userId: idComercio,
-        fullName: 'Comercio demo',
-        username: 'demo_comercio_seed',
+        fullName: 'Marlon Comercio',
+        username: 'marlon.comercio',
       },
       {
         userId: idStaff,
-        fullName: 'Staff demo',
-        username: 'demo_staff_seed',
+        fullName: 'Marlon Staff',
+        username: 'marlon.staff',
+      },
+      {
+        userId: idAmigo,
+        fullName: 'Marlon Amigo',
+        username: 'marlon.amigo',
       },
     ],
   });
 
-  console.log('[seed] provider org + staff membership…');
+  console.log('[dev-reset] organización y equipo…');
   const provider = await prisma.provider.create({
     data: {
-      name: 'Comercio demo (seed)',
-      handle: 'demo-seed-org',
-      description: 'Organización de prueba (script prisma/scripts/dev-reset-seed.ts)',
+      name: 'Expresión Cultural HN',
+      handle: 'expresion-cultural-hn',
+      description:
+        'Producción de conciertos, talleres y festivales en Tegucigalpa y San Pedro Sula.',
       websiteUrl: 'https://allonsapp.com',
     },
   });
 
   await prisma.$executeRaw`
     INSERT INTO provider_members (provider_id, user_id, role, active, full_name, email, updated_at)
-    VALUES (${provider.id}::uuid, ${idComercio}::uuid, 'owner', true, 'Comercio demo', ${EMAIL_COMERCIO}, now()),
-           (${provider.id}::uuid, ${idStaff}::uuid, 'staff_scanner', true, 'Staff demo', ${EMAIL_STAFF}, now())
+    VALUES (${provider.id}::uuid, ${idComercio}::uuid, 'owner', true, 'Roberto Castellanos', ${EMAIL_COMERCIO}, now()),
+           (${provider.id}::uuid, ${idStaff}::uuid, 'staff_scanner', true, 'Claudia Reyes', ${EMAIL_STAFF}, now())
     ON CONFLICT (provider_id, user_id)
     DO UPDATE SET
       role = EXCLUDED.role,
@@ -341,21 +371,21 @@ async function main() {
     endType: 'never',
   });
 
-  console.log('[seed] events…');
+  console.log('[dev-reset] eventos…');
   const startsConcert = new Date('2026-06-20T20:00:00-06:00');
   const endsConcert = new Date('2026-06-20T23:00:00-06:00');
   const ev1 = await prisma.event.create({
     data: {
       providerId: provider.id,
       createdBy: idComercio,
-      title: 'Concierto Acústico — Seed Demo',
+      title: 'Concierto acústico: Luna y piedra',
       description:
-        'Evento single público para probar checkout y filtro “eventos normales”.',
+        'Noche íntima de autoras hondureñas. Entradas con pago en línea; aforo limitado.',
       startsAt: startsConcert,
       endsAt: endsConcert,
       city: 'Tegucigalpa',
-      venue: 'Foro Indie Seed',
-      address: 'Col. Kennedy, ejemplo de dirección local',
+      venue: 'Teatro Manuel Bonilla — Sala experimental',
+      address: 'Col. Palmira, frente a Parque La Leona, Tegucigalpa',
       themeColor: '#7C4DFF',
       eventType: 'single',
       parkingAvailable: true,
@@ -377,13 +407,13 @@ async function main() {
   await upsertTicketType(provider.id, ev1.id, {
     name: 'Entrada general',
     kind: 'general',
-    price: 399,
+    price: 580,
     total: 400,
   });
   await upsertTicketType(provider.id, ev1.id, {
-    name: 'Early bird',
+    name: 'Preventa',
     kind: 'early',
-    price: 249,
+    price: 395,
     total: 100,
   });
 
@@ -393,14 +423,14 @@ async function main() {
     data: {
       providerId: provider.id,
       createdBy: idComercio,
-      title: 'Yoga Flow Matutino (clases recurrentes)',
+      title: 'Yoga al amanecer — paquete mayo–junio',
       description:
-        'Martes y jueves. Paquete de clases seed para probar recurrence y reserva multi-fecha.',
+        'Martes y jueves, 6:45 a.m. Paquete de ocho sesiones; compra única del paquete.',
       startsAt: startsClass,
       endsAt: endsClass,
       city: 'San Pedro Sula',
-      venue: 'Estudio Centro Seed',
-      address: 'SPS — dirección ejemplo',
+      venue: 'Shala Prana · Zona gourmet',
+      address: '12 Calle, local 4B, Col. Jardines del Valle, San Pedro Sula',
       themeColor: '#2EC4B6',
       petFriendly: true,
     },
@@ -419,7 +449,7 @@ async function main() {
   await upsertTicketType(provider.id, ev2.id, {
     name: 'Paquete 8 clases Mayo–Jun',
     kind: 'general',
-    price: 1200,
+    price: 1280,
     total: 24,
   });
 
@@ -429,14 +459,14 @@ async function main() {
     data: {
       providerId: provider.id,
       createdBy: idComercio,
-      title: 'Hackathon ciudadana 24h — Allons QA',
+      title: 'Hackathon Ciudad Abierta — 24 horas',
       description:
-        'Evento single formato maratón: ideal para probar talleres sin recurrencia y multi-perfil equipo.',
+        'Reto cívico y datos abiertos; equipos de hasta cuatro personas. Incluye mentorías y cena.',
       startsAt: startsHack,
       endsAt: endsHack,
       city: 'Tegucigalpa',
-      venue: 'Hub Creativo QA',
-      address: 'Zona Tec, ejemplo seed',
+      venue: 'Universidad Nacional Autónoma de Honduras — Edificio A-7',
+      address: 'Boulevard Suyapa, Ciudad Universitaria, Tegucigalpa',
       themeColor: '#00B4D8',
       minAge: 16,
       parkingAvailable: true,
@@ -456,15 +486,169 @@ async function main() {
   await upsertTicketType(provider.id, ev3.id, {
     name: 'Equipo (hasta 4 personas)',
     kind: 'general',
-    price: 0,
+    price: 1650,
     total: 120,
   });
 
-  console.log('[seed] done.');
+  // Free in the app → reservation with “pay at venue” (ticket_mode = free).
+  const startsFeria = new Date('2026-06-14T09:00:00-06:00');
+  const endsFeria = new Date('2026-06-14T18:00:00-06:00');
+  const ev4 = await prisma.event.create({
+    data: {
+      providerId: provider.id,
+      createdBy: idComercio,
+      title: 'Mercado de arte y diseño — acceso libre',
+      description:
+        'Entrada sin costo en la app; compras y consumo se pagan en los puestos el día del evento.',
+      startsAt: startsFeria,
+      endsAt: endsFeria,
+      city: 'Tegucigalpa',
+      venue: 'Plaza República',
+      address: 'Centro histórico, Tegucigalpa',
+      themeColor: '#FFB703',
+      eventType: 'single',
+      petFriendly: true,
+    },
+  });
+  await prisma.$executeRaw`
+    UPDATE events
+    SET event_type = 'single',
+        ticket_mode = 'free',
+        capacity = 800,
+        status = 'published',
+        recurrence = NULL,
+        recurrence_custom = NULL
+    WHERE id = ${ev4.id}::uuid
+  `;
+  await attachInterests(ev4.id, [interestFerias.id, interestComidas.id]);
+  await upsertTicketType(provider.id, ev4.id, {
+    name: 'Acceso general',
+    kind: 'general',
+    price: 0,
+    total: 800,
+  });
+
+  const startsStand = new Date('2026-08-02T20:30:00-06:00');
+  const endsStand = new Date('2026-08-02T23:00:00-06:00');
+  const ev5 = await prisma.event.create({
+    data: {
+      providerId: provider.id,
+      createdBy: idComercio,
+      title: 'Stand-up: Open Mic — Noche de comediantes',
+      description: 'Cómicos locales y una consumición mínima en taquilla.',
+      startsAt: startsStand,
+      endsAt: endsStand,
+      city: 'San Pedro Sula',
+      venue: 'Sótano Cultural',
+      address: 'Barrio Suyapa, San Pedro Sula',
+      themeColor: '#FF4D6D',
+      eventType: 'single',
+      minAge: 18,
+    },
+  });
+  await prisma.$executeRaw`
+    UPDATE events
+    SET event_type = 'single',
+        ticket_mode = 'single_access',
+        capacity = 180,
+        status = 'published',
+        recurrence = NULL,
+        recurrence_custom = NULL
+    WHERE id = ${ev5.id}::uuid
+  `;
+  await attachInterests(ev5.id, [interestConciertos.id, interestComidas.id]);
+  await upsertTicketType(provider.id, ev5.id, {
+    name: 'Entrada general',
+    kind: 'general',
+    price: 295,
+    total: 180,
+  });
+
+  const startsCata = new Date('2026-07-19T16:00:00-06:00');
+  const endsCata = new Date('2026-07-19T19:30:00-06:00');
+  const ev6 = await prisma.event.create({
+    data: {
+      providerId: provider.id,
+      createdBy: idComercio,
+      title: 'Cata de cafés de origen — 12 cupping',
+      description:
+        'Pago en línea. Sesión guiada con 4 orígenes y degustación; cupos limitados.',
+      startsAt: startsCata,
+      endsAt: endsCata,
+      city: 'Tegucigalpa',
+      venue: 'La Tostaduría Lab',
+      address: 'Lomas del Guijarro, Tegucigalpa',
+      themeColor: '#6F4E37',
+      eventType: 'single',
+      minAge: 18,
+    },
+  });
+  await prisma.$executeRaw`
+    UPDATE events
+    SET event_type = 'single',
+        ticket_mode = 'single_access',
+        capacity = 36,
+        status = 'published',
+        recurrence = NULL,
+        recurrence_custom = NULL
+    WHERE id = ${ev6.id}::uuid
+  `;
+  await attachInterests(ev6.id, [interestCatas.id, interestComidas.id]);
+  await upsertTicketType(provider.id, ev6.id, {
+    name: 'Participante',
+    kind: 'general',
+    price: 485,
+    total: 28,
+  });
+  await upsertTicketType(provider.id, ev6.id, {
+    name: 'Preventa',
+    kind: 'early',
+    price: 395,
+    total: 8,
+  });
+
+  const startsTaller = new Date('2026-06-07T15:00:00-06:00');
+  const endsTaller = new Date('2026-06-07T17:30:00-06:00');
+  const ev7 = await prisma.event.create({
+    data: {
+      providerId: provider.id,
+      createdBy: idComercio,
+      title: 'Taller infantil: máscaras de papel — gratis (materiales en local)',
+      description:
+        'Reserva tu cupo sin pago en la app; contribución opcional por materiales en el salón.',
+      startsAt: startsTaller,
+      endsAt: endsTaller,
+      city: 'Comayagüela',
+      venue: 'Biblioteca municipal Ramón Amaya Amador',
+      address: 'Calle del Comercio, Comayagüela MDC',
+      themeColor: '#4CC9F0',
+      eventType: 'single',
+    },
+  });
+  await prisma.$executeRaw`
+    UPDATE events
+    SET event_type = 'single',
+        ticket_mode = 'free',
+        capacity = 40,
+        status = 'published',
+        recurrence = NULL,
+        recurrence_custom = NULL
+    WHERE id = ${ev7.id}::uuid
+  `;
+  await attachInterests(ev7.id, [interestConferencias.id, interestComidas.id]);
+  await upsertTicketType(provider.id, ev7.id, {
+    name: 'Cupo taller',
+    kind: 'general',
+    price: 0,
+    total: 40,
+  });
+
+  console.log('[dev-reset] listo.');
   console.log('–––––––––––––––––––––––––––––');
   console.log(`  ${EMAIL_CLIENTE}`);
   console.log(`  ${EMAIL_COMERCIO}`);
   console.log(`  ${EMAIL_STAFF}`);
+  console.log(`  ${EMAIL_AMIGO}`);
   console.log(`  Password: ${password}`);
   console.log('–––––––––––––––––––––––––––––');
   console.log('Waitlist:* tables were NOT modified.');

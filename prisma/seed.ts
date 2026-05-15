@@ -3,13 +3,13 @@ import { PrismaClient } from '../generated/prisma';
 const prisma = new PrismaClient();
 
 async function main() {
-  // Keep seed deterministic and safe to re-run.
+  // Idempotent: safe to run multiple times.
   const interestLabels: Array<{ slug: string; name: string }> = [
     { slug: 'cine-y-proyecciones', name: 'Cine y proyecciones' },
     { slug: 'festivales-culturales', name: 'Festivales culturales' },
     { slug: 'exhibiciones-de-arte', name: 'Exhibiciones de Arte' },
-    { slug: 'musica', name: 'Musica' },
-    { slug: 'ciencia-y-tecnologia', name: 'Ciencia y tecnologia' },
+    { slug: 'musica', name: 'Música' },
+    { slug: 'ciencia-y-tecnologia', name: 'Ciencia y tecnología' },
     { slug: 'comic-cons', name: 'Comic-Cons' },
     { slug: 'conciertos', name: 'Conciertos' },
     { slug: 'fitness-y-entrenamiento', name: 'Fitness y entrenamiento' },
@@ -17,7 +17,7 @@ async function main() {
     { slug: 'conferencias', name: 'Conferencias' },
     { slug: 'hackathons', name: 'Hackathons' },
     { slug: 'catas-de-vino-o-cerveza', name: 'Catas de vino o cerveza' },
-    { slug: 'festivales-gastronomicos', name: 'Festivales gastronomicos' },
+    { slug: 'festivales-gastronomicos', name: 'Festivales gastronómicos' },
     { slug: 'raves', name: 'Raves' },
     { slug: 'gaming-y-e-sports', name: 'Gaming y e-sports' },
     { slug: 'ferias-y-convenciones', name: 'Ferias y convenciones' },
@@ -27,9 +27,8 @@ async function main() {
 
   for (const i of interestLabels) {
     await prisma.interest.upsert({
-      // `name` is unique and may already exist from earlier seeds.
-      where: { name: i.name },
-      update: { slug: i.slug },
+      where: { slug: i.slug },
+      update: { name: i.name, slug: i.slug },
       create: { slug: i.slug, name: i.name },
     });
   }
@@ -111,6 +110,29 @@ async function main() {
     return dt;
   };
 
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS provider_event_ticket_types (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      provider_id uuid NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+      event_id uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      name text NOT NULL,
+      kind text NOT NULL DEFAULT 'general',
+      price numeric(12,2) NOT NULL DEFAULT 0,
+      total integer NOT NULL DEFAULT 0,
+      sold_count integer NOT NULL DEFAULT 0,
+      active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )
+  `;
+
+  type SeedTicketType = {
+    name: string;
+    kind: string;
+    price: number;
+    total: number;
+  };
+
   const events: Array<{
     providerHandle: string;
     title: string;
@@ -126,154 +148,259 @@ async function main() {
     petFriendly?: boolean;
     parkingAvailable?: boolean;
     minAge?: number | null;
+    eventType: string;
+    ticketMode: string;
+    capacity: number;
+    status: string;
+    recurrence?: string | null;
+    recurrenceCustom?: Record<string, unknown> | null;
+    ticketTypes: SeedTicketType[];
   }> = [
     {
       providerHandle: 'allons',
-      title: 'After Office: Rooftop Sessions',
-      description: 'Musica, drinks y atardecer en terraza.',
+      title: 'After Office: terrace sunset',
+      description: 'Música en vivo, cerveza artesanal y atardecer en la terraza.',
       startsAt: addDays(2),
       endsAt: new Date(addDays(2).getTime() + 3 * 60 * 60 * 1000),
-      city: 'CDMX',
-      venue: 'Terraza Centro',
-      address: 'Centro, CDMX',
+      city: 'Tegucigalpa',
+      venue: 'Hotel Honduras Maya — Terraza',
+      address: 'Col. Palmira, frente a La Leona, Tegucigalpa',
       themeColor: '#7C4DFF',
       types: ['musica', 'bares-and-drinks'],
       smokingAllowed: true,
       petFriendly: false,
-      parkingAvailable: false,
+      parkingAvailable: true,
       minAge: 18,
+      eventType: 'single',
+      ticketMode: 'single_access',
+      capacity: 220,
+      status: 'published',
+      ticketTypes: [
+        { name: 'Entrada general', kind: 'general', price: 485, total: 180 },
+        { name: 'Preventa', kind: 'early', price: 350, total: 40 },
+        { name: 'Mesa VIP (4 pax)', kind: 'vip', price: 2200, total: 12 },
+      ],
     },
     {
       providerHandle: 'cdmx-nightlife',
-      title: 'Rave: Warehouse Edition',
-      description: 'Lineup sorpresa. Acceso limitado.',
-      startsAt: atHour(5, 23),
-      endsAt: atHour(6, 5),
-      city: 'CDMX',
-      venue: 'Warehouse Norte',
-      address: 'Norte, CDMX',
+      title: 'Noche electrónica — sala industrial',
+      description: 'Lineup local + invitado regional. Cupo limitado.',
+      startsAt: atHour(5, 22),
+      endsAt: atHour(6, 4),
+      city: 'San Pedro Sula',
+      venue: 'Bodega 504',
+      address: 'Zona Hipódromo, bloque 8, San Pedro Sula',
       themeColor: '#FF4D6D',
       types: ['raves', 'musica'],
-      smokingAllowed: true,
+      smokingAllowed: false,
       petFriendly: false,
       parkingAvailable: true,
-      minAge: 21,
+      minAge: 18,
+      eventType: 'single',
+      ticketMode: 'single_access',
+      capacity: 450,
+      status: 'published',
+      ticketTypes: [
+        { name: 'General', kind: 'general', price: 720, total: 300 },
+        { name: 'Preventa', kind: 'early', price: 520, total: 80 },
+        { name: 'Backstage', kind: 'vip', price: 1350, total: 70 },
+      ],
     },
     {
       providerHandle: 'tech-coffee',
-      title: 'Meetup: React Native + Supabase',
-      description: 'Charlas cortas + networking.',
-      startsAt: atHour(7, 19),
+      title: 'Meetup: React Native en producción',
+      description: 'Charlas de 20 min + networking con café incluido.',
+      startsAt: atHour(7, 18),
       endsAt: atHour(7, 21),
-      city: 'CDMX',
-      venue: 'Cafe Roma',
-      address: 'Roma Norte, CDMX',
+      city: 'La Ceiba',
+      venue: 'Cowork Atlántida',
+      address: 'Av. San Isidro, La Ceiba, Atlántida',
       themeColor: '#2EC4B6',
       types: ['conferencias', 'ciencia-y-tecnologia'],
       smokingAllowed: false,
       petFriendly: true,
       parkingAvailable: false,
       minAge: null,
+      eventType: 'single',
+      ticketMode: 'single_access',
+      capacity: 80,
+      status: 'published',
+      ticketTypes: [{ name: 'Participante', kind: 'general', price: 195, total: 80 }],
     },
     {
       providerHandle: 'arte-abierto',
-      title: 'Noche de Galerias',
-      description: 'Recorrido por galerias y exhibiciones.',
+      title: 'Recorrido de galerías nocturno',
+      description: 'Cuatro sedes con guía; última parada con vino de honor.',
       startsAt: atHour(10, 18),
-      endsAt: atHour(10, 22),
-      city: 'CDMX',
-      venue: 'Juarez',
-      address: 'Col. Juarez, CDMX',
+      endsAt: atHour(10, 23),
+      city: 'Roatán',
+      venue: 'West Bay Gallery Walk',
+      address: 'West Bay Beach, Roatán, Islas de la Bahía',
       themeColor: '#FFA62B',
       types: ['exhibiciones-de-arte', 'festivales-culturales'],
       smokingAllowed: false,
       petFriendly: true,
       parkingAvailable: true,
       minAge: null,
+      eventType: 'single',
+      ticketMode: 'single_access',
+      capacity: 65,
+      status: 'published',
+      ticketTypes: [
+        { name: 'Recorrido completo', kind: 'general', price: 650, total: 55 },
+        { name: 'Estudiante', kind: 'early', price: 420, total: 10 },
+      ],
     },
     {
       providerHandle: 'fndrs',
-      title: 'Startup Coffee: Product & Growth',
-      description: 'Cafe y networking. 3 lightning talks + Q&A.',
-      startsAt: atHour(3, 9),
-      endsAt: atHour(3, 11),
-      city: 'CDMX',
-      venue: 'Condesa',
-      address: 'Condesa, CDMX',
+      title: 'Startup breakfast — métricas y retención',
+      description: 'Café, 3 mesas redondas y pitch relámpago.',
+      startsAt: atHour(3, 7),
+      endsAt: atHour(3, 10),
+      city: 'Comayagüela',
+      venue: 'Centro de convenciones MDC',
+      address: 'Centro histórico, Comayagüela',
       themeColor: '#00B4D8',
       types: ['conferencias'],
       smokingAllowed: false,
-      petFriendly: true,
-      parkingAvailable: false,
+      petFriendly: false,
+      parkingAvailable: true,
       minAge: null,
+      eventType: 'single',
+      ticketMode: 'single_access',
+      capacity: 95,
+      status: 'draft',
+      ticketTypes: [
+        { name: 'Early bird', kind: 'early', price: 275, total: 30 },
+        { name: 'General', kind: 'general', price: 380, total: 65 },
+      ],
     },
     {
       providerHandle: 'allons-sports',
-      title: 'Padel Night: Doubles Mixer',
-      description: 'Partidos rapidos, rotacion y drinks post-game.',
-      startsAt: atHour(4, 20),
-      endsAt: atHour(4, 22),
-      city: 'CDMX',
-      venue: 'Polanco Padel Club',
-      address: 'Polanco, CDMX',
+      title: 'Torneo relámpago de pádel — dobles',
+      description: 'Partidos de 12 min; premios patrocinados. Nivel intermedio.',
+      startsAt: atHour(4, 19),
+      endsAt: atHour(4, 23),
+      city: 'El Progreso',
+      venue: 'Club Deportivo Progreso',
+      address: 'Blvd. Morazán, El Progreso, Yoro',
       themeColor: '#80ED99',
       types: ['fitness-y-entrenamiento', 'partidos-y-torneos'],
       smokingAllowed: false,
       petFriendly: false,
       parkingAvailable: true,
-      minAge: 18,
+      minAge: 16,
+      eventType: 'single',
+      ticketMode: 'single_access',
+      capacity: 48,
+      status: 'published',
+      ticketTypes: [
+        { name: 'Equipo (2 jugadores)', kind: 'general', price: 880, total: 24 },
+        { name: 'Suplente / lista de espera', kind: 'general', price: 120, total: 24 },
+      ],
     },
     {
       providerHandle: 'food-week',
-      title: 'Cata: Vinos Naturales (Intro)',
-      description: '6 vinos, maridaje ligero y guia para principiantes.',
-      startsAt: atHour(6, 19),
-      endsAt: atHour(6, 21),
-      city: 'CDMX',
-      venue: 'Roma Wine Bar',
-      address: 'Roma Norte, CDMX',
+      title: 'Cata: cafés de altura y maridaje',
+      description: 'Seis orígenes hondureños + tablilla de chocolate local.',
+      startsAt: atHour(6, 17),
+      endsAt: atHour(6, 20),
+      city: 'Santa Rosa de Copán',
+      venue: 'Café Don Romeo — sala cátedra',
+      address: 'Barrio El Carmen, Santa Rosa de Copán',
       themeColor: '#FFB703',
       types: ['catas-de-vino-o-cerveza', 'festivales-gastronomicos'],
       smokingAllowed: false,
       petFriendly: false,
       parkingAvailable: false,
       minAge: 18,
+      eventType: 'single',
+      ticketMode: 'single_access',
+      capacity: 32,
+      status: 'published',
+      ticketTypes: [
+        { name: 'Cupping guiado', kind: 'general', price: 595, total: 24 },
+        { name: 'Preventa', kind: 'early', price: 465, total: 8 },
+      ],
     },
     {
       providerHandle: 'allons',
-      title: 'Cine al Aire Libre: Classics',
-      description: 'Proyeccion + picnic. Lleva manta.',
-      startsAt: atHour(8, 20),
+      title: 'Cine bajo las estrellas — clásicos latinoamericanos',
+      description: 'Proyección al aire libre; lleva silla o manta.',
+      startsAt: atHour(8, 19),
       endsAt: atHour(8, 23),
-      city: 'CDMX',
-      venue: 'Parque Mexico',
-      address: 'Condesa, CDMX',
+      city: 'Choluteca',
+      venue: 'Parque Manuel José Valenzuela',
+      address: 'Centro de Choluteca',
       themeColor: '#4CC9F0',
       types: ['cine-y-proyecciones', 'comidas'],
       smokingAllowed: false,
       petFriendly: true,
       parkingAvailable: false,
       minAge: null,
+      eventType: 'single',
+      ticketMode: 'free',
+      capacity: 500,
+      status: 'published',
+      ticketTypes: [{ name: 'Acceso sin costo (registro)', kind: 'general', price: 0, total: 500 }],
     },
     {
       providerHandle: 'tech-coffee',
-      title: 'Workshop: API Design con NestJS',
-      description: 'Buenas practicas, DTOs, validation y versionado.',
-      startsAt: atHour(12, 18),
-      endsAt: atHour(12, 21),
-      city: 'CDMX',
-      venue: 'Cowork Roma',
-      address: 'Roma Norte, CDMX',
+      title: 'Taller intensivo: APIs con NestJS',
+      description: 'DTOs, pipes, Prisma y pruebas. Trae laptop.',
+      startsAt: atHour(12, 9),
+      endsAt: atHour(12, 17),
+      city: 'Puerto Cortés',
+      venue: 'Cluster Tecnológico Cortés',
+      address: 'Zona portuaria, Puerto Cortés',
       themeColor: '#F72585',
       types: ['conferencias', 'hackathons'],
       smokingAllowed: false,
       petFriendly: false,
+      parkingAvailable: true,
+      minAge: 18,
+      eventType: 'single',
+      ticketMode: 'single_access',
+      capacity: 36,
+      status: 'published',
+      ticketTypes: [
+        { name: 'Boleto taller', kind: 'general', price: 1650, total: 28 },
+        { name: 'Estudiante / indie', kind: 'early', price: 1190, total: 8 },
+      ],
+    },
+    {
+      providerHandle: 'fndrs',
+      title: 'Yoga matutino — paquete mensual',
+      description: 'Lunes y miércoles 6:15. Compra el paquete de 8 sesiones.',
+      startsAt: atHour(1, 6),
+      endsAt: atHour(1, 7),
+      city: 'San Pedro Sula',
+      venue: 'Studio Bhakti — Zona Kinke',
+      address: '12 Avenida, 8 y 9 Calle NE, San Pedro Sula',
+      themeColor: '#8338EC',
+      types: ['fitness-y-entrenamiento'],
+      smokingAllowed: false,
+      petFriendly: true,
       parkingAvailable: false,
       minAge: null,
+      eventType: 'recurring_class',
+      ticketMode: 'class_pack',
+      capacity: 18,
+      status: 'published',
+      recurrence: 'weekly',
+      recurrenceCustom: {
+        interval: 1,
+        unit: 'week',
+        weekDays: ['monday', 'wednesday'],
+        endType: 'never',
+      },
+      ticketTypes: [
+        { name: 'Paquete 8 clases (mes en curso)', kind: 'general', price: 1380, total: 18 },
+      ],
     },
   ];
 
-  // Remove previously seeded events with same titles for these providers.
+  // Remove prior events with the same title for these providers.
   const providerIds = [...providerMap.values()];
   const titles = events.map((e) => e.title);
   if (providerIds.length > 0) {
@@ -321,30 +448,73 @@ async function main() {
       });
     }
 
-    // Seed basic gallery media for the event (placeholder images).
+    // Sample gallery images for the event detail screen.
     await prisma.eventMedia.createMany({
       data: [
         {
           eventId: created.id,
-          url: 'https://picsum.photos/seed/allons-1/600/600',
+          url: 'https://picsum.photos/id/24/600/600',
           sortOrder: 0,
         },
         {
           eventId: created.id,
-          url: 'https://picsum.photos/seed/allons-2/600/600',
+          url: 'https://picsum.photos/id/37/600/600',
           sortOrder: 1,
         },
         {
           eventId: created.id,
-          url: 'https://picsum.photos/seed/allons-3/600/600',
+          url: 'https://picsum.photos/id/48/600/600',
           sortOrder: 2,
         },
       ],
       skipDuplicates: true,
     });
+
+    await prisma.$executeRaw`
+      UPDATE events
+      SET
+        event_type = ${e.eventType},
+        ticket_mode = ${e.ticketMode},
+        capacity = ${e.capacity},
+        status = ${e.status},
+        recurrence = ${e.recurrence ?? null}
+      WHERE id = ${created.id}::uuid
+    `;
+    if (e.recurrenceCustom != null) {
+      await prisma.$executeRaw`
+        UPDATE events
+        SET recurrence_custom = ${JSON.stringify(e.recurrenceCustom)}::jsonb
+        WHERE id = ${created.id}::uuid
+      `;
+    } else {
+      await prisma.$executeRaw`
+        UPDATE events SET recurrence_custom = NULL WHERE id = ${created.id}::uuid
+      `;
+    }
+
+    await prisma.$executeRaw`
+      DELETE FROM provider_event_ticket_types WHERE event_id = ${created.id}::uuid
+    `;
+    for (const tt of e.ticketTypes) {
+      await prisma.$executeRaw`
+        INSERT INTO provider_event_ticket_types (
+          provider_id, event_id, name, kind, price, total, sold_count, active
+        )
+        VALUES (
+          ${providerId}::uuid,
+          ${created.id}::uuid,
+          ${tt.name},
+          ${tt.kind},
+          ${tt.price},
+          ${tt.total},
+          0,
+          true
+        )
+      `;
+    }
   }
 
-  // Seed some provider reviews (for UI cards).
+  // Sample reviews for provider cards in the app.
   for (const [handle, providerId] of providerMap.entries()) {
     if (!providerId || !handle) continue;
 
@@ -375,18 +545,21 @@ async function main() {
     });
   }
 
-  // Provider panel MVP seed: align with a real Supabase auth user id via env (optional).
-  const demoPanelOwnerId =
-    process.env.SEED_DEMO_PROVIDER_USER_ID ?? '11111111-1111-4111-8111-111111111111';
-  const demoPanelHandle = 'demo-panel-comercio';
-  const demoPanelProviderName = 'Comercio demo (panel)';
+  // Provider panel: ties to the real Supabase Auth user UUID (optional env var).
+  const panelProviderUserId =
+    process.env.SEED_PANEL_PROVIDER_USER_ID ??
+    process.env.SEED_DEMO_PROVIDER_USER_ID ??
+    '11111111-1111-4111-8111-111111111111';
+  const panelProviderHandle = 'producciones-meta';
+  const panelOrganizerName = 'Roberto Mata';
+  const panelProviderDisplayName = 'Producciones Meta';
 
   await prisma.$executeRaw`
     INSERT INTO profiles (user_id, full_name, username, location, avatar_color)
     VALUES (
-      ${demoPanelOwnerId}::uuid,
-      ${demoPanelProviderName},
-      ${'demo_comercio_panel'},
+      ${panelProviderUserId}::uuid,
+      ${panelOrganizerName},
+      ${'roberto.mata'},
       ${'Tegucigalpa'},
       ${'#F67010'}
     )
@@ -400,23 +573,25 @@ async function main() {
   `;
 
   await prisma.provider.upsert({
-    where: { handle: demoPanelHandle },
+    where: { handle: panelProviderHandle },
     update: {
-      name: demoPanelProviderName,
-      description: 'Eventos, experiencias y activaciones para comunidad local.',
+      name: panelProviderDisplayName,
+      description:
+        'Producción de experiencias presenciales: talleres, activaciones y eventos corporativos en Honduras.',
       websiteUrl: 'https://allonsapp.com',
     },
     create: {
-      id: demoPanelOwnerId,
-      handle: demoPanelHandle,
-      name: demoPanelProviderName,
-      description: 'Eventos, experiencias y activaciones para comunidad local.',
+      id: panelProviderUserId,
+      handle: panelProviderHandle,
+      name: panelProviderDisplayName,
+      description:
+        'Producción de experiencias presenciales: talleres, activaciones y eventos corporativos en Honduras.',
       websiteUrl: 'https://allonsapp.com',
     },
   });
 
-  const demoPanelProvider = await prisma.provider.findUniqueOrThrow({
-    where: { handle: demoPanelHandle },
+  const panelProvider = await prisma.provider.findUniqueOrThrow({
+    where: { handle: panelProviderHandle },
     select: { id: true },
   });
 
@@ -433,7 +608,7 @@ async function main() {
   `;
   await prisma.$executeRaw`
     INSERT INTO provider_members (provider_id, user_id, role, active)
-    VALUES (${demoPanelProvider.id}::uuid, ${demoPanelOwnerId}::uuid, 'owner', true)
+    VALUES (${panelProvider.id}::uuid, ${panelProviderUserId}::uuid, 'owner', true)
     ON CONFLICT (provider_id, user_id)
     DO UPDATE SET role = 'owner', active = true, updated_at = now()
   `;
@@ -463,7 +638,7 @@ async function main() {
     ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'draft'
   `;
 
-  const demoPanelEventDefs = [
+  const panelProviderEventDefs = [
     {
       title: 'Clase funcional sunrise',
       city: 'Tegucigalpa',
@@ -493,11 +668,11 @@ async function main() {
     },
   ];
 
-  for (const def of demoPanelEventDefs) {
+  for (const def of panelProviderEventDefs) {
     const start = atHour(def.dayOffset, def.hour);
     const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
     const existing = await prisma.event.findFirst({
-      where: { providerId: demoPanelProvider.id, title: def.title },
+      where: { providerId: panelProvider.id, title: def.title },
       select: { id: true },
     });
     const event = existing
@@ -505,28 +680,28 @@ async function main() {
           where: { id: existing.id },
           data: {
             title: def.title,
-            description: `${def.title} · cupos limitados.`,
+            description: `${def.title}. Reservas con anticipación; aforo limitado.`,
             startsAt: start,
             endsAt: end,
             city: def.city,
             venue: def.venue,
             address: `${def.venue}, ${def.city}`,
             themeColor: '#F67010',
-            createdBy: demoPanelOwnerId,
+            createdBy: panelProviderUserId,
           },
         })
       : await prisma.event.create({
           data: {
-            providerId: demoPanelProvider.id,
+            providerId: panelProvider.id,
             title: def.title,
-            description: `${def.title} · cupos limitados.`,
+            description: `${def.title}. Reservas con anticipación; aforo limitado.`,
             startsAt: start,
             endsAt: end,
             city: def.city,
             venue: def.venue,
             address: `${def.venue}, ${def.city}`,
             themeColor: '#F67010',
-            createdBy: demoPanelOwnerId,
+            createdBy: panelProviderUserId,
           },
         });
 
@@ -560,7 +735,7 @@ async function main() {
         provider_id, event_id, name, kind, price, total, sold_count, active
       )
       VALUES (
-        ${demoPanelProvider.id}::uuid,
+        ${panelProvider.id}::uuid,
         ${event.id}::uuid,
         ${'General'},
         ${'general'},
@@ -576,7 +751,7 @@ async function main() {
         provider_id, event_id, name, kind, price, total, sold_count, active
       )
       VALUES (
-        ${demoPanelProvider.id}::uuid,
+        ${panelProvider.id}::uuid,
         ${event.id}::uuid,
         ${'VIP'},
         ${'vip'},
@@ -603,12 +778,13 @@ async function main() {
       scanned_at timestamptz NOT NULL DEFAULT now()
     )
   `;
-  const demoPanelEvents = await prisma.event.findMany({
-    where: { providerId: demoPanelProvider.id },
+  const panelEvents = await prisma.event.findMany({
+    where: { providerId: panelProvider.id },
     select: { id: true, title: true },
     take: 5,
   });
-  for (const evt of demoPanelEvents) {
+  for (const evt of panelEvents) {
+    const ticketRef = `ING-${evt.id.replace(/-/g, '').slice(0, 10).toUpperCase()}`;
     await prisma.$executeRaw`
       INSERT INTO provider_scan_records (
         provider_id,
@@ -620,12 +796,12 @@ async function main() {
         status
       )
       VALUES (
-        ${demoPanelProvider.id}::uuid,
+        ${panelProvider.id}::uuid,
         ${evt.id}::uuid,
-        ${`seed-${evt.id.slice(0, 8)}`},
-        ${'Asistente Seed'},
+        ${ticketRef},
+        ${'Laura Méndez'},
         ${'General'},
-        ${demoPanelOwnerId}::uuid,
+        ${panelProviderUserId}::uuid,
         ${'valid'}
       )
       ON CONFLICT DO NOTHING
@@ -645,9 +821,9 @@ async function main() {
   await prisma.$executeRaw`
     INSERT INTO provider_activity_log (provider_id, type, message, meta)
     VALUES
-      (${demoPanelProvider.id}::uuid, 'event', 'Seed inicial del panel provider', 'dataset-seed'),
-      (${demoPanelProvider.id}::uuid, 'sale', 'Ventas de ejemplo cargadas', 'dataset-seed'),
-      (${demoPanelProvider.id}::uuid, 'scan', 'Escaneos de ejemplo cargados', 'dataset-seed')
+      (${panelProvider.id}::uuid, 'event', 'Calendario actualizado: nuevas fechas publicadas', 'panel'),
+      (${panelProvider.id}::uuid, 'sale', 'Corte de ventas: entradas generales y VIP', 'panel'),
+      (${panelProvider.id}::uuid, 'scan', 'Validaciones de acceso registradas en taquilla', 'panel')
     ON CONFLICT DO NOTHING
   `;
 
@@ -661,7 +837,7 @@ async function main() {
   `;
   await prisma.$executeRaw`
     INSERT INTO provider_follows (user_id, provider_id)
-    VALUES (${demoPanelOwnerId}::uuid, ${demoPanelProvider.id}::uuid)
+    VALUES (${panelProviderUserId}::uuid, ${panelProvider.id}::uuid)
     ON CONFLICT (user_id, provider_id) DO NOTHING
   `;
 }

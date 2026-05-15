@@ -38,17 +38,16 @@ export class PaygateWebhookController {
   @ApiOperation({
     summary: 'Paygate (Clinpays) webhook receiver',
     description:
-      'Endpoint público que Paygate invoca al cambiar el estado de un cobro. **Sin** `Authorization: Bearer` de usuario. Con `PAYGATE_WEBHOOK_SECRET` definido, el cuerpo crudo debe enviarse firmado (p. ej. cabecera `X-Clinpays-Webhook-Signature`). Sin secreto, las peticiones se rechazan salvo `PAYGATE_WEBHOOK_ALLOW_UNSIGNED=true` (solo entornos de desarrollo).',
+      'Public endpoint Paygate calls when a charge status changes. **No** user `Authorization: Bearer`. When `PAYGATE_WEBHOOK_SECRET` is set, the raw body must be signed (e.g. `X-Clinpays-Webhook-Signature`). Without a secret, requests are rejected unless `PAYGATE_WEBHOOK_ALLOW_UNSIGNED=true` (development only).',
   })
   @ApiHeader({
     name: 'X-Clinpays-Webhook-Signature',
     required: false,
     description:
-      'Firma HMAC del cuerpo crudo cuando el secreto webhook está configurado.',
+      'HMAC signature of the raw body when the webhook secret is configured.',
   })
   @ApiBody({
-    description:
-      'JSON del evento Paygate (estructura según documentación merchant).',
+    description: 'Paygate event JSON (shape per merchant documentation).',
     schema: {
       type: 'object',
       additionalProperties: true,

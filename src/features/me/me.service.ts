@@ -3,8 +3,10 @@ import {
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseList } from '../events/events.types';
 import {
@@ -98,12 +100,61 @@ export interface ReferralSummaryDto {
 
 @Injectable()
 export class MeService {
+  private readonly logger = new Logger(MeService.name);
+
+  /**
+   * Per-process flags so the idempotent `CREATE TABLE IF NOT EXISTS`
+   * DDL inside each `ensure*` method only round-trips to the DB on
+   * the first invocation. Subsequent calls in the same process skip
+   * the DDL entirely. On Supabase's pooled, cross-region setup these
+   * round-trips dominate request latency.
+   *
+   * These booleans are never reset for the lifetime of the process (same
+   * tradeoff as `ProvidersService.infraReady`): other instances or a DB
+   * restore without redeploy would not self-heal via DDL here — prefer
+   * proper migrations for durable schema.
+   */
+  private infraReady = {
+    ticketHolders: false,
+    providerRefundPolicies: false,
+    providerFollows: false,
+    providerSales: false,
+    referral: false,
+  };
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly conversationsService: ConversationsService,
     private readonly mailService: MailService,
     private readonly supabaseAdmin: SupabaseAdminService,
   ) {}
+
+  /**
+   * Wraps an awaited step with a stopwatch + structured log line so we
+   * can see exactly where `createTicket` (or any other multi-step
+   * service method) is spending its time, including which step throws.
+   */
+  private async timed<T>(
+    correlationId: string,
+    step: string,
+    work: () => Promise<T>,
+  ): Promise<T> {
+    const startedAt = Date.now();
+    try {
+      const result = await work();
+      this.logger.log(
+        `[${correlationId}] step=${step} ms=${Date.now() - startedAt} ok=true`,
+      );
+      return result;
+    } catch (err) {
+      this.logger.error(
+        `[${correlationId}] step=${step} ms=${Date.now() - startedAt} ok=false err=${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      throw err;
+    }
+  }
 
   async getProfile(
     userId: string,
@@ -584,23 +635,39 @@ export class MeService {
       paymentOrderId?: string | null;
     },
   ) {
-    await this.ensureReferralTables();
+    const correlationId = `tk-${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 6)}`;
+    const startedAt = Date.now();
+    this.logger.log(
+      `[${correlationId}] createTicket start userId=${userId} eventId=${eventId} quantity=${quantity} hasReferralCode=${Boolean(
+        options?.referralCode?.trim(),
+      )} paymentOrderId=${options?.paymentOrderId ?? '—'}`,
+    );
+
+    await this.timed(correlationId, 'ensureReferralTables', () =>
+      this.ensureReferralTables(),
+    );
     const referralCodeInput = options?.referralCode?.trim();
     if (referralCodeInput) {
-      await this.captureReferralCode(userId, referralCodeInput).catch(
-        () => null,
+      await this.timed(correlationId, 'captureReferralCode', () =>
+        this.captureReferralCode(userId, referralCodeInput).catch(() => null),
       );
     }
-    const event = await this.prisma.event.findUnique({
-      where: { id: eventId },
-    });
+    const event = await this.timed(correlationId, 'event.findUnique', () =>
+      this.prisma.event.findUnique({ where: { id: eventId } }),
+    );
     if (!event) {
       throw new NotFoundException('Evento no encontrado');
     }
-    await this.ensureTicketHoldersTable();
-    const existingTicketCount = await this.prisma.ticket.count({
-      where: { ownerId: userId },
-    });
+    await this.timed(correlationId, 'ensureTicketHoldersTable', () =>
+      this.ensureTicketHoldersTable(),
+    );
+    const existingTicketCount = await this.timed(
+      correlationId,
+      'ticket.count',
+      () => this.prisma.ticket.count({ where: { ownerId: userId } }),
+    );
 
     const providedHolders = options?.holders ?? [];
     if (providedHolders.length > quantity) {
@@ -646,98 +713,143 @@ export class MeService {
       }
       seenEmails.add(normalized);
     }
-    for (const holder of holders) {
-      await this.assertNoDuplicateTicketForEventAndEmail(
-        event.id,
-        holder.email,
-        'purchase',
-      );
-    }
+    await Promise.all(
+      holders.map((holder, i) =>
+        this.timed(correlationId, `assertNoDupe[${i}]`, () =>
+          this.assertNoDuplicateTicketForEventAndEmail(
+            event.id,
+            holder.email,
+            'purchase',
+          ),
+        ),
+      ),
+    );
 
-    const createdRows = await this.prisma.$queryRaw<Array<{ id: string }>>`
-      INSERT INTO tickets (
-        owner_id,
-        event_id,
-        payment_order_id,
-        title,
-        theme_color,
-        attendee_count
-      )
-      SELECT
-        ${userId}::uuid,
-        ${event.id}::uuid,
-        ${options?.paymentOrderId ?? null}::uuid,
-        ${event.title},
-        ${event.themeColor},
-        1
-      FROM generate_series(1, ${quantity}::int)
-      RETURNING id
-    `;
-    if (createdRows.length === 0) {
-      throw new InternalServerErrorException('No se pudo crear el ticket');
-    }
-    for (let i = 0; i < createdRows.length; i += 1) {
-      const row = createdRows[i];
-      const holder = holders[i];
-      await this.prisma.$executeRaw`
-        INSERT INTO ticket_holders (
-          ticket_id,
-          holder_name,
-          holder_email,
-          holder_user_id,
-          accepted_at
-        )
-        VALUES (
-          ${row.id}::uuid,
-          ${holder.name},
-          ${holder.email},
-          ${holder.holderUserId}::uuid,
-          ${holder.holderUserId ? new Date() : null}
-        )
-      `;
-    }
-    await this.ensureProviderSalesTables();
-    if (event.providerId) {
-      const ticketTypeRows = await this.prisma.$queryRaw<
-        Array<{ id: string; price: number }>
-      >`
-        SELECT id, price::float8 AS price
-        FROM provider_event_ticket_types
-        WHERE event_id = ${event.id}::uuid
-          AND active = true
-        ORDER BY
-          CASE kind
-            WHEN 'general' THEN 0
-            WHEN 'early' THEN 1
-            WHEN 'vip' THEN 2
-            ELSE 3
-          END ASC,
-          created_at ASC
-        LIMIT 1
-      `;
-      const selected = ticketTypeRows[0];
-      if (selected?.id) {
-        await this.prisma.$executeRaw`
-          UPDATE provider_event_ticket_types
-          SET sold_count = sold_count + ${quantity},
-              updated_at = now()
-          WHERE id = ${selected.id}::uuid
+    // Make sure the provider sales infra exists BEFORE entering the
+    // transaction. The DDL is now memoized (no-op after the first call
+    // in the process), so this cost is paid once per boot.
+    await this.timed(correlationId, 'ensureProviderSalesTables', () =>
+      this.ensureProviderSalesTables(),
+    );
+
+    // Bundle the 4 writes (+ ticket-type lookup when there's a
+    // provider) into a single interactive transaction. The holders
+    // insert collapses N round-trips into one VALUES(...) statement
+    // and the whole thing is atomic — partial state on failure can't
+    // leak (e.g. tickets without holders, or sold_count drift).
+    const txResult = await this.timed(correlationId, 'tx.write_bundle', () =>
+      this.prisma.$transaction(
+        async (tx) => {
+          const inserted = await tx.$queryRaw<Array<{ id: string }>>`
+          INSERT INTO tickets (
+            owner_id,
+            event_id,
+            payment_order_id,
+            title,
+            theme_color,
+            attendee_count
+          )
+          SELECT
+            ${userId}::uuid,
+            ${event.id}::uuid,
+            ${options?.paymentOrderId ?? null}::uuid,
+            ${event.title},
+            ${event.themeColor},
+            1
+          FROM generate_series(1, ${quantity}::int)
+          RETURNING id
         `;
-      }
-      await this.prisma.$executeRaw`
-        INSERT INTO provider_activity_log (provider_id, type, message, meta)
-        VALUES (
-          ${event.providerId}::uuid,
-          'sale',
-          ${`Venta registrada: ${quantity} ticket(s) para ${event.title}`},
-          ${selected ? `L. ${Number(selected.price).toFixed(2)}` : null}
-        )
-      `;
-    }
+          if (inserted.length === 0) {
+            throw new InternalServerErrorException(
+              'No se pudo crear el ticket',
+            );
+          }
+
+          const holderValues = Prisma.join(
+            inserted.map((row, i) => {
+              const holder = holders[i];
+              return Prisma.sql`(
+              ${row.id}::uuid,
+              ${holder.name},
+              ${holder.email},
+              ${holder.holderUserId}::uuid,
+              ${holder.holderUserId ? new Date() : null}
+            )`;
+            }),
+          );
+          await tx.$executeRaw`
+          INSERT INTO ticket_holders (
+            ticket_id,
+            holder_name,
+            holder_email,
+            holder_user_id,
+            accepted_at
+          )
+          VALUES ${holderValues}
+        `;
+
+          let selectedTicketType: { id: string; price: number } | null = null;
+          if (event.providerId) {
+            const ticketTypeRows = await tx.$queryRaw<
+              Array<{ id: string; price: number }>
+            >`
+            SELECT id, price::float8 AS price
+            FROM provider_event_ticket_types
+            WHERE event_id = ${event.id}::uuid
+              AND active = true
+            ORDER BY
+              CASE kind
+                WHEN 'general' THEN 0
+                WHEN 'early' THEN 1
+                WHEN 'vip' THEN 2
+                ELSE 3
+              END ASC,
+              created_at ASC
+            LIMIT 1
+          `;
+            selectedTicketType = ticketTypeRows[0] ?? null;
+
+            if (selectedTicketType?.id) {
+              await tx.$executeRaw`
+              UPDATE provider_event_ticket_types
+              SET sold_count = sold_count + ${quantity},
+                  updated_at = now()
+              WHERE id = ${selectedTicketType.id}::uuid
+            `;
+            }
+            await tx.$executeRaw`
+            INSERT INTO provider_activity_log (provider_id, type, message, meta)
+            VALUES (
+              ${event.providerId}::uuid,
+              'sale',
+              ${`Venta registrada: ${quantity} ticket(s) para ${event.title}`},
+              ${selectedTicketType ? `L. ${Number(selectedTicketType.price).toFixed(2)}` : null}
+            )
+          `;
+          }
+
+          return { inserted, selectedTicketType };
+        },
+        {
+          // Interactive tx defaults (~2s wait / ~5s timeout) are too tight for
+          // cross-region pooler latency when several statements run serially.
+          maxWait: 10_000,
+          timeout: 30_000,
+        },
+      ),
+    );
+    const createdRows = txResult.inserted;
     const referralApplied =
       existingTicketCount === 0
-        ? await this.applyReferralForFirstPaidTicket(userId)
+        ? await this.timed(correlationId, 'applyReferral', () =>
+            this.applyReferralForFirstPaidTicket(userId),
+          )
         : null;
+
+    this.logger.log(
+      `[${correlationId}] createTicket done totalMs=${Date.now() - startedAt} created=${createdRows.length} referralApplied=${Boolean(referralApplied)}`,
+    );
+
     return {
       createdCount: createdRows.length,
       ticketIds: createdRows.map((row) => row.id),
@@ -857,6 +969,7 @@ export class MeService {
   }
 
   private async ensureTicketHoldersTable() {
+    if (this.infraReady.ticketHolders) return;
     await this.prisma.$executeRaw`
       CREATE TABLE IF NOT EXISTS ticket_holders (
         ticket_id uuid PRIMARY KEY REFERENCES tickets(id) ON DELETE CASCADE,
@@ -875,9 +988,11 @@ export class MeService {
       ALTER TABLE ticket_holders
       ADD COLUMN IF NOT EXISTS accepted_at timestamptz
     `;
+    this.infraReady.ticketHolders = true;
   }
 
   private async ensureProviderRefundPoliciesTable() {
+    if (this.infraReady.providerRefundPolicies) return;
     await this.prisma.$executeRaw`
       CREATE TABLE IF NOT EXISTS provider_refund_policies (
         provider_id uuid PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,
@@ -886,9 +1001,11 @@ export class MeService {
         updated_at timestamptz NOT NULL DEFAULT now()
       )
     `;
+    this.infraReady.providerRefundPolicies = true;
   }
 
   private async ensureProviderFollowsTable() {
+    if (this.infraReady.providerFollows) return;
     await this.prisma.$executeRaw`
       CREATE TABLE IF NOT EXISTS provider_follows (
         user_id uuid NOT NULL,
@@ -897,9 +1014,11 @@ export class MeService {
         PRIMARY KEY (user_id, provider_id)
       )
     `;
+    this.infraReady.providerFollows = true;
   }
 
   private async ensureProviderSalesTables() {
+    if (this.infraReady.providerSales) return;
     await this.prisma.$executeRaw`
       CREATE TABLE IF NOT EXISTS provider_event_ticket_types (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -925,9 +1044,11 @@ export class MeService {
         created_at timestamptz NOT NULL DEFAULT now()
       )
     `;
+    this.infraReady.providerSales = true;
   }
 
   private async ensureReferralTables() {
+    if (this.infraReady.referral) return;
     await this.prisma.$executeRaw`
       CREATE TABLE IF NOT EXISTS customer_referral_codes (
         owner_user_id uuid PRIMARY KEY,
@@ -971,6 +1092,7 @@ export class MeService {
         created_at timestamptz NOT NULL DEFAULT now()
       )
     `;
+    this.infraReady.referral = true;
   }
 
   private getReferralConfig() {

@@ -11,14 +11,14 @@ const PAYMENT_ORDER_STATUSES = [
 export class InitiatePaymentBodyDto {
   @ApiProperty({
     format: 'uuid',
-    description: 'ID del evento para el cual se compran entradas.',
+    description: 'Event id tickets are purchased for.',
   })
   eventId!: string;
 
   @ApiPropertyOptional({
     format: 'uuid',
     description:
-      'Tipo de entrada (provider_event_ticket_types). Opcional si el evento tiene un solo precio.',
+      'Ticket tier (`provider_event_ticket_types`). Optional when the event has a single price.',
   })
   entryTypeId?: string;
 
@@ -26,20 +26,20 @@ export class InitiatePaymentBodyDto {
     minimum: 1,
     maximum: 20,
     default: 1,
-    description: 'Cantidad de entradas (1–20).',
+    description: 'Number of tickets (1–20).',
   })
   quantity?: number;
 
   @ApiPropertyOptional({
     description:
-      'Código de referido opcional; si es válido puede aplicar descuento al total.',
+      'Optional referral code; when valid it may discount the total.',
     example: 'ABC123',
   })
   referralCode?: string;
 }
 
 export class ReferralDiscountAppliedDto {
-  @ApiProperty({ description: 'Descuento aplicado en centavos.' })
+  @ApiProperty({ description: 'Discount applied, in cents.' })
   cents!: number;
 }
 
@@ -48,26 +48,26 @@ export class InitiatePaymentResponseDto {
   orderId!: string;
 
   @ApiProperty({
-    description: 'URL del checkout alojado en Paygate (Clinpays).',
+    description: 'Hosted Paygate (Clinpays) checkout URL.',
     example: 'https://stage.paygate.biz/checkout/...',
   })
   paymentLink!: string;
 
-  @ApiProperty({ description: 'Monto total en centavos.' })
+  @ApiProperty({ description: 'Total amount in cents.' })
   amountCents!: number;
 
   @ApiProperty({ example: 'HNL', minLength: 3, maxLength: 3 })
   currency!: string;
 
   @ApiProperty({
-    description: 'ISO 8601 — caducidad del link / ventana de pago.',
+    description: 'ISO 8601 — link expiry / payment window.',
   })
   expiresAt!: string;
 
   @ApiPropertyOptional({
     type: ReferralDiscountAppliedDto,
     nullable: true,
-    description: 'Presente si se aplicó descuento por referral.',
+    description: 'Present when a referral discount was applied.',
   })
   discount!: ReferralDiscountAppliedDto | null;
 }
@@ -79,7 +79,7 @@ export class PaymentOrderDetailResponseDto {
   @ApiProperty({
     enum: PAYMENT_ORDER_STATUSES,
     description:
-      'Estado persistido o derivado (p. ej. `cancelled` si expiró estando `pending_payment`).',
+      'Persisted or derived status (e.g. `cancelled` if it expired while `pending_payment`).',
   })
   status!: string;
 
@@ -92,7 +92,7 @@ export class PaymentOrderDetailResponseDto {
   @ApiProperty({
     type: [String],
     format: 'uuid',
-    description: 'IDs de tickets emitidos cuando `status` es `paid`.',
+    description: 'Ticket ids issued when `status` is `paid`.',
   })
   ticketIds!: string[];
 
@@ -101,7 +101,7 @@ export class PaymentOrderDetailResponseDto {
 
   @ApiPropertyOptional({
     nullable: true,
-    description: 'ISO 8601 o null.',
+    description: 'ISO 8601 or null.',
   })
   expiresAt!: string | null;
 }

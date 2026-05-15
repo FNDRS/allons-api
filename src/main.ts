@@ -26,12 +26,12 @@ async function bootstrap() {
     .addSecurityRequirements('bearer')
     .addTag(
       'me — payments',
-      'Pagos con Paygate (Clinpays): iniciar checkout, consultar órdenes. Requiere JWT Supabase.',
+      'Paygate (Clinpays): start checkout, query orders. Requires Supabase JWT.',
     )
-    .addTag('paygate', 'Diagnóstico de conectividad con la pasarela.')
+    .addTag('paygate', 'Gateway connectivity diagnostics.')
     .addTag(
       'webhooks',
-      'Endpoints públicos llamados por proveedores externos (p. ej. Paygate). No usan Bearer JWT del usuario.',
+      'Public endpoints called by external providers (e.g. Paygate). They do not use the user Bearer JWT.',
     )
     .build();
   const document = SwaggerModule.createDocument(app, config);

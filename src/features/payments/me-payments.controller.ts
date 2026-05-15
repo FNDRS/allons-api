@@ -36,22 +36,22 @@ export class MePaymentsController {
 
   @Post('initiate')
   @ApiOperation({
-    summary: 'Iniciar pago (orden + link Paygate)',
+    summary: 'Start payment (order + Paygate link)',
     description:
-      'Crea una orden `pending_payment`, genera un payment link en Paygate y devuelve la URL de checkout. Requiere sesión Supabase (JWT). Puede aplicar descuento por código de referido.',
+      'Creates a `pending_payment` order, generates a Paygate payment link, and returns the checkout URL. Requires Supabase session (JWT). May apply a referral-code discount.',
   })
   @ApiBody({ type: InitiatePaymentBodyDto })
   @ApiResponse({ status: 201, type: InitiatePaymentResponseDto })
   @ApiResponse({
     status: 400,
     description:
-      'Validación de negocio, payload inválido o total 0 tras descuento.',
+      'Business validation failed, invalid payload, or zero total after discount.',
   })
-  @ApiResponse({ status: 401, description: 'Sin token o token inválido.' })
-  @ApiResponse({ status: 404, description: 'Evento no encontrado.' })
+  @ApiResponse({ status: 401, description: 'Missing or invalid token.' })
+  @ApiResponse({ status: 404, description: 'Event not found.' })
   @ApiResponse({
     status: 503,
-    description: 'Paygate no disponible al crear el link.',
+    description: 'Paygate unavailable while creating the link.',
   })
   async initiate(@Req() req: Request, @Body() body: InitiatePaymentBodyDto) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
@@ -76,18 +76,18 @@ export class MePaymentsController {
 
   @Get('orders/:orderId')
   @ApiOperation({
-    summary: 'Estado de una orden de pago',
+    summary: 'Payment order status',
     description:
-      'Devuelve el estado de la orden y los `ticketIds` cuando está `paid`. Solo el dueño de la orden.',
+      'Returns order status and `ticketIds` when `paid`. Order owner only.',
   })
   @ApiParam({ name: 'orderId', format: 'uuid' })
   @ApiResponse({ status: 200, type: PaymentOrderDetailResponseDto })
-  @ApiResponse({ status: 401, description: 'Sin token o token inválido.' })
+  @ApiResponse({ status: 401, description: 'Missing or invalid token.' })
   @ApiResponse({
     status: 403,
-    description: 'La orden pertenece a otro usuario.',
+    description: 'Order belongs to another user.',
   })
-  @ApiResponse({ status: 404, description: 'Orden no encontrada.' })
+  @ApiResponse({ status: 404, description: 'Order not found.' })
   async getOrder(@Req() req: Request, @Param('orderId') orderId: string) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
@@ -97,11 +97,11 @@ export class MePaymentsController {
 
   @Get('orders')
   @ApiOperation({
-    summary: 'Listar mis órdenes de pago',
-    description: 'Historial de órdenes del usuario autenticado.',
+    summary: 'List my payment orders',
+    description: 'Authenticated user payment order history.',
   })
   @ApiResponse({ status: 200, type: PaymentOrderListResponseDto })
-  @ApiResponse({ status: 401, description: 'Sin token o token inválido.' })
+  @ApiResponse({ status: 401, description: 'Missing or invalid token.' })
   async listOrders(@Req() req: Request) {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
