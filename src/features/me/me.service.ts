@@ -959,6 +959,35 @@ export class MeService {
     );
 
     await this.prisma.ticket.delete({ where: { id: ticket.id } });
+
+    // Surface the cancellation on the provider's activity feed so it
+    // shows up live via Supabase Realtime (the dashboard bell + the
+    // activity-history list both subscribe to provider_activity_log
+    // inserts). Best-effort: the cancel itself already succeeded, so
+    // failing to log shouldn't surface as an error to the buyer.
+    if (ticket.event?.providerId) {
+      await this.ensureProviderSalesTables();
+      const eventTitle = ticket.event.title ?? 'evento';
+      try {
+        await this.prisma
+          .$executeRaw`
+          INSERT INTO provider_activity_log (provider_id, type, message, meta)
+          VALUES (
+            ${ticket.event.providerId}::uuid,
+            'cancel',
+            ${`Ticket cancelado: ${eventTitle}`},
+            ${refundPolicy.eligible ? 'Reembolso aplica' : 'Sin reembolso'}
+          )
+        `;
+      } catch (err) {
+        this.logger.warn(
+          `cancelTicket: failed to write activity_log for ticket=${ticket.id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
     return {
       cancelled: true,
       refundEligible: refundPolicy.eligible,
