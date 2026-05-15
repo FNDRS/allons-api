@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  Logger,
   Param,
   Patch,
   Post,
@@ -27,6 +28,8 @@ interface CaptureReferralBody {
 
 @Controller('me')
 export class MeController {
+  private readonly controllerLogger = new Logger(MeController.name);
+
   constructor(
     private readonly meService: MeService,
     private readonly supabaseAdmin: SupabaseAdminService,
@@ -129,8 +132,12 @@ export class MeController {
       referralCode?: string;
     },
   ) {
+    const authStartedAt = Date.now();
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
+    );
+    this.controllerLogger.log(
+      `POST /me/tickets auth=${Date.now() - authStartedAt}ms userId=${user.id} eventId=${body?.eventId ?? '—'} quantity=${body?.quantity ?? 1} holders=${body?.holders?.length ?? 0}`,
     );
     if (!body?.eventId || typeof body.eventId !== 'string') {
       throw new BadRequestException('eventId es requerido');
@@ -142,16 +149,37 @@ export class MeController {
     if (quantity < 1 || quantity > 20) {
       throw new BadRequestException('quantity debe estar entre 1 y 20');
     }
-    return this.meService.createTicket(user.id, body.eventId, quantity, {
-      name:
-        (typeof user.user_metadata?.name === 'string'
-          ? user.user_metadata.name
-          : undefined) ?? null,
-      email: user.email ?? null,
-      holders: body.holders ?? [],
-      referralCode:
-        typeof body.referralCode === 'string' ? body.referralCode : undefined,
-    });
+    const serviceStartedAt = Date.now();
+    try {
+      const result = await this.meService.createTicket(
+        user.id,
+        body.eventId,
+        quantity,
+        {
+          name:
+            (typeof user.user_metadata?.name === 'string'
+              ? user.user_metadata.name
+              : undefined) ?? null,
+          email: user.email ?? null,
+          holders: body.holders ?? [],
+          referralCode:
+            typeof body.referralCode === 'string'
+              ? body.referralCode
+              : undefined,
+        },
+      );
+      this.controllerLogger.log(
+        `POST /me/tickets done totalMs=${Date.now() - serviceStartedAt} created=${result.createdCount}`,
+      );
+      return result;
+    } catch (err) {
+      this.controllerLogger.error(
+        `POST /me/tickets FAILED afterMs=${Date.now() - serviceStartedAt} err=${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      throw err;
+    }
   }
 
   @Delete('tickets/:ticketId')

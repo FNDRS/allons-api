@@ -10,7 +10,7 @@ import type { MailService } from '../../shared/mail/mail.service';
 import type { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 
 function makePrisma() {
-  return {
+  const prisma: any = {
     $executeRaw: jest.fn(() => Promise.resolve(1)),
     $queryRaw: jest.fn(() => Promise.resolve([])),
     profile: {
@@ -33,7 +33,14 @@ function makePrisma() {
       findMany: jest.fn(),
       create: jest.fn(),
     },
-  } as unknown as PrismaService;
+  };
+  // Interactive transaction stub: the callback receives the same
+  // prisma object so $queryRaw/$executeRaw mocks observed by tests
+  // also fire from inside `$transaction(async (tx) => ...)`.
+  prisma.$transaction = jest.fn((cb: (tx: typeof prisma) => unknown) =>
+    Promise.resolve(cb(prisma)),
+  );
+  return prisma as unknown as PrismaService;
 }
 
 describe('MeService', () => {
