@@ -8,6 +8,7 @@ import type { PrismaService } from '../../prisma/prisma.service';
 import type { ConversationsService } from '../conversations/conversations.service';
 import type { MailService } from '../../shared/mail/mail.service';
 import type { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
+import type { ConfigService } from '@nestjs/config';
 
 function makePrisma() {
   const prisma: any = {
@@ -62,6 +63,7 @@ describe('MeService', () => {
       } as unknown as ConversationsService,
       { sendTicketInvitation: jest.fn() } as unknown as MailService,
       { db: { auth: { admin: {} } } } as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
     );
 
     const res = await service.getProfile('u1', 'x@y.com', {
@@ -85,6 +87,7 @@ describe('MeService', () => {
       {} as unknown as ConversationsService,
       {} as unknown as MailService,
       {} as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
     );
     const spy = jest
       .spyOn(service, 'getProfile')
@@ -144,6 +147,7 @@ describe('MeService', () => {
       {} as unknown as ConversationsService,
       {} as unknown as MailService,
       {} as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
     );
     const res = await service.listTickets('u1', { email: 'a@b.com' });
     expect(res).toHaveLength(1);
@@ -157,6 +161,7 @@ describe('MeService', () => {
       {} as unknown as ConversationsService,
       {} as unknown as MailService,
       {} as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
     );
 
     prisma.event.findUnique.mockResolvedValueOnce(null);
@@ -214,6 +219,7 @@ describe('MeService', () => {
       {} as unknown as ConversationsService,
       {} as unknown as MailService,
       {} as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
     );
 
     prisma.ticket.findUnique.mockResolvedValueOnce(null);
@@ -289,7 +295,14 @@ describe('MeService', () => {
       ]);
     const res = await service.getTicketDetails('u1', 't1', 'a@b.com');
     expect(res.refundPolicy.eligible).toBe(false);
-    expect(res.qrPayload).toContain('ticketId');
+    // QR is now the compact signed format {t, e, ts[, s]} — no PII.
+    // With no `TICKET_QR_SECRET` configured the test mock returns the
+    // unsigned variant; either way the `t` field carries the ticket id.
+    const qr = JSON.parse(res.qrPayload);
+    expect(qr.t).toBe('t1');
+    expect(qr.e).toBe('e1');
+    expect(qr.holderName).toBeUndefined();
+    expect(qr.holderEmail).toBeUndefined();
   });
 
   it('cancelTicket enforces owner and deletes', async () => {
@@ -299,6 +312,7 @@ describe('MeService', () => {
       {} as unknown as ConversationsService,
       {} as unknown as MailService,
       {} as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
     );
 
     prisma.ticket.findUnique.mockResolvedValueOnce(null);
@@ -373,6 +387,7 @@ describe('MeService', () => {
       conversationsService,
       {} as unknown as MailService,
       {} as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
     );
     const res = await service.listConversations('u1');
     expect(res[0]).toMatchObject({ id: 'c1', unread: true, tabs: ['eventos'] });
@@ -406,6 +421,7 @@ describe('MeService', () => {
       {} as unknown as ConversationsService,
       {} as unknown as MailService,
       {} as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
     );
     const res = await service.listNotifications('u1');
     expect(res).toHaveLength(2);
@@ -540,6 +556,7 @@ describe('MeService', () => {
       {} as unknown as ConversationsService,
       {} as unknown as MailService,
       {} as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
     );
 
     await expect(
@@ -577,6 +594,7 @@ describe('MeService', () => {
       {} as unknown as ConversationsService,
       {} as unknown as MailService,
       {} as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
     );
     const res = await service.listEventHistory('u1');
     expect(res).toHaveLength(1);

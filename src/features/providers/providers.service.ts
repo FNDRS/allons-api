@@ -5,8 +5,10 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
+import { parseTicketQrPayload } from './ticket-qr.utils';
 
 type ProviderRole = 'owner' | 'admin' | 'staff_scanner';
 
@@ -31,6 +33,7 @@ export class ProvidersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly supabaseAdmin: SupabaseAdminService,
+    private readonly config: ConfigService,
   ) {}
 
   private async ensureInfrastructure() {
@@ -1335,22 +1338,6 @@ export class ProvidersService {
     return { deleted: true };
   }
 
-  private parseTicketId(rawCode: string): string | null {
-    const trimmed = rawCode.trim();
-    const uuidRegex =
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    if (uuidRegex.test(trimmed)) return trimmed;
-    try {
-      const parsed = JSON.parse(trimmed) as { ticketId?: string };
-      if (parsed?.ticketId && uuidRegex.test(parsed.ticketId)) {
-        return parsed.ticketId;
-      }
-    } catch {
-      return null;
-    }
-    return null;
-  }
-
   async validateScan(userId: string, body: Record<string, unknown>) {
     const member = await this.requireMembership(userId, [
       'owner',
@@ -1358,8 +1345,8 @@ export class ProvidersService {
       'staff_scanner',
     ]);
     const eventId = this.safeString(body.eventId).trim();
-    const ticketCode = this.safeString(body.ticketCode).trim();
-    if (!eventId || !ticketCode) {
+    const rawCode = this.safeString(body.ticketCode).trim();
+    if (!eventId || !rawCode) {
       throw new BadRequestException('eventId y ticketCode son requeridos');
     }
     const event = await this.prisma.event.findFirst({
@@ -1368,62 +1355,118 @@ export class ProvidersService {
     });
     if (!event) throw new NotFoundException('Evento no encontrado');
 
-    const ticketId = this.parseTicketId(ticketCode);
+    const qrSecret = this.config.get<string>('TICKET_QR_SECRET') ?? null;
+    const parsed = parseTicketQrPayload(rawCode, qrSecret);
+    const ticketId = parsed?.ticketId ?? null;
+    // QRs carry an `eventId` that must match the scanned event. If the
+    // QR is signed but the event mismatches, refuse early (otherwise a
+    // staff member at event B could redeem event A's ticket).
+    const eventMismatch =
+      parsed?.eventId !== null &&
+      parsed?.eventId !== undefined &&
+      parsed.eventId !== eventId;
+
+    // The stored `ticket_code` should be the canonical id, not the raw
+    // QR JSON. Falls back to the raw input only if we couldn't parse a
+    // ticket id (e.g. manual entry of a non-UUID code).
+    const persistedCode = ticketId ?? rawCode;
+
     let status: 'valid' | 'duplicate' | 'invalid' = 'invalid';
     let attendeeName = 'Invitado';
     const ticketType = 'General';
 
-    if (ticketId) {
-      const ticket = await this.prisma.ticket.findFirst({
-        where: { id: ticketId, eventId },
-        select: { id: true },
-      });
-      if (ticket) {
-        const duplicate = await this.prisma.$queryRaw<Array<{ total: number }>>`
+    if (ticketId && !eventMismatch) {
+      // Atomic block: lock the ticket row, recheck duplicates, insert
+      // the scan record — all in one transaction. Two scans of the
+      // same ticket racing in different staff sessions now serialize:
+      // the second one sees the first scan's row and lands as
+      // `duplicate`.
+      const txResult = await this.prisma.$transaction(async (tx) => {
+        const ticketRows = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT id FROM tickets
+          WHERE id = ${ticketId}::uuid AND event_id = ${eventId}::uuid
+          FOR UPDATE
+        `;
+        if (ticketRows.length === 0) {
+          return { status: 'invalid' as const, attendeeName };
+        }
+
+        const duplicateRows = await tx.$queryRaw<Array<{ total: number }>>`
           SELECT COUNT(*)::int AS total
           FROM provider_scan_records
-          WHERE ticket_id = ${ticket.id}::uuid
-            AND status = 'valid'
+          WHERE ticket_id = ${ticketId}::uuid AND status = 'valid'
         `;
-        if ((duplicate[0]?.total ?? 0) > 0) {
-          status = 'duplicate';
-        } else {
-          status = 'valid';
-          const holder = await this.prisma.$queryRaw<
-            Array<{ holder_name: string | null }>
-          >`
-            SELECT holder_name
-            FROM ticket_holders
-            WHERE ticket_id = ${ticket.id}::uuid
-            LIMIT 1
-          `;
-          attendeeName = holder[0]?.holder_name ?? attendeeName;
-        }
-      }
-    }
+        const isDuplicate = (duplicateRows[0]?.total ?? 0) > 0;
+        const txStatus: 'valid' | 'duplicate' = isDuplicate
+          ? 'duplicate'
+          : 'valid';
 
-    await this.prisma.$executeRaw`
-      INSERT INTO provider_scan_records (
-        provider_id,
-        event_id,
-        ticket_id,
-        ticket_code,
-        attendee_name,
-        ticket_type,
-        scanned_by,
-        status
-      )
-      VALUES (
-        ${member.providerId}::uuid,
-        ${eventId}::uuid,
-        ${ticketId}::uuid,
-        ${ticketCode},
-        ${attendeeName},
-        ${ticketType},
-        ${userId}::uuid,
-        ${status}
-      )
-    `;
+        // Holder lookup runs for both `valid` and `duplicate` so the
+        // operator can see who's already inside / who's trying to
+        // re-enter.
+        const holderRows = await tx.$queryRaw<
+          Array<{ holder_name: string | null }>
+        >`
+          SELECT holder_name FROM ticket_holders
+          WHERE ticket_id = ${ticketId}::uuid
+          LIMIT 1
+        `;
+        const resolvedName = holderRows[0]?.holder_name ?? 'Invitado';
+
+        await tx.$executeRaw`
+          INSERT INTO provider_scan_records (
+            provider_id,
+            event_id,
+            ticket_id,
+            ticket_code,
+            attendee_name,
+            ticket_type,
+            scanned_by,
+            status
+          )
+          VALUES (
+            ${member.providerId}::uuid,
+            ${eventId}::uuid,
+            ${ticketId}::uuid,
+            ${persistedCode},
+            ${resolvedName},
+            ${ticketType},
+            ${userId}::uuid,
+            ${txStatus}
+          )
+        `;
+
+        return { status: txStatus, attendeeName: resolvedName };
+      });
+      status = txResult.status;
+      attendeeName = txResult.attendeeName;
+    } else {
+      // Couldn't resolve a ticket id (bad signature, unknown format,
+      // event mismatch). Persist an `invalid` audit row outside the
+      // transaction since there's no ticket to lock against.
+      await this.prisma.$executeRaw`
+        INSERT INTO provider_scan_records (
+          provider_id,
+          event_id,
+          ticket_id,
+          ticket_code,
+          attendee_name,
+          ticket_type,
+          scanned_by,
+          status
+        )
+        VALUES (
+          ${member.providerId}::uuid,
+          ${eventId}::uuid,
+          ${null}::uuid,
+          ${persistedCode},
+          ${attendeeName},
+          ${ticketType},
+          ${userId}::uuid,
+          'invalid'
+        )
+      `;
+    }
 
     if (status === 'valid') {
       await this.appendActivity(
@@ -1437,8 +1480,9 @@ export class ProvidersService {
     return {
       status,
       attendeeName,
-      ticketCode,
+      ticketCode: persistedCode,
       eventId,
+      verified: parsed?.verified ?? false,
     };
   }
 
