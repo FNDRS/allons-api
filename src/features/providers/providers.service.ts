@@ -642,6 +642,7 @@ export class ProvidersService {
     const avatarColor = body.avatarColor
       ? this.safeString(body.avatarColor)
       : null;
+    const avatarUrl = body.avatarUrl ? this.safeString(body.avatarUrl) : null;
     const brandName = body.brandName ? this.safeString(body.brandName) : null;
     const brandHandle = body.brandHandle
       ? this.safeString(body.brandHandle)
@@ -663,6 +664,7 @@ export class ProvidersService {
       phone,
       staff_role: role,
       avatar_color: avatarColor,
+      avatar_url: avatarUrl,
       brand_name: brandName,
       brand_handle: brandHandle,
       invited_by: userId,
