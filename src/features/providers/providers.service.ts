@@ -336,6 +336,24 @@ export class ProvidersService {
     return '';
   }
 
+  /** Avatar URLs stored in auth metadata must be absolute https (no javascript:/data:). */
+  private requireHttpsAvatarUrl(raw: string, field: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      throw new BadRequestException(`${field} no puede estar vacío`);
+    }
+    try {
+      const u = new URL(trimmed);
+      if (u.protocol !== 'https:') {
+        throw new BadRequestException(`${field} debe ser una URL https`);
+      }
+      return trimmed;
+    } catch (e) {
+      if (e instanceof BadRequestException) throw e;
+      throw new BadRequestException(`${field} debe ser una URL válida`);
+    }
+  }
+
   private normalizeGalleryUrls(raw: unknown): string[] {
     if (!Array.isArray(raw)) return [];
     const unique = new Set<string>();
@@ -646,6 +664,10 @@ export class ProvidersService {
     const redirectTo = body.redirectTo
       ? this.safeString(body.redirectTo)
       : undefined;
+    const avatarUrlRaw = this.safeString(body.avatarUrl ?? '').trim();
+    const avatarUrl = avatarUrlRaw
+      ? this.requireHttpsAvatarUrl(avatarUrlRaw, 'avatarUrl')
+      : null;
 
     if (!email || !name) {
       throw new BadRequestException('email y name son requeridos');
@@ -664,6 +686,7 @@ export class ProvidersService {
       brand_handle: brandHandle,
       invited_by: userId,
       invited_at: new Date().toISOString(),
+      ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
     };
     const temporaryPassword = this.generateTemporaryPassword();
 
