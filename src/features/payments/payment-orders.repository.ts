@@ -142,6 +142,117 @@ export class PaymentOrdersRepository {
   }
 
   /**
+   * Pending orders older than `minAgeMs` whose expiry hasn't passed
+   * yet (i.e. still legitimately waiting for fulfillment) and that
+   * have a paygate_link_id we can query. Used by the nightly cron to
+   * reconcile orders nobody is looking at anymore.
+   */
+  listPendingForReconciliation(
+    now: Date,
+    minAgeMs: number,
+  ): Promise<PaymentOrder[]> {
+    const cutoffCreated = new Date(now.getTime() - minAgeMs);
+    return this.prisma.paymentOrder.findMany({
+      where: {
+        status: 'pending_payment',
+        paygateLinkId: { not: null },
+        createdAt: { lt: cutoffCreated },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  /**
+   * Orders that look terminal (`status='paid'`) but have no tickets
+   * pointing back to them — the failure window where transition
+   * succeeded but ticket minting threw. The cron uses this to
+   * surface candidates for retry / manual review.
+   */
+  async listPaidWithoutTickets(limit = 50): Promise<PaymentOrder[]> {
+    return this.prisma.$queryRaw<PaymentOrder[]>`
+      SELECT o.*
+      FROM payment_orders o
+      LEFT JOIN tickets t ON t.payment_order_id = o.id
+      WHERE o.status = 'paid'
+        AND t.id IS NULL
+      ORDER BY o.updated_at DESC
+      LIMIT ${limit}
+    `;
+  }
+
+  /**
+   * Counters that back the admin canary endpoint. Single roundtrip:
+   * one `$queryRaw` over `payment_orders` returning age buckets and
+   * a 24-hour breakdown by resolution_source.
+   */
+  async canaryStats(now: Date): Promise<{
+    pendingByAge: {
+      under5m: number;
+      under10m: number;
+      under30m: number;
+      under1h: number;
+      over1h: number;
+    };
+    paidWithoutTicketsCount: number;
+    resolutionSourceLast24h: Record<string, number>;
+  }> {
+    const [pendingRows, paidNoTicketRows, sourceRows] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ bucket: string; n: number }>>`
+        SELECT
+          CASE
+            WHEN extract(epoch FROM (${now}::timestamptz - created_at)) < 300 THEN 'under5m'
+            WHEN extract(epoch FROM (${now}::timestamptz - created_at)) < 600 THEN 'under10m'
+            WHEN extract(epoch FROM (${now}::timestamptz - created_at)) < 1800 THEN 'under30m'
+            WHEN extract(epoch FROM (${now}::timestamptz - created_at)) < 3600 THEN 'under1h'
+            ELSE 'over1h'
+          END AS bucket,
+          COUNT(*)::int AS n
+        FROM payment_orders
+        WHERE status = 'pending_payment'
+        GROUP BY bucket
+      `,
+      this.prisma.$queryRaw<Array<{ n: number }>>`
+        SELECT COUNT(*)::int AS n
+        FROM payment_orders o
+        LEFT JOIN tickets t ON t.payment_order_id = o.id
+        WHERE o.status = 'paid' AND t.id IS NULL
+      `,
+      this.prisma.$queryRaw<Array<{ source: string | null; n: number }>>`
+        SELECT resolution_source AS source, COUNT(*)::int AS n
+        FROM payment_orders
+        WHERE updated_at >= ${now}::timestamptz - interval '24 hours'
+          AND status <> 'pending_payment'
+        GROUP BY resolution_source
+      `,
+    ]);
+
+    const pendingByAge = {
+      under5m: 0,
+      under10m: 0,
+      under30m: 0,
+      under1h: 0,
+      over1h: 0,
+    };
+    for (const row of pendingRows) {
+      if (row.bucket in pendingByAge) {
+        (pendingByAge as Record<string, number>)[row.bucket] = row.n;
+      }
+    }
+
+    const resolutionSourceLast24h: Record<string, number> = {};
+    for (const row of sourceRows) {
+      resolutionSourceLast24h[row.source ?? 'unknown'] = row.n;
+    }
+
+    return {
+      pendingByAge,
+      paidWithoutTicketsCount: paidNoTicketRows[0]?.n ?? 0,
+      resolutionSourceLast24h,
+    };
+  }
+
+  /**
    * Transitions an order to a terminal state from `pending_payment`.
    *
    * Guarded by a `status: pending_payment` clause in the update WHERE
@@ -164,6 +275,7 @@ export class PaymentOrdersRepository {
           status: payload.status,
           paygatePaymentId: payload.paygatePaymentId ?? undefined,
           paygateRawWebhook: payload.paygateRawWebhook ?? undefined,
+          resolutionSource: payload.source ?? 'manual',
           updatedAt: new Date(),
         },
       });
