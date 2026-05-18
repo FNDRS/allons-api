@@ -17,15 +17,25 @@ interface Mocks {
     ticket: { count: jest.Mock; findMany: jest.Mock };
     $queryRaw: jest.Mock;
   };
-  paygate: { createPaymentLink: jest.Mock };
+  paygate: {
+    createPaymentLink: jest.Mock;
+    getPaymentLinkDetail: jest.Mock;
+  };
   orders: {
     create: jest.Mock;
     findById: jest.Mock;
     listForUser: jest.Mock;
+    transitionStatus: jest.Mock;
   };
   me: {
     captureReferralCode: jest.Mock;
     getReferralCheckoutPreview: jest.Mock;
+    createTicket: jest.Mock;
+  };
+  supabaseAdmin: {
+    db: {
+      auth: { admin: { getUserById: jest.Mock } };
+    };
   };
 }
 
@@ -36,15 +46,23 @@ function buildService(): { service: MePaymentsService; mocks: Mocks } {
       ticket: { count: jest.fn(), findMany: jest.fn() },
       $queryRaw: jest.fn(),
     },
-    paygate: { createPaymentLink: jest.fn() },
+    paygate: {
+      createPaymentLink: jest.fn(),
+      getPaymentLinkDetail: jest.fn(),
+    },
     orders: {
       create: jest.fn(),
       findById: jest.fn(),
       listForUser: jest.fn(),
+      transitionStatus: jest.fn(),
     },
     me: {
       captureReferralCode: jest.fn(),
       getReferralCheckoutPreview: jest.fn(),
+      createTicket: jest.fn(),
+    },
+    supabaseAdmin: {
+      db: { auth: { admin: { getUserById: jest.fn() } } },
     },
   };
   const service = new MePaymentsService(
@@ -52,6 +70,7 @@ function buildService(): { service: MePaymentsService; mocks: Mocks } {
     mocks.paygate as unknown as PaygateService,
     mocks.orders as unknown as PaymentOrdersRepository,
     mocks.me as unknown as MeService,
+    mocks.supabaseAdmin as unknown as import('../../shared/supabase/supabase-admin.service').SupabaseAdminService,
   );
   return { service, mocks };
 }
@@ -360,6 +379,178 @@ describe('MePaymentsService.getOrder', () => {
 
     expect(result.status).toBe('paid');
     expect(result.ticketIds).toEqual(['ticket-1', 'ticket-2']);
+  });
+});
+
+describe('MePaymentsService.getOrder — Paygate polling reconciliation', () => {
+  const TEN_SECONDS_AGO = new Date(Date.now() - 10_000);
+  const ONE_HOUR_AHEAD = new Date(Date.now() + 60 * 60 * 1000);
+  const fakePaidLinkDetail = {
+    id: 'pg-link-1',
+    link: 'https://stage.paygate.biz/checkout/pg-link-1',
+    amount: 100,
+    subtotal: 100,
+    tax: 0,
+    description: 'Ticket - Test Event',
+    expires: true,
+    expirationHours: 2,
+    currency: 'HNL',
+    numberOfProcesses: 1,
+    isOpenAmount: false,
+    status: 'PROCESSED',
+  };
+
+  it('skips reconciliation when the order is fresh (< grace window)', async () => {
+    const { service, mocks } = buildService();
+    mocks.orders.findById.mockResolvedValue(
+      fakeOrder({
+        status: 'pending_payment',
+        paygateLinkId: 'pg-link-1',
+        createdAt: new Date(),
+      }),
+    );
+    mocks.prisma.ticket.findMany.mockResolvedValue([]);
+
+    await service.getOrder('user-1', 'order-1');
+
+    expect(mocks.paygate.getPaymentLinkDetail).not.toHaveBeenCalled();
+    expect(mocks.orders.transitionStatus).not.toHaveBeenCalled();
+  });
+
+  it('returns the stored state when Paygate still says pending', async () => {
+    const { service, mocks } = buildService();
+    mocks.orders.findById.mockResolvedValue(
+      fakeOrder({
+        status: 'pending_payment',
+        paygateLinkId: 'pg-link-1',
+        createdAt: TEN_SECONDS_AGO,
+        expiresAt: ONE_HOUR_AHEAD,
+      }),
+    );
+    mocks.prisma.ticket.findMany.mockResolvedValue([]);
+    mocks.paygate.getPaymentLinkDetail.mockResolvedValue({
+      ...fakePaidLinkDetail,
+      status: 'PENDING',
+      numberOfProcesses: 0,
+    });
+
+    const result = await service.getOrder('user-1', 'order-1');
+
+    expect(mocks.paygate.getPaymentLinkDetail).toHaveBeenCalledWith(
+      'pg-link-1',
+    );
+    expect(mocks.orders.transitionStatus).not.toHaveBeenCalled();
+    expect(result.status).toBe('pending_payment');
+  });
+
+  it('transitions to paid and mints tickets when Paygate says PROCESSED', async () => {
+    const { service, mocks } = buildService();
+    const pendingOrder = fakeOrder({
+      status: 'pending_payment',
+      paygateLinkId: 'pg-link-1',
+      createdAt: TEN_SECONDS_AGO,
+      expiresAt: ONE_HOUR_AHEAD,
+    });
+    const paidOrder = { ...pendingOrder, status: 'paid' as const };
+
+    mocks.orders.findById.mockResolvedValue(pendingOrder);
+    mocks.prisma.ticket.findMany.mockResolvedValue([{ id: 'ticket-1' }]);
+    mocks.paygate.getPaymentLinkDetail.mockResolvedValue(fakePaidLinkDetail);
+    mocks.orders.transitionStatus.mockResolvedValue({
+      applied: true,
+      order: paidOrder,
+    });
+    mocks.supabaseAdmin.db.auth.admin.getUserById.mockResolvedValue({
+      data: {
+        user: { email: 'buyer@example.com', user_metadata: { name: 'Buyer' } },
+      },
+      error: null,
+    });
+    mocks.me.createTicket.mockResolvedValue({ createdCount: 1 });
+
+    const result = await service.getOrder('user-1', 'order-1');
+
+    expect(mocks.orders.transitionStatus).toHaveBeenCalledWith(
+      pendingOrder.id,
+      expect.objectContaining({
+        status: 'paid',
+        paygatePaymentId: fakePaidLinkDetail.id,
+      }),
+    );
+    expect(mocks.me.createTicket).toHaveBeenCalledWith(
+      pendingOrder.userId,
+      pendingOrder.eventId,
+      pendingOrder.quantity,
+      expect.objectContaining({
+        email: 'buyer@example.com',
+        paymentOrderId: pendingOrder.id,
+      }),
+    );
+    expect(result.status).toBe('paid');
+  });
+
+  it('re-reads the order when transition is a no-op (webhook beat us)', async () => {
+    const { service, mocks } = buildService();
+    const pending = fakeOrder({
+      status: 'pending_payment',
+      paygateLinkId: 'pg-link-1',
+      createdAt: TEN_SECONDS_AGO,
+      expiresAt: ONE_HOUR_AHEAD,
+    });
+    const alreadyPaid = { ...pending, status: 'paid' as const };
+
+    mocks.orders.findById
+      .mockResolvedValueOnce(pending) // initial lookup
+      .mockResolvedValueOnce(alreadyPaid); // re-read after transition no-op
+    mocks.prisma.ticket.findMany.mockResolvedValue([{ id: 'ticket-1' }]);
+    mocks.paygate.getPaymentLinkDetail.mockResolvedValue(fakePaidLinkDetail);
+    mocks.orders.transitionStatus.mockResolvedValue({
+      applied: false,
+      reason: 'not_pending',
+    });
+
+    const result = await service.getOrder('user-1', 'order-1');
+
+    expect(mocks.me.createTicket).not.toHaveBeenCalled();
+    expect(result.status).toBe('paid');
+  });
+
+  it('does not throw when Paygate is unreachable — falls back to stored state', async () => {
+    const { service, mocks } = buildService();
+    mocks.orders.findById.mockResolvedValue(
+      fakeOrder({
+        status: 'pending_payment',
+        paygateLinkId: 'pg-link-1',
+        createdAt: TEN_SECONDS_AGO,
+        expiresAt: ONE_HOUR_AHEAD,
+      }),
+    );
+    mocks.prisma.ticket.findMany.mockResolvedValue([]);
+    mocks.paygate.getPaymentLinkDetail.mockRejectedValue(
+      new Error('Paygate is down'),
+    );
+
+    const result = await service.getOrder('user-1', 'order-1');
+
+    expect(mocks.orders.transitionStatus).not.toHaveBeenCalled();
+    expect(result.status).toBe('pending_payment');
+  });
+
+  it('does not reconcile when the order has no paygate_link_id', async () => {
+    const { service, mocks } = buildService();
+    mocks.orders.findById.mockResolvedValue(
+      fakeOrder({
+        status: 'pending_payment',
+        paygateLinkId: null as unknown as string,
+        createdAt: TEN_SECONDS_AGO,
+        expiresAt: ONE_HOUR_AHEAD,
+      }),
+    );
+    mocks.prisma.ticket.findMany.mockResolvedValue([]);
+
+    await service.getOrder('user-1', 'order-1');
+
+    expect(mocks.paygate.getPaymentLinkDetail).not.toHaveBeenCalled();
   });
 });
 

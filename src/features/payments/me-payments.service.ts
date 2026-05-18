@@ -3,12 +3,15 @@ import {
   ForbiddenException,
   Injectable,
   InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { MeService } from '../me/me.service';
 import { PaygateService } from '../paygate/paygate.service';
 import { PaymentOrdersRepository } from './payment-orders.repository';
+import type { PaymentOrder } from './payment-orders.types';
 
 interface InitiateInput {
   eventId: string;
@@ -17,13 +20,25 @@ interface InitiateInput {
   referralCode?: string | null;
 }
 
+/**
+ * How long the order has to have been pending before the mobile-side
+ * polling triggers a server-side reconciliation against Paygate. The
+ * happy path is webhook → transition in <1s; this grace window lets
+ * that path win when it works and only escalates when the webhook
+ * never showed up.
+ */
+const RECONCILE_GRACE_MS = 4_000;
+
 @Injectable()
 export class MePaymentsService {
+  private readonly logger = new Logger(MePaymentsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly paygate: PaygateService,
     private readonly orders: PaymentOrdersRepository,
     private readonly me: MeService,
+    private readonly supabaseAdmin: SupabaseAdminService,
   ) {}
 
   async initiatePayment(userId: string, input: InitiateInput) {
@@ -106,11 +121,20 @@ export class MePaymentsService {
   }
 
   async getOrder(userId: string, orderId: string) {
-    const order = await this.orders.findById(orderId);
+    let order = await this.orders.findById(orderId);
     if (!order) throw new NotFoundException('Orden no encontrada');
     if (order.userId !== userId) {
       throw new ForbiddenException('Acceso denegado');
     }
+
+    // The webhook from Paygate cannot map the inbound transaction id
+    // back to our payment_orders row (Paygate's webhook payload doesn't
+    // echo the link id), so a stale or missing webhook would otherwise
+    // leave the order forever `pending_payment`. The mobile client is
+    // already polling this endpoint; we use those calls to also pull
+    // the canonical state from Paygate and transition + fulfill on
+    // our side when the gateway says the payment landed.
+    order = await this.maybeReconcileFromPaygate(order);
 
     const now = new Date();
     const computedStatus =
@@ -134,6 +158,99 @@ export class MePaymentsService {
       eventId: order.eventId,
       expiresAt: order.expiresAt?.toISOString() ?? null,
     };
+  }
+
+  /**
+   * Best-effort reconciliation: asks Paygate for the latest state of
+   * the payment link and, if the gateway says it's been processed,
+   * transitions our order to `paid` and mints the tickets. No-op when:
+   *
+   *  - the order is no longer `pending_payment`
+   *  - we don't have a `paygate_link_id` to query against
+   *  - the order is too fresh (give the webhook a head start)
+   *  - the order has already expired locally
+   *
+   * Any Paygate / DB error is swallowed with a warn log — the caller's
+   * subsequent DB read still surfaces the existing state, and the
+   * mobile poller will try again on the next tick. `transitionStatus`
+   * is the same idempotency gate the webhook controller uses, so a
+   * webhook that lands during this call doesn't double-create tickets.
+   */
+  private async maybeReconcileFromPaygate(
+    order: PaymentOrder,
+  ): Promise<PaymentOrder> {
+    if (order.status !== 'pending_payment') return order;
+    if (!order.paygateLinkId) return order;
+    const now = new Date();
+    const ageMs = now.getTime() - order.createdAt.getTime();
+    if (ageMs < RECONCILE_GRACE_MS) return order;
+    if (order.expiresAt && order.expiresAt < now) return order;
+
+    let detail;
+    try {
+      detail = await this.paygate.getPaymentLinkDetail(order.paygateLinkId);
+    } catch (err) {
+      this.logger.warn(
+        `reconcile: paygate.getPaymentLinkDetail failed for order=${order.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return order;
+    }
+
+    const paygateStatus = detail.status?.toUpperCase() ?? '';
+    const looksPaid =
+      paygateStatus === 'PROCESSED' || (detail.numberOfProcesses ?? 0) > 0;
+    if (!looksPaid) {
+      return order;
+    }
+
+    const transition = await this.orders.transitionStatus(order.id, {
+      status: 'paid',
+      paygatePaymentId: detail.id,
+      paygateRawWebhook: detail,
+    });
+    if (!transition.applied) {
+      // Someone else (e.g. the webhook) already moved this order.
+      // Re-read once so the caller works with the latest row.
+      return (await this.orders.findById(order.id)) ?? order;
+    }
+
+    // Mint the tickets — same code path the webhook controller uses.
+    // Failures here are logged but not rolled back: the order stays
+    // `paid` and the support flow can backfill missing tickets.
+    try {
+      const { data } = await this.supabaseAdmin.db.auth.admin.getUserById(
+        order.userId,
+      );
+      const userEmail = data?.user?.email ?? null;
+      const userMeta = data?.user?.user_metadata as
+        | { name?: unknown }
+        | null
+        | undefined;
+      const userName =
+        typeof userMeta?.name === 'string' ? userMeta.name : null;
+      if (!userEmail) {
+        throw new Error('No se pudo obtener el email del comprador');
+      }
+      await this.me.createTicket(order.userId, order.eventId, order.quantity, {
+        email: userEmail,
+        name: userName,
+        holders: [],
+        paymentOrderId: order.id,
+      });
+      this.logger.log(
+        `reconcile: fulfilled order=${order.id} via Paygate polling (paygatePaymentId=${detail.id})`,
+      );
+    } catch (err) {
+      this.logger.error(
+        `reconcile: order ${order.id} marked paid but ticket creation failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+
+    return transition.order;
   }
 
   async listOrders(userId: string) {
