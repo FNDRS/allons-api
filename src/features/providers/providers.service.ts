@@ -289,7 +289,7 @@ export class ProvidersService {
     await this.appendActivity(
       provider.id,
       'staff',
-      'Provider inicial creado automÃ¡ticamente',
+      'Provider inicial creado autom?ticamente',
       userId,
     );
     return { providerId: provider.id, role: 'owner' };
@@ -337,6 +337,24 @@ export class ProvidersService {
     if (typeof raw === 'boolean') return raw ? 'true' : 'false';
     if (typeof raw === 'bigint') return String(raw);
     return '';
+  }
+
+  /** Avatar URLs stored in auth metadata must be absolute https (no javascript:/data:). */
+  private requireHttpsAvatarUrl(raw: string, field: string): string {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      throw new BadRequestException(`${field} no puede estar vac?o`);
+    }
+    try {
+      const u = new URL(trimmed);
+      if (u.protocol !== 'https:') {
+        throw new BadRequestException(`${field} debe ser una URL https`);
+      }
+      return trimmed;
+    } catch (e) {
+      if (e instanceof BadRequestException) throw e;
+      throw new BadRequestException(`${field} debe ser una URL v?lida`);
+    }
   }
 
   private normalizeGalleryUrls(raw: unknown): string[] {
@@ -642,7 +660,6 @@ export class ProvidersService {
     const avatarColor = body.avatarColor
       ? this.safeString(body.avatarColor)
       : null;
-    const avatarUrl = body.avatarUrl ? this.safeString(body.avatarUrl) : null;
     const brandName = body.brandName ? this.safeString(body.brandName) : null;
     const brandHandle = body.brandHandle
       ? this.safeString(body.brandHandle)
@@ -650,12 +667,16 @@ export class ProvidersService {
     const redirectTo = body.redirectTo
       ? this.safeString(body.redirectTo)
       : undefined;
+    const avatarUrlRaw = this.safeString(body.avatarUrl ?? '').trim();
+    const avatarUrl = avatarUrlRaw
+      ? this.requireHttpsAvatarUrl(avatarUrlRaw, 'avatarUrl')
+      : null;
 
     if (!email || !name) {
       throw new BadRequestException('email y name son requeridos');
     }
     if (!['scanner', 'admin', 'finance'].includes(role)) {
-      throw new BadRequestException('role invÃ¡lido');
+      throw new BadRequestException('role inv?lido');
     }
 
     const metadata = {
@@ -664,11 +685,11 @@ export class ProvidersService {
       phone,
       staff_role: role,
       avatar_color: avatarColor,
-      avatar_url: avatarUrl,
       brand_name: brandName,
       brand_handle: brandHandle,
       invited_by: userId,
       invited_at: new Date().toISOString(),
+      ...(avatarUrl ? { avatar_url: avatarUrl } : {}),
     };
     const temporaryPassword = this.generateTemporaryPassword();
 
@@ -894,11 +915,11 @@ export class ProvidersService {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
     const code = this.safeString(body.code).trim().toUpperCase();
     if (!code || code.length < 3) {
-      throw new BadRequestException('code invÃ¡lido');
+      throw new BadRequestException('code inv?lido');
     }
     const percent = Number(body.percent ?? 0);
     if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
-      throw new BadRequestException('percent invÃ¡lido');
+      throw new BadRequestException('percent inv?lido');
     }
     const maxUses = Math.max(1, Number(body.maxUses ?? 1));
     const eventId = body.eventId ? this.safeString(body.eventId) : null;
@@ -1379,7 +1400,7 @@ export class ProvidersService {
 
     if (ticketId && !eventMismatch) {
       // Atomic block: lock the ticket row, recheck duplicates, insert
-      // the scan record â€” all in one transaction. Two scans of the
+      // the scan record ÿÿÿ all in one transaction. Two scans of the
       // same ticket racing in different staff sessions now serialize:
       // the second one sees the first scan's row and lands as
       // `duplicate`.
@@ -1636,9 +1657,9 @@ export class ProvidersService {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
     const amount = Number(body.amount ?? 0);
     const method =
-      this.safeString(body.method).trim() || 'BAC Honduras â€¢ ****4521';
+      this.safeString(body.method).trim() || 'BAC Honduras ÿÿÿ ****4521';
     if (!Number.isFinite(amount) || amount <= 0) {
-      throw new BadRequestException('amount invÃ¡lido');
+      throw new BadRequestException('amount inv?lido');
     }
 
     const dashboard = await this.getDashboard(userId);
