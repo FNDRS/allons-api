@@ -1026,6 +1026,36 @@ export class MeService {
       }
     }
 
+    // If this was the last ticket tied to the payment order, close the
+    // order so the paid-without-tickets canary doesn't false-positive
+    // and the nightly sweep doesn't try to re-mint what the user just
+    // cancelled. Status reflects what happened to the money: refunded
+    // when the policy applied, cancelled when the provider kept it.
+    if (ticket.paymentOrderId) {
+      try {
+        const remaining = await this.prisma.ticket.count({
+          where: { paymentOrderId: ticket.paymentOrderId },
+        });
+        if (remaining === 0) {
+          const nextStatus = refundPolicy.eligible ? 'refunded' : 'cancelled';
+          await this.prisma.paymentOrder.updateMany({
+            where: { id: ticket.paymentOrderId, status: 'paid' },
+            data: {
+              status: nextStatus,
+              resolutionSource: 'manual',
+              updatedAt: new Date(),
+            },
+          });
+        }
+      } catch (err) {
+        this.logger.warn(
+          `cancelTicket: failed to close payment_order=${ticket.paymentOrderId} for ticket=${ticket.id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
+
     return {
       cancelled: true,
       refundEligible: refundPolicy.eligible,
