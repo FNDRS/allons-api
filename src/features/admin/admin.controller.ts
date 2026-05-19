@@ -11,6 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { PaymentOrderStatus } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
@@ -32,6 +33,11 @@ const ALLOWED_STATUSES = new Set([
 
 @UseGuards(AdminSecretGuard)
 @Controller('admin')
+@SkipThrottle({
+  default: true,
+  'payment-initiate': true,
+  'paygate-webhook': true,
+})
 export class AdminController {
   private readonly logger = new Logger(AdminController.name);
 
