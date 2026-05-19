@@ -285,3 +285,45 @@ model PaymentOrder {
   @@index([status])
   @@map("payment_orders")
 }
+
+/// Registro append-only para acciones del panel **allons-admin**
+/// (suspend/ban usuarios, estados proveedor, eventos, waitlist QR).
+/// Solo insertar desde servidor con medio de confianza tras gate root — ver trigger en migración.
+model AdminAuditLog {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(6)
+
+  actorUserId String? @map("actor_user_id") @db.Uuid
+  actorEmail  String? @map("actor_email")
+
+  source String /// server_action \| route_handler
+  action String
+
+  resourceType String @map("resource_type")
+  resourceId   String @map("resource_id")
+
+  /// success \| failure — validación adicional CHECK en Postgres (migración)
+  outcome String
+
+  httpMethod String? @map("http_method")
+  httpPath   String? @map("http_path")
+
+  ipAddress  String? @map("ip_address")
+  userAgent  String? @map("user_agent")
+
+  correlationId   String? @map("correlation_id") @db.Uuid
+  clientRequestId String? @map("client_request_id")
+
+  errorCode    String? @map("error_code")
+  errorMessage String? @map("error_message")
+
+  stateBefore Json @default("{}") @map("state_before") @db.JsonB
+  stateAfter  Json @default("{}") @map("state_after") @db.JsonB
+
+  @@index([occurredAt(sort: Desc)])
+  @@index([resourceType, resourceId])
+  @@index([actorUserId])
+  @@index([action])
+  @@map("admin_audit_logs")
+}
