@@ -3,13 +3,17 @@ import {
   Body,
   Controller,
   Get,
+  Logger,
   NotFoundException,
   Param,
   Patch,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { PaymentOrderStatus } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
 import { AdminSecretGuard } from './admin-secret.guard';
 import type {
   AdminEventActionResponse,
@@ -29,7 +33,12 @@ const ALLOWED_STATUSES = new Set([
 @UseGuards(AdminSecretGuard)
 @Controller('admin')
 export class AdminController {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(AdminController.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly orders: PaymentOrdersRepository,
+  ) {}
 
   @Get('overview-metrics')
   async getOverviewMetrics(): Promise<AdminOverviewMetricsResponse> {
@@ -140,6 +149,122 @@ export class AdminController {
 
     return { ok: true, id: updated.id, status: updated.status };
   }
+
+  @Get('payments/summary')
+  async getPaymentsSummary() {
+    const [paidOrders, pendingOrders, failedOrders, gmvResult] =
+      await Promise.all([
+        this.orders.countByStatus('paid'),
+        this.orders.countByStatus('pending_payment'),
+        this.orders.countByStatus('failed'),
+        this.prisma.paymentOrder.aggregate({
+          where: { status: 'paid' },
+          _sum: { amountCents: true },
+        }),
+      ]);
+
+    const gmvCents = gmvResult._sum.amountCents ?? 0;
+
+    return {
+      gmvCents,
+      paidOrdersCount: paidOrders,
+      pendingOrdersCount: pendingOrders,
+      failedOrdersCount: failedOrders,
+      lastUpdated: new Date().toISOString(),
+    };
+  }
+
+  private static readonly VALID_ORDER_STATUSES = new Set([
+    'pending_payment',
+    'paid',
+    'failed',
+    'cancelled',
+    'refunded',
+  ]);
+
+  @Get('payments/orders')
+  async listOrders(
+    @Query('status') status?: string,
+    @Query('eventId') eventId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    if (status && !AdminController.VALID_ORDER_STATUSES.has(status)) {
+      throw new BadRequestException(
+        `status must be one of: ${Array.from(AdminController.VALID_ORDER_STATUSES).join(', ')}`,
+      );
+    }
+    if (startDate && Number.isNaN(new Date(startDate).getTime())) {
+      throw new BadRequestException('startDate no es una fecha válida');
+    }
+    if (endDate && Number.isNaN(new Date(endDate).getTime())) {
+      throw new BadRequestException('endDate no es una fecha válida');
+    }
+    if (startDate && endDate) {
+      const startMs = new Date(startDate).getTime();
+      const endMs = new Date(endDate).getTime();
+      if (startMs > endMs) {
+        throw new BadRequestException(
+          'startDate no puede ser posterior a endDate',
+        );
+      }
+    }
+    return this.orders.listAdmin({
+      status: status ? (status as PaymentOrderStatus) : undefined,
+      eventId: eventId || undefined,
+      startDate: startDate || undefined,
+      endDate: endDate || undefined,
+      limit: clampLimit(limit, 200, 50),
+      offset: clampOffset(offset),
+    });
+  }
+
+  @Post('payments/orders/:orderId/override')
+  async overrideOrderStatus(
+    @Param('orderId') orderId: string,
+    @Body('status') status?: string,
+    @Body('reason') reason?: string,
+  ) {
+    const valid = new Set(['paid', 'cancelled', 'failed']);
+    if (!status || !valid.has(status)) {
+      throw new BadRequestException(
+        'status must be one of: paid, cancelled, failed',
+      );
+    }
+    if (!reason || typeof reason !== 'string' || reason.trim().length === 0) {
+      throw new BadRequestException('reason is required for manual override');
+    }
+
+    const existing = await this.prisma.paymentOrder.findUnique({
+      where: { id: orderId },
+    });
+    if (!existing) {
+      throw new NotFoundException('Orden de pago no encontrada');
+    }
+
+    const result = await this.prisma.paymentOrder.update({
+      where: { id: orderId },
+      data: {
+        status: status as PaymentOrderStatus,
+        updatedAt: new Date(),
+      },
+    });
+
+    this.logger.log(
+      `Manual override order=${orderId} from=${existing.status} to=${status} reason="${reason.trim()}"`,
+    );
+
+    return { ok: true, orderId: result.id, status: result.status };
+  }
+}
+
+function clampOffset(raw: string | undefined, fallback = 0) {
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return Math.floor(parsed);
 }
 
 interface WhereParams {

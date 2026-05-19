@@ -6,6 +6,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseList } from '../events/events.types';
@@ -15,6 +16,7 @@ import {
 } from '../conversations/conversations.service';
 import { MailService } from '../../shared/mail/mail.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
+import { buildTicketQrPayload } from '../providers/ticket-qr.utils';
 
 interface UpdateProfileInput {
   fullName?: string | null;
@@ -127,6 +129,7 @@ export class MeService {
     private readonly conversationsService: ConversationsService,
     private readonly mailService: MailService,
     private readonly supabaseAdmin: SupabaseAdminService,
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -933,12 +936,13 @@ export class MeService {
           ? { holderName: holder.holder_name, holderEmail: holder.holder_email }
           : undefined,
       ),
-      qrPayload: JSON.stringify({
-        ticketId: ticket.id,
-        eventId: ticket.eventId,
-        holderName: holder?.holder_name ?? null,
-        holderEmail: holder?.holder_email ?? null,
-      }),
+      // Minimal signed payload — no PII. The scanner looks up holder
+      // info server-side after verifying the signature.
+      qrPayload: buildTicketQrPayload(
+        ticket.id,
+        ticket.eventId ?? '',
+        this.config.get<string>('TICKET_QR_SECRET') ?? null,
+      ),
       refundPolicy,
     };
   }
