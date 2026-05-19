@@ -72,6 +72,14 @@ export class NotificationsService {
     });
   }
 
+  private async enqueuePush(userId: string, title: string, body?: string | null) {
+    // Push delivery is not implemented yet. This outbox row is a hook for the future worker.
+    await this.prisma.$executeRaw`
+      INSERT INTO push_outbox (user_id, title, body, data)
+      VALUES (${userId}::uuid, ${title}, ${body ?? null}, ${null}::jsonb)
+    `;
+  }
+
   async maybeNotifyFriendMessage(args: {
     recipientUserId: string;
     senderUserId: string;
@@ -96,6 +104,10 @@ export class NotificationsService {
       description: args.preview,
       tabs: ['amigos'],
     });
+
+    if (settings.push.friendActivity) {
+      void this.enqueuePush(args.recipientUserId, senderName, args.preview);
+    }
   }
 
   async maybeNotifyProviderUpdate(args: {
@@ -142,6 +154,13 @@ export class NotificationsService {
       })),
       skipDuplicates: true,
     });
+
+    // Optional push outbox.
+    for (const userId of toNotify) {
+      const settings = await this.getSettings(userId);
+      if (!settings.push.marketing) continue;
+      void this.enqueuePush(userId, args.title, args.description ?? null);
+    }
   }
 
   // Every 15 minutes: create event reminders 6 hours before start.
@@ -188,6 +207,14 @@ export class NotificationsService {
         created += 1;
       } catch {
         // Unique dedupeKey avoids duplicates.
+      }
+
+      if (settings.push.eventReminders) {
+        void this.enqueuePush(
+          row.user_id,
+          'Tu evento empieza pronto',
+          `${row.title} comienza en ~${hoursBefore} horas.`,
+        );
       }
     }
 
@@ -260,6 +287,9 @@ export class NotificationsService {
           relevantTabs: ['eventos'],
         },
       });
+      if (settings.push.marketing) {
+        void this.enqueuePush(user_id, 'Te podría interesar', `Nuevo evento: ${top}`);
+      }
       created += 1;
     }
 
