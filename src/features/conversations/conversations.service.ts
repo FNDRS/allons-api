@@ -115,7 +115,6 @@ export class ConversationsService {
   }
 
   async getConversation(userId: string, conversationId: string) {
-    await this.ensureConversationReadsTable();
     await this.ensureTicketHoldersColumns();
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
@@ -142,13 +141,6 @@ export class ConversationsService {
           }),
         )
       : false;
-
-    await this.prisma.$executeRaw`
-      INSERT INTO conversation_reads (conversation_id, user_id, last_read_at)
-      VALUES (${conversation.id}::uuid, ${userId}::uuid, now())
-      ON CONFLICT (conversation_id, user_id)
-      DO UPDATE SET last_read_at = EXCLUDED.last_read_at
-    `;
 
     const messages = await Promise.all(
       conversation.messages.map(async (m) => {

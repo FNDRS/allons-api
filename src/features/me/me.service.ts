@@ -1540,7 +1540,6 @@ export class MeService {
   }
 
   async listConversations(userId: string) {
-    await this.conversationsService.ensureConversationReadsTable();
     const memberships = await this.prisma.conversationMember.findMany({
       where: { userId },
       include: {
@@ -1604,25 +1603,11 @@ export class MeService {
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       )
-      .map(async ({ updatedAt, lastSenderId, ...rest }) => {
-        const readRows = await this.prisma.$queryRaw<
-          Array<{ last_read_at: Date }>
-        >`
-          SELECT last_read_at
-          FROM conversation_reads
-          WHERE conversation_id = ${rest.id}::uuid
-            AND user_id = ${userId}::uuid
-          LIMIT 1
-        `;
-        const lastReadAt = readRows[0]?.last_read_at ?? null;
-        const unread =
-          Boolean(lastSenderId) &&
-          lastSenderId !== userId &&
-          (!lastReadAt ||
-            new Date(updatedAt).getTime() > new Date(lastReadAt).getTime());
+      .map(async ({ updatedAt: _updatedAt, lastSenderId: _lastSenderId, ...rest }) => {
+        // Read receipts are intentionally disabled (no "mark as read").
         return {
           ...rest,
-          unread,
+          unread: false,
         };
       });
     return Promise.all(visibleRows);
