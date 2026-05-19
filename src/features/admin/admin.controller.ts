@@ -152,7 +152,7 @@ export class AdminController {
 
   @Get('payments/summary')
   async getPaymentsSummary() {
-    const [paidOrders, pendingOrders, failedOrders, gmvResult, staleCount] =
+    const [paidOrders, pendingOrders, failedOrders, gmvResult, staleCount, daily] =
       await Promise.all([
         this.orders.countByStatus('paid'),
         this.orders.countByStatus('pending_payment'),
@@ -162,6 +162,7 @@ export class AdminController {
           _sum: { amountCents: true },
         }),
         this.orders.countStalePending(60),
+        this.orders.dailyTotals(30),
       ]);
 
     const gmvCents = gmvResult._sum.amountCents ?? 0;
@@ -172,6 +173,7 @@ export class AdminController {
       pendingOrdersCount: pendingOrders,
       failedOrdersCount: failedOrders,
       stalePendingCount: staleCount,
+      daily,
       lastUpdated: new Date().toISOString(),
     };
   }

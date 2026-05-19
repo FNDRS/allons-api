@@ -211,6 +211,21 @@ export class PaymentOrdersRepository {
     });
   }
 
+  dailyTotals(days: number): Promise<Array<{ date: string; totalCents: number; count: number }>> {
+    const from = new Date(Date.now() - days * 86_400_000);
+    return this.prisma.$queryRaw`
+      SELECT
+        DATE(created_at AT TIME ZONE 'UTC')::text AS date,
+        COALESCE(SUM(amount_cents), 0)::int AS "totalCents",
+        COUNT(*)::int AS count
+      FROM payment_orders
+      WHERE status = 'paid'
+        AND created_at >= ${from}::timestamptz
+      GROUP BY DATE(created_at AT TIME ZONE 'UTC')
+      ORDER BY date ASC
+    `;
+  }
+
   listByStatus(status: PaymentOrderStatus): Promise<PaymentOrder[]> {
     return this.prisma.paymentOrder.findMany({
       where: { status },
