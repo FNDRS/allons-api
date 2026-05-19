@@ -86,6 +86,8 @@ model Event {
   city             String?
   venue            String?
   address          String?
+  latitude         Float?   @map("latitude") @db.DoublePrecision
+  longitude        Float?   @map("longitude") @db.DoublePrecision
   coverImageUrl    String?   @map("cover_image_url")
   themeColor       String?   @map("theme_color")
   smokingAllowed   Boolean   @default(false) @map("smoking_allowed")
