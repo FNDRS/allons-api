@@ -289,7 +289,7 @@ export class ProvidersService {
     await this.appendActivity(
       provider.id,
       'staff',
-      'Provider inicial creado autom?ticamente',
+      'Provider inicial creado automÃ¡ticamente',
       userId,
     );
     return { providerId: provider.id, role: 'owner' };
@@ -343,7 +343,7 @@ export class ProvidersService {
   private requireHttpsAvatarUrl(raw: string, field: string): string {
     const trimmed = raw.trim();
     if (!trimmed) {
-      throw new BadRequestException(`${field} no puede estar vac?o`);
+      throw new BadRequestException(`${field} no puede estar vacÃ­o`);
     }
     try {
       const u = new URL(trimmed);
@@ -353,7 +353,7 @@ export class ProvidersService {
       return trimmed;
     } catch (e) {
       if (e instanceof BadRequestException) throw e;
-      throw new BadRequestException(`${field} debe ser una URL v?lida`);
+      throw new BadRequestException(`${field} debe ser una URL vÃ¡lida`);
     }
   }
 
@@ -676,7 +676,7 @@ export class ProvidersService {
       throw new BadRequestException('email y name son requeridos');
     }
     if (!['scanner', 'admin', 'finance'].includes(role)) {
-      throw new BadRequestException('role inv?lido');
+      throw new BadRequestException('role invÃ¡lido');
     }
 
     const metadata = {
@@ -915,11 +915,11 @@ export class ProvidersService {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
     const code = this.safeString(body.code).trim().toUpperCase();
     if (!code || code.length < 3) {
-      throw new BadRequestException('code inv?lido');
+      throw new BadRequestException('code invÃ¡lido');
     }
     const percent = Number(body.percent ?? 0);
     if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
-      throw new BadRequestException('percent inv?lido');
+      throw new BadRequestException('percent invÃ¡lido');
     }
     const maxUses = Math.max(1, Number(body.maxUses ?? 1));
     const eventId = body.eventId ? this.safeString(body.eventId) : null;
@@ -1394,24 +1394,65 @@ export class ProvidersService {
     // ticket id (e.g. manual entry of a non-UUID code).
     const persistedCode = ticketId ?? rawCode;
 
-    let status: 'valid' | 'duplicate' | 'invalid' = 'invalid';
+    let status: 'valid' | 'duplicate' | 'invalid' | 'cancelled' = 'invalid';
     let attendeeName = 'Invitado';
     const ticketType = 'General';
 
     if (ticketId && !eventMismatch) {
       // Atomic block: lock the ticket row, recheck duplicates, insert
-      // the scan record ÿÿÿ all in one transaction. Two scans of the
+      // the scan record âÿÿ all in one transaction. Two scans of the
       // same ticket racing in different staff sessions now serialize:
       // the second one sees the first scan's row and lands as
       // `duplicate`.
       const txResult = await this.prisma.$transaction(async (tx) => {
-        const ticketRows = await tx.$queryRaw<Array<{ id: string }>>`
-          SELECT id FROM tickets
+        const ticketRows = await tx.$queryRaw<
+          Array<{ id: string; cancelled_at: Date | null }>
+        >`
+          SELECT id, cancelled_at FROM tickets
           WHERE id = ${ticketId}::uuid AND event_id = ${eventId}::uuid
           FOR UPDATE
         `;
         if (ticketRows.length === 0) {
           return { status: 'invalid' as const, attendeeName };
+        }
+
+        const holderRows = await tx.$queryRaw<
+          Array<{ holder_name: string | null }>
+        >`
+          SELECT holder_name FROM ticket_holders
+          WHERE ticket_id = ${ticketId}::uuid
+          LIMIT 1
+        `;
+        const resolvedName = holderRows[0]?.holder_name ?? 'Invitado';
+
+        // Soft-deleted tickets are still queryable on purpose: scanning
+        // one should report "cancelado", not "invalid" âÿÿ otherwise the
+        // doorperson can't tell a fraudulent code apart from a real
+        // ticket the buyer cancelled this morning.
+        if (ticketRows[0].cancelled_at) {
+          await tx.$executeRaw`
+            INSERT INTO provider_scan_records (
+              provider_id,
+              event_id,
+              ticket_id,
+              ticket_code,
+              attendee_name,
+              ticket_type,
+              scanned_by,
+              status
+            )
+            VALUES (
+              ${member.providerId}::uuid,
+              ${eventId}::uuid,
+              ${ticketId}::uuid,
+              ${persistedCode},
+              ${resolvedName},
+              ${ticketType},
+              ${userId}::uuid,
+              'cancelled'
+            )
+          `;
+          return { status: 'cancelled' as const, attendeeName: resolvedName };
         }
 
         const duplicateRows = await tx.$queryRaw<Array<{ total: number }>>`
@@ -1423,18 +1464,6 @@ export class ProvidersService {
         const txStatus: 'valid' | 'duplicate' = isDuplicate
           ? 'duplicate'
           : 'valid';
-
-        // Holder lookup runs for both `valid` and `duplicate` so the
-        // operator can see who's already inside / who's trying to
-        // re-enter.
-        const holderRows = await tx.$queryRaw<
-          Array<{ holder_name: string | null }>
-        >`
-          SELECT holder_name FROM ticket_holders
-          WHERE ticket_id = ${ticketId}::uuid
-          LIMIT 1
-        `;
-        const resolvedName = holderRows[0]?.holder_name ?? 'Invitado';
 
         await tx.$executeRaw`
           INSERT INTO provider_scan_records (
@@ -1657,9 +1686,9 @@ export class ProvidersService {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
     const amount = Number(body.amount ?? 0);
     const method =
-      this.safeString(body.method).trim() || 'BAC Honduras ÿÿÿ ****4521';
+      this.safeString(body.method).trim() || 'BAC Honduras Â· ****4521';
     if (!Number.isFinite(amount) || amount <= 0) {
-      throw new BadRequestException('amount inv?lido');
+      throw new BadRequestException('amount invÃ¡lido');
     }
 
     const dashboard = await this.getDashboard(userId);

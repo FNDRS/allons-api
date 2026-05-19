@@ -2,12 +2,14 @@ import {
   ForbiddenException,
   Injectable,
   UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { createClient, User } from '@supabase/supabase-js';
 
 @Injectable()
 export class SupabaseAdminService {
   private readonly client: ReturnType<typeof createClient> | null;
+  private readonly logger = new Logger(SupabaseAdminService.name);
 
   constructor() {
     const supabaseUrl = process.env.SUPABASE_URL ?? '';
@@ -17,8 +19,8 @@ export class SupabaseAdminService {
       // Allow the API to boot without admin credentials.
       // Endpoints that require admin access will throw a clear error when used.
       this.client = null;
-      console.log(
-        '[supabase-admin] Missing SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY; admin features disabled',
+      this.logger.warn(
+        'Missing SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY; admin features disabled',
       );
       return;
     }

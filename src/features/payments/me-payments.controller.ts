@@ -16,6 +16,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
+import { seconds, Throttle } from '@nestjs/throttler';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import {
   InitiatePaymentBodyDto,
@@ -35,6 +36,7 @@ export class MePaymentsController {
   ) {}
 
   @Post('initiate')
+  @Throttle({ 'payment-initiate': { ttl: seconds(60), limit: 10 } })
   @ApiOperation({
     summary: 'Start payment (order + Paygate link)',
     description:
@@ -57,6 +59,7 @@ export class MePaymentsController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
+    (req as any).userId = user.id;
     if (!body?.eventId || typeof body.eventId !== 'string') {
       throw new BadRequestException('eventId es requerido');
     }
@@ -92,6 +95,7 @@ export class MePaymentsController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
+    (req as any).userId = user.id;
     return this.payments.getOrder(user.id, orderId);
   }
 
@@ -106,6 +110,7 @@ export class MePaymentsController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
+    (req as any).userId = user.id;
     return this.payments.listOrders(user.id);
   }
 }

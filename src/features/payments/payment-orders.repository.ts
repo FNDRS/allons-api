@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PaymentOrderStatus, Prisma } from '../../../generated/prisma';
+import { Prisma, PaymentOrderStatus } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import type {
   CreatePaymentOrderInput,
@@ -142,6 +142,151 @@ export class PaymentOrdersRepository {
   }
 
   /**
+   * Pending orders older than `minAgeMs` whose expiry hasn't passed
+   * yet (i.e. still legitimately waiting for fulfillment) and that
+   * have a paygate_link_id we can query. Used by the nightly cron to
+   * reconcile orders nobody is looking at anymore.
+   */
+  listPendingForReconciliation(
+    now: Date,
+    minAgeMs: number,
+    limit = 200,
+  ): Promise<PaymentOrder[]> {
+    const cutoffCreated = new Date(now.getTime() - minAgeMs);
+    return this.prisma.paymentOrder.findMany({
+      where: {
+        status: 'pending_payment',
+        paygateLinkId: { not: null },
+        createdAt: { lt: cutoffCreated },
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+    });
+  }
+
+  /**
+   * Expired pending orders that still have a paygate_link_id we can
+   * query. The nightly sweep reconciles these against Paygate *before*
+   * cancelling: if the user paid right before the local TTL elapsed
+   * and the webhook never landed, we want to fulfill, not cancel.
+   */
+  listExpiredPendingWithLink(now: Date): Promise<PaymentOrder[]> {
+    return this.prisma.paymentOrder.findMany({
+      where: {
+        status: 'pending_payment',
+        paygateLinkId: { not: null },
+        expiresAt: { lt: now },
+      },
+      orderBy: { expiresAt: 'asc' },
+    });
+  }
+
+  /**
+   * Orders that look terminal (`status='paid'`) but have no tickets
+   * pointing back to them — the failure window where transition
+   * succeeded but ticket minting threw. The cron uses this to
+   * surface candidates for retry / manual review. Bounded by
+   * `minAgeMs` so the in-flight immediate-mint path isn't raced.
+   */
+  listPaidWithoutTickets(
+    minAgeMs: number,
+    limit = 50,
+  ): Promise<PaymentOrder[]> {
+    const cutoffUpdated = new Date(Date.now() - minAgeMs);
+    return this.prisma.paymentOrder.findMany({
+      where: {
+        status: 'paid',
+        // "No active tickets" — soft-deleted ones don't count as
+        // satisfying the order. If they did, an order whose only
+        // ticket got cancelled would be invisible here even though
+        // the user has nothing usable.
+        tickets: { none: { cancelledAt: null } },
+        updatedAt: { lt: cutoffUpdated },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: limit,
+    });
+  }
+
+  /**
+   * Counters that back the admin canary endpoint. Single roundtrip:
+   * three parallel `$queryRaw` calls returning age buckets, a
+   * paid-without-tickets count, and a 24-hour breakdown by
+   * resolution_source.
+   *
+   * **Bucket semantics:** the `pendingByAge` keys are NON-overlapping
+   * age ranges, not cumulative thresholds. `under10m` means "5m ≤ age
+   * < 10m", `under30m` means "10m ≤ age < 30m", and so on. Anything
+   * "> 10m" is the sum `under30m + under1h + over1h`.
+   */
+  async canaryStats(now: Date): Promise<{
+    pendingByAge: {
+      under5m: number;
+      under10m: number;
+      under30m: number;
+      under1h: number;
+      over1h: number;
+    };
+    paidWithoutTicketsCount: number;
+    resolutionSourceLast24h: Record<string, number>;
+  }> {
+    const [pendingRows, paidNoTicketRows, sourceRows] = await Promise.all([
+      this.prisma.$queryRaw<Array<{ bucket: string; n: number }>>`
+        SELECT
+          CASE
+            WHEN extract(epoch FROM (${now}::timestamptz - created_at)) < 300 THEN 'under5m'
+            WHEN extract(epoch FROM (${now}::timestamptz - created_at)) < 600 THEN 'under10m'
+            WHEN extract(epoch FROM (${now}::timestamptz - created_at)) < 1800 THEN 'under30m'
+            WHEN extract(epoch FROM (${now}::timestamptz - created_at)) < 3600 THEN 'under1h'
+            ELSE 'over1h'
+          END AS bucket,
+          COUNT(*)::int AS n
+        FROM payment_orders
+        WHERE status = 'pending_payment'
+        GROUP BY bucket
+      `,
+      this.prisma.$queryRaw<Array<{ n: number }>>`
+        SELECT COUNT(*)::int AS n
+        FROM payment_orders o
+        LEFT JOIN tickets t ON t.payment_order_id = o.id
+        WHERE o.status = 'paid' AND t.id IS NULL
+      `,
+      this.prisma.$queryRaw<Array<{ source: string | null; n: number }>>`
+        SELECT resolution_source AS source, COUNT(*)::int AS n
+        FROM payment_orders
+        WHERE updated_at >= ${now}::timestamptz - interval '24 hours'
+          AND status <> 'pending_payment'
+        GROUP BY resolution_source
+      `,
+    ]);
+
+    const pendingByAge = {
+      under5m: 0,
+      under10m: 0,
+      under30m: 0,
+      under1h: 0,
+      over1h: 0,
+    };
+    for (const row of pendingRows) {
+      if (row.bucket in pendingByAge) {
+        (pendingByAge as Record<string, number>)[row.bucket] = row.n;
+      }
+    }
+
+    const resolutionSourceLast24h: Record<string, number> = {};
+    for (const row of sourceRows) {
+      resolutionSourceLast24h[row.source ?? 'unknown'] = row.n;
+    }
+
+    return {
+      pendingByAge,
+      paidWithoutTicketsCount: paidNoTicketRows[0]?.n ?? 0,
+      resolutionSourceLast24h,
+    };
+  }
+
+  /**
    * Transitions an order to a terminal state from `pending_payment`.
    *
    * Guarded by a `status: pending_payment` clause in the update WHERE
@@ -164,6 +309,7 @@ export class PaymentOrdersRepository {
           status: payload.status,
           paygatePaymentId: payload.paygatePaymentId ?? undefined,
           paygateRawWebhook: payload.paygateRawWebhook ?? undefined,
+          resolutionSource: payload.source,
           updatedAt: new Date(),
         },
       });
@@ -199,6 +345,13 @@ export class PaymentOrdersRepository {
 
   countByStatus(status: PaymentOrderStatus): Promise<number> {
     return this.prisma.paymentOrder.count({ where: { status } });
+  }
+
+  listByStatus(status: PaymentOrderStatus): Promise<PaymentOrder[]> {
+    return this.prisma.paymentOrder.findMany({
+      where: { status },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
   listAdmin(filter: {
