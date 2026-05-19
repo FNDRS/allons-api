@@ -72,4 +72,44 @@ export class RefundsRepository {
       take: limit,
     });
   }
+
+  listAdmin(input: {
+    status?: RefundStatus;
+    limit: number;
+    offset: number;
+  }): Promise<Refund[]> {
+    return this.prisma.refund.findMany({
+      where: input.status ? { status: input.status } : undefined,
+      orderBy: { requestedAt: 'desc' },
+      take: input.limit,
+      skip: input.offset,
+    });
+  }
+
+  countAdmin(status?: RefundStatus): Promise<number> {
+    return this.prisma.refund.count({
+      where: status ? { status } : undefined,
+    });
+  }
+
+  async countsByStatus(): Promise<Record<string, number>> {
+    const rows = await this.prisma.refund.groupBy({
+      by: ['status'],
+      _count: { _all: true },
+    });
+    const out: Record<string, number> = {};
+    for (const row of rows) {
+      out[row.status] = row._count._all;
+    }
+    return out;
+  }
+
+  async sumPaidLast30dCents(): Promise<number> {
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const agg = await this.prisma.refund.aggregate({
+      where: { status: 'paid', resolvedAt: { gte: since } },
+      _sum: { amountCents: true },
+    });
+    return agg._sum.amountCents ?? 0;
+  }
 }

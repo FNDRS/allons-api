@@ -4,6 +4,7 @@ import { PaygateModule } from '../paygate/paygate.module';
 import { PaygateWebhookController } from '../paygate/paygate.webhook.controller';
 import { ProvidersModule } from '../providers/providers.module';
 import { AdminPaymentsController } from './admin-payments.controller';
+import { AdminRefundsController } from './admin-refunds.controller';
 import { MePaymentsController } from './me-payments.controller';
 import { MePaymentsService } from './me-payments.service';
 import { PaymentOrdersRepository } from './payment-orders.repository';
@@ -19,6 +20,7 @@ import { RefundsRepository } from './refunds.repository';
     PaygateWebhookController,
     ProviderPaymentsController,
     AdminPaymentsController,
+    AdminRefundsController,
   ],
   providers: [
     PaymentOrdersRepository,
