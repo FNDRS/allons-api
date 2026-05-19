@@ -153,6 +153,7 @@ export class PaygateWebhookController {
       status: nextStatus,
       paygatePaymentId: paygateId,
       paygateRawWebhook: payload as any,
+      source: 'webhook',
     });
 
     if (!transitioned.applied) {

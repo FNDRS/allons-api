@@ -272,6 +272,7 @@ model PaymentOrder {
   paygateLinkId     String?            @unique @map("paygate_link_id")
   paygatePaymentId  String?            @unique @map("paygate_payment_id")
   paygateRawWebhook Json?              @map("paygate_raw_webhook")
+  resolutionSource  String?            @map("resolution_source")
   expiresAt         DateTime?          @map("expires_at") @db.Timestamptz(6)
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)

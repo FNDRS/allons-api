@@ -209,6 +209,7 @@ export class MePaymentsService {
       status: 'paid',
       paygatePaymentId: detail.id,
       paygateRawWebhook: detail,
+      source: 'polling',
     });
     if (!transition.applied) {
       // Someone else (e.g. the webhook) already moved this order.

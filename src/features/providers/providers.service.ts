@@ -289,7 +289,7 @@ export class ProvidersService {
     await this.appendActivity(
       provider.id,
       'staff',
-      'Provider inicial creado autom?ticamente',
+      'Provider inicial creado automÃ¡ticamente',
       userId,
     );
     return { providerId: provider.id, role: 'owner' };
@@ -343,7 +343,7 @@ export class ProvidersService {
   private requireHttpsAvatarUrl(raw: string, field: string): string {
     const trimmed = raw.trim();
     if (!trimmed) {
-      throw new BadRequestException(`${field} no puede estar vac?o`);
+      throw new BadRequestException(`${field} no puede estar vacÃ­o`);
     }
     try {
       const u = new URL(trimmed);
@@ -353,7 +353,7 @@ export class ProvidersService {
       return trimmed;
     } catch (e) {
       if (e instanceof BadRequestException) throw e;
-      throw new BadRequestException(`${field} debe ser una URL v?lida`);
+      throw new BadRequestException(`${field} debe ser una URL vÃ¡lida`);
     }
   }
 
@@ -676,7 +676,7 @@ export class ProvidersService {
       throw new BadRequestException('email y name son requeridos');
     }
     if (!['scanner', 'admin', 'finance'].includes(role)) {
-      throw new BadRequestException('role inv?lido');
+      throw new BadRequestException('role invÃ¡lido');
     }
 
     const metadata = {
@@ -915,11 +915,11 @@ export class ProvidersService {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
     const code = this.safeString(body.code).trim().toUpperCase();
     if (!code || code.length < 3) {
-      throw new BadRequestException('code inv?lido');
+      throw new BadRequestException('code invÃ¡lido');
     }
     const percent = Number(body.percent ?? 0);
     if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
-      throw new BadRequestException('percent inv?lido');
+      throw new BadRequestException('percent invÃ¡lido');
     }
     const maxUses = Math.max(1, Number(body.maxUses ?? 1));
     const eventId = body.eventId ? this.safeString(body.eventId) : null;
@@ -1400,7 +1400,7 @@ export class ProvidersService {
 
     if (ticketId && !eventMismatch) {
       // Atomic block: lock the ticket row, recheck duplicates, insert
-      // the scan record ÿÿÿ all in one transaction. Two scans of the
+      // the scan record ï¿½ï¿½ï¿½ all in one transaction. Two scans of the
       // same ticket racing in different staff sessions now serialize:
       // the second one sees the first scan's row and lands as
       // `duplicate`.
@@ -1657,9 +1657,9 @@ export class ProvidersService {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
     const amount = Number(body.amount ?? 0);
     const method =
-      this.safeString(body.method).trim() || 'BAC Honduras ÿÿÿ ****4521';
+      this.safeString(body.method).trim() || 'BAC Honduras Â· ****4521';
     if (!Number.isFinite(amount) || amount <= 0) {
-      throw new BadRequestException('amount inv?lido');
+      throw new BadRequestException('amount invÃ¡lido');
     }
 
     const dashboard = await this.getDashboard(userId);
