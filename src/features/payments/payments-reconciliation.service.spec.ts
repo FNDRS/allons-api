@@ -9,6 +9,7 @@ interface Mocks {
   orders: {
     listPendingForReconciliation: jest.Mock;
     listExpiredPending: jest.Mock;
+    listExpiredPendingWithLink: jest.Mock;
     listPaidWithoutTickets: jest.Mock;
     transitionStatus: jest.Mock;
     canaryStats: jest.Mock;
@@ -28,6 +29,7 @@ function buildService(): {
     orders: {
       listPendingForReconciliation: jest.fn().mockResolvedValue([]),
       listExpiredPending: jest.fn().mockResolvedValue([]),
+      listExpiredPendingWithLink: jest.fn().mockResolvedValue([]),
       listPaidWithoutTickets: jest.fn().mockResolvedValue([]),
       transitionStatus: jest.fn(),
       canaryStats: jest.fn(),
@@ -151,10 +153,10 @@ describe('PaymentsReconciliationService.runNightlySweep', () => {
     expect(result.reconciledPaid).toBe(1);
   });
 
-  it('cancels expired pending orders and tags them cron', async () => {
+  it('cancels expired pending orders without a paygate link and tags them cron', async () => {
     const { service, mocks } = buildService();
     mocks.orders.listExpiredPending.mockResolvedValue([
-      fakeOrder({ id: 'expired-1' }),
+      fakeOrder({ id: 'expired-1', paygateLinkId: null }),
     ]);
     mocks.orders.transitionStatus.mockResolvedValue({
       applied: true,
@@ -168,6 +170,42 @@ describe('PaymentsReconciliationService.runNightlySweep', () => {
       expect.objectContaining({ status: 'cancelled', source: 'cron' }),
     );
     expect(result.expiredCancelled).toBe(1);
+  });
+
+  it('reconciles an expired-but-paid order against Paygate before cancelling', async () => {
+    const { service, mocks } = buildService();
+    const expired = fakeOrder({
+      id: 'expired-paid',
+      expiresAt: new Date(Date.now() - 60 * 60 * 1000),
+    });
+    mocks.orders.listExpiredPendingWithLink.mockResolvedValue([expired]);
+    mocks.paygate.getPaymentLinkDetail.mockResolvedValue({
+      id: 'pg-link-1',
+      status: 'PROCESSED',
+      numberOfProcesses: 1,
+    });
+    mocks.orders.transitionStatus.mockImplementation((_id, payload) => {
+      if (payload.status === 'paid') {
+        return Promise.resolve({
+          applied: true,
+          order: { ...expired, status: 'paid' as const },
+        });
+      }
+      // Subsequent cancel attempt is a no-op because the order is
+      // already paid (the repository's status='pending_payment' guard
+      // rejects it).
+      return Promise.resolve({ applied: false, reason: 'not_pending' });
+    });
+    mocks.supabaseAdmin.db.auth.admin.getUserById.mockResolvedValue({
+      data: { user: { email: 'late@x.com', user_metadata: { name: 'L' } } },
+    });
+    mocks.me.createTicket.mockResolvedValue({ createdCount: 1 });
+
+    const result = await service.runNightlySweep();
+
+    expect(result.reconciledPaid).toBe(1);
+    expect(result.expiredCancelled).toBe(0);
+    expect(result.ticketsBackfilled).toBe(1);
   });
 
   it('backfills tickets for paid orders that have none', async () => {
@@ -186,13 +224,25 @@ describe('PaymentsReconciliationService.runNightlySweep', () => {
     expect(mocks.me.createTicket).toHaveBeenCalled();
   });
 
-  it('records lastSweep snapshot and totals', async () => {
+  it('records lastSweep snapshot and totals on success', async () => {
     const { service } = buildService();
     await service.runNightlySweep();
     const snapshot = service.getLastSweep();
     expect(snapshot).not.toBeNull();
     expect(snapshot?.scanned).toBe(0);
+    expect(snapshot?.errored).toBe(false);
     expect(typeof snapshot?.durationMs).toBe('number');
+  });
+
+  it('records lastSweep with errored=true when the sweep aborts', async () => {
+    const { service, mocks } = buildService();
+    mocks.orders.listPendingForReconciliation.mockRejectedValueOnce(
+      new Error('db down'),
+    );
+    const result = await service.runNightlySweep();
+    expect(result.errored).toBe(true);
+    expect(result.errorMessage).toContain('db down');
+    expect(service.getLastSweep()?.errored).toBe(true);
   });
 });
 

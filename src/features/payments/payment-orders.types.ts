@@ -42,10 +42,12 @@ export interface TransitionStatusInput {
   paygatePaymentId?: string;
   paygateRawWebhook?: Prisma.InputJsonValue;
   /**
-   * Tag of the code path doing the transition. Defaults to `manual`
-   * if omitted — callers should always pass an explicit value.
+   * Tag of the code path doing the transition. Required so the
+   * `resolution_source` column accurately attributes every transition
+   * — if this were optional and silently defaulted, real automated
+   * transitions could look like admin overrides in the canary.
    */
-  source?: ResolutionSource;
+  source: ResolutionSource;
 }
 
 export type { PaymentOrder, PaymentOrderStatus };

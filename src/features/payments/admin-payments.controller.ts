@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, HttpCode, Post, UseGuards } from '@nestjs/common';
 import { AdminSecretGuard } from '../admin/admin-secret.guard';
 import { PaymentOrdersRepository } from './payment-orders.repository';
 import { PaymentsReconciliationService } from './payments-reconciliation.service';
@@ -23,10 +23,6 @@ export class AdminPaymentsController {
   @Get('canary')
   async canary() {
     const stats = await this.orders.canaryStats(new Date());
-    const totalResolved = Object.values(stats.resolutionSourceLast24h).reduce(
-      (a, b) => a + b,
-      0,
-    );
     const longPending =
       stats.pendingByAge.under30m +
       stats.pendingByAge.under1h +
@@ -42,12 +38,12 @@ export class AdminPaymentsController {
         longPending,
         paidWithoutTicketsCount: stats.paidWithoutTicketsCount,
         resolutionSource: stats.resolutionSourceLast24h,
-        totalResolved,
       }),
     };
   }
 
-  @Get('sweep')
+  @Post('sweep')
+  @HttpCode(200)
   async sweep() {
     return this.reconciliation.runNightlySweep();
   }
@@ -57,7 +53,6 @@ function buildAlerts(input: {
   longPending: number;
   paidWithoutTicketsCount: number;
   resolutionSource: Record<string, number>;
-  totalResolved: number;
 }): string[] {
   const alerts: string[] = [];
   if (input.longPending > 0) {
@@ -70,16 +65,17 @@ function buildAlerts(input: {
       `${input.paidWithoutTicketsCount} order(s) paid without tickets — ticket creation failed after transition`,
     );
   }
-  if (input.totalResolved >= 5 && (input.resolutionSource.webhook ?? 0) === 0) {
+  const webhook = input.resolutionSource.webhook ?? 0;
+  const polling = input.resolutionSource.polling ?? 0;
+  const manual = input.resolutionSource.manual ?? 0;
+  const cron = input.resolutionSource.cron ?? 0;
+  const nonCron = webhook + polling + manual;
+  if (nonCron >= 5 && webhook === 0) {
     alerts.push(
-      `0/${input.totalResolved} of last-24h resolutions came via webhook — webhook URL or signature config likely broken`,
+      `0/${nonCron} non-cron resolutions in 24h came via webhook — URL or signature config likely broken`,
     );
   }
-  if (
-    input.totalResolved >= 5 &&
-    (input.resolutionSource.polling ?? 0) === 0 &&
-    (input.resolutionSource.cron ?? 0) === 0
-  ) {
+  if (webhook + polling + cron + manual >= 5 && polling === 0 && cron === 0) {
     alerts.push(
       `Reconciliation paths haven't fired in 24h — polling/cron may not be running`,
     );

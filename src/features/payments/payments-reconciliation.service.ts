@@ -22,6 +22,8 @@ export interface SweepResult {
   startedAt: string;
   finishedAt: string;
   durationMs: number;
+  errored: boolean;
+  errorMessage?: string;
 }
 
 /**
@@ -30,14 +32,14 @@ export interface SweepResult {
  *  - Nightly sweep: walk every order still in `pending_payment`,
  *    ask Paygate for the canonical state, and either fulfill (mint
  *    tickets + transition to paid) or expire (mark as cancelled when
- *    the link TTL has already passed).
+ *    the link TTL has already passed AND Paygate confirms it never
+ *    paid).
  *  - Hourly canary: emit structured warn logs when the inflight
  *    counters cross simple thresholds. Doesn't fix anything; gives
  *    monitoring tooling a thing to alert on.
  *
- * Both jobs are also exposed as plain methods so the admin endpoint
- * can trigger them manually on demand (`GET /admin/payments/sweep`
- * style flows, kept out of scope here).
+ * Both jobs are also exposed as plain methods so `AdminPaymentsController`
+ * can trigger them manually on demand (`POST /admin/payments/sweep`).
  */
 @Injectable()
 export class PaymentsReconciliationService {
@@ -75,48 +77,82 @@ export class PaymentsReconciliationService {
       ticketsBackfilled: 0,
       paygateErrors: 0,
     };
+    let errored = false;
+    let errorMessage: string | undefined;
 
     this.logger.log(
       `[reconciliation] nightly sweep starting at ${startedAt.toISOString()}`,
     );
 
-    const stuck = await this.orders.listPendingForReconciliation(
-      startedAt,
-      STUCK_MIN_AGE_MS,
-    );
-    stats.scanned = stuck.length;
-    for (const order of stuck) {
-      await this.reconcileOne(order, stats);
-    }
-
-    const expired = await this.orders.listExpiredPending(startedAt);
-    for (const order of expired) {
-      const result = await this.orders.transitionStatus(order.id, {
-        status: 'cancelled',
-        source: 'cron',
-      });
-      if (result.applied) {
-        stats.expiredCancelled += 1;
+    try {
+      const stuck = await this.orders.listPendingForReconciliation(
+        startedAt,
+        STUCK_MIN_AGE_MS,
+      );
+      stats.scanned = stuck.length;
+      for (const order of stuck) {
+        await this.reconcileOne(order, stats);
       }
+
+      // Expired-but-still-pending: hit Paygate first. If the user
+      // paid right before TTL elapsed and the webhook never arrived,
+      // reconcileOne will transition them to paid + mint tickets.
+      // Whatever's still pending after that is genuinely abandoned;
+      // mark it cancelled.
+      const expiredWithLink =
+        await this.orders.listExpiredPendingWithLink(startedAt);
+      for (const order of expiredWithLink) {
+        await this.reconcileOne(order, stats);
+        const result = await this.orders.transitionStatus(order.id, {
+          status: 'cancelled',
+          source: 'cron',
+        });
+        if (result.applied) {
+          stats.expiredCancelled += 1;
+        }
+      }
+
+      // Expired pending without a paygate_link_id: nothing to ask
+      // Paygate about, straight cancel.
+      const expiredNoLink = await this.orders.listExpiredPending(startedAt);
+      for (const order of expiredNoLink) {
+        if (order.paygateLinkId) continue;
+        const result = await this.orders.transitionStatus(order.id, {
+          status: 'cancelled',
+          source: 'cron',
+        });
+        if (result.applied) {
+          stats.expiredCancelled += 1;
+        }
+      }
+
+      const paidNoTickets =
+        await this.orders.listPaidWithoutTickets(STUCK_MIN_AGE_MS);
+      for (const order of paidNoTickets) {
+        const minted = await this.tryMintTickets(order, 'cron-backfill');
+        if (minted) stats.ticketsBackfilled += 1;
+      }
+    } catch (err) {
+      errored = true;
+      errorMessage = err instanceof Error ? err.message : String(err);
+      this.logger.error(
+        `[reconciliation] sweep aborted: ${errorMessage}`,
+        err instanceof Error ? err.stack : undefined,
+      );
+    } finally {
+      const finishedAt = new Date();
+      this.lastSweep = {
+        ...stats,
+        startedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        durationMs: finishedAt.getTime() - startedAt.getTime(),
+        errored,
+        errorMessage,
+      };
+      this.logger.log(
+        `[reconciliation] sweep done errored=${errored} scanned=${stats.scanned} reconciledPaid=${stats.reconciledPaid} expiredCancelled=${stats.expiredCancelled} ticketsBackfilled=${stats.ticketsBackfilled} paygateErrors=${stats.paygateErrors} durationMs=${this.lastSweep.durationMs}`,
+      );
     }
-
-    const paidNoTickets = await this.orders.listPaidWithoutTickets(50);
-    for (const order of paidNoTickets) {
-      const minted = await this.tryMintTickets(order, 'cron-backfill');
-      if (minted) stats.ticketsBackfilled += 1;
-    }
-
-    const finishedAt = new Date();
-    this.lastSweep = {
-      ...stats,
-      startedAt: startedAt.toISOString(),
-      finishedAt: finishedAt.toISOString(),
-      durationMs: finishedAt.getTime() - startedAt.getTime(),
-    };
-
-    this.logger.log(
-      `[reconciliation] sweep done scanned=${stats.scanned} reconciledPaid=${stats.reconciledPaid} expiredCancelled=${stats.expiredCancelled} ticketsBackfilled=${stats.ticketsBackfilled} paygateErrors=${stats.paygateErrors} durationMs=${this.lastSweep.durationMs}`,
-    );
     return this.lastSweep;
   }
 
@@ -147,10 +183,15 @@ export class PaymentsReconciliationService {
       );
     }
     const sources = stats.resolutionSourceLast24h;
-    const totalResolved = Object.values(sources).reduce((a, b) => a + b, 0);
-    if (totalResolved >= 5 && (sources.webhook ?? 0) === 0) {
+    // Only resolutions the webhook *could* have produced count toward
+    // this denominator. Cron-resolved orders are by definition the
+    // webhook's misses, so including them would let a quiet day with
+    // a cron-only sweep look like a broken webhook.
+    const nonCronResolved =
+      (sources.webhook ?? 0) + (sources.polling ?? 0) + (sources.manual ?? 0);
+    if (nonCronResolved >= 5 && (sources.webhook ?? 0) === 0) {
       this.logger.warn(
-        `[canary] 0/${totalResolved} of last-24h resolutions came via webhook — webhook may be misconfigured`,
+        `[canary] 0/${nonCronResolved} non-cron resolutions came via webhook in 24h — webhook may be misconfigured`,
       );
     }
   }
