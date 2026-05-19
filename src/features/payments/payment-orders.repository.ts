@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '../../../generated/prisma';
+import { PaymentOrderStatus, Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import type {
   CreatePaymentOrderInput,
@@ -195,5 +195,37 @@ export class PaymentOrdersRepository {
       }
       throw err;
     }
+  }
+
+  countByStatus(status: PaymentOrderStatus): Promise<number> {
+    return this.prisma.paymentOrder.count({ where: { status } });
+  }
+
+  listAdmin(filter: {
+    status?: PaymentOrderStatus;
+    eventId?: string;
+    startDate?: string;
+    endDate?: string;
+    limit: number;
+    offset: number;
+  }): Promise<{ total: number; items: PaymentOrder[] }> {
+    const where: Prisma.PaymentOrderWhereInput = {};
+    if (filter.status) where.status = filter.status;
+    if (filter.eventId) where.eventId = filter.eventId;
+    if (filter.startDate || filter.endDate) {
+      where.createdAt = {
+        ...(filter.startDate ? { gte: new Date(filter.startDate) } : {}),
+        ...(filter.endDate ? { lte: new Date(filter.endDate) } : {}),
+      };
+    }
+    return Promise.all([
+      this.prisma.paymentOrder.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: filter.limit,
+        skip: filter.offset,
+      }),
+      this.prisma.paymentOrder.count({ where }),
+    ]).then(([items, total]) => ({ items, total }));
   }
 }

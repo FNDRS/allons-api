@@ -2,7 +2,19 @@ name: Deploy (AWS App Runner)
 
 on:
   push:
-    branches: [main]
+    branches: [stg]
+  # Prepared for future prod deploys.
+  # When ready, add `prod` to branches and configure the PROD secrets below.
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment target (stg today; prod later)'
+        type: choice
+        required: true
+        default: stg
+        options:
+          - stg
+          - prod
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -17,8 +29,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    # Safety: do not deploy on prod branch until we have a prod service.
+    if: ${{ github.ref_name == 'stg' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'stg') }}
+
     env:
       AWS_REGION: us-east-2
+      # Today, the existing App Runner service is treated as staging.
+      # When prod exists, use a different ECR repo and service name.
       ECR_REPOSITORY: allons-api
       APP_RUNNER_SERVICE_NAME: allons-api
       # Optional: set this GitHub secret to skip ListServices permission.
