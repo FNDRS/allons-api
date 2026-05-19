@@ -6,10 +6,12 @@ import {
   NotFoundException,
   Param,
   Patch,
+  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
 import { AdminSecretGuard } from './admin-secret.guard';
 import type {
   AdminEventActionResponse,
@@ -29,7 +31,10 @@ const ALLOWED_STATUSES = new Set([
 @UseGuards(AdminSecretGuard)
 @Controller('admin')
 export class AdminController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly orders: PaymentOrdersRepository,
+  ) {}
 
   @Get('overview-metrics')
   async getOverviewMetrics(): Promise<AdminOverviewMetricsResponse> {
@@ -140,6 +145,75 @@ export class AdminController {
 
     return { ok: true, id: updated.id, status: updated.status };
   }
+
+  @Get('payments/summary')
+  async getPaymentsSummary() {
+    const paidOrders = await this.orders.countByStatus('paid');
+    const pendingOrders = await this.orders.countByStatus('pending_payment');
+    const failedOrders = await this.orders.countByStatus('failed');
+    const paidList = await this.orders.listByStatus('paid');
+
+    const gmvCents = paidList.reduce((sum, o) => sum + o.amountCents, 0);
+
+    return {
+      gmvCents,
+      paidOrdersCount: paidOrders,
+      pendingOrdersCount: pendingOrders,
+      failedOrdersCount: failedOrders,
+      lastUpdated: new Date().toISOString(),
+    };
+  }
+
+  @Get('payments/orders')
+  async listOrders(
+    @Query('status') status?: string,
+    @Query('eventId') eventId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.orders.listAdmin({
+      status: status || undefined,
+      eventId: eventId || undefined,
+      startDate: startDate || undefined,
+      endDate: endDate || undefined,
+      limit: clampLimit(limit, 200, 50),
+      offset: clampOffset(offset),
+    });
+  }
+
+  @Post('payments/orders/:orderId/override')
+  async overrideOrderStatus(
+    @Param('orderId') orderId: string,
+    @Body('status') status?: string,
+    @Body('reason') reason?: string,
+  ) {
+    const valid = new Set(['paid', 'cancelled', 'failed']);
+    if (!status || !valid.has(status)) {
+      throw new BadRequestException(
+        'status must be one of: paid, cancelled, failed',
+      );
+    }
+    if (!reason || typeof reason !== 'string' || reason.trim().length === 0) {
+      throw new BadRequestException('reason is required for manual override');
+    }
+    const result = await this.prisma.paymentOrder.update({
+      where: { id: orderId },
+      data: {
+        status: status as any,
+        updatedAt: new Date(),
+      },
+    });
+    return { ok: true, orderId: result.id, status: result.status };
+  }
+}
+
+function clampOffset(raw: string | undefined, fallback = 0) {
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return Math.floor(parsed);
 }
 
 interface WhereParams {
