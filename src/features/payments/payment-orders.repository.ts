@@ -209,14 +209,14 @@ export class PaymentOrdersRepository {
   }
 
   listAdmin(filter: {
-    status?: string;
+    status?: PaymentOrderStatus;
     eventId?: string;
     startDate?: string;
     endDate?: string;
     limit: number;
     offset: number;
   }): Promise<{ total: number; items: PaymentOrder[] }> {
-    const where: Record<string, unknown> = {};
+    const where: Prisma.PaymentOrderWhereInput = {};
     if (filter.status) where.status = filter.status;
     if (filter.eventId) where.eventId = filter.eventId;
     if (filter.startDate || filter.endDate) {
@@ -227,12 +227,12 @@ export class PaymentOrdersRepository {
     }
     return Promise.all([
       this.prisma.paymentOrder.findMany({
-        where: where as any,
+        where,
         orderBy: { createdAt: 'desc' },
         take: filter.limit,
         skip: filter.offset,
       }),
-      this.prisma.paymentOrder.count({ where: where as any }),
+      this.prisma.paymentOrder.count({ where }),
     ]).then(([items, total]) => ({ items, total }));
   }
 }

@@ -11,7 +11,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { Prisma } from '../../../generated/prisma';
+import { PaymentOrderStatus } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
 import { AdminSecretGuard } from './admin-secret.guard';
@@ -202,8 +202,17 @@ export class AdminController {
     if (endDate && Number.isNaN(new Date(endDate).getTime())) {
       throw new BadRequestException('endDate no es una fecha válida');
     }
+    if (startDate && endDate) {
+      const startMs = new Date(startDate).getTime();
+      const endMs = new Date(endDate).getTime();
+      if (startMs > endMs) {
+        throw new BadRequestException(
+          'startDate no puede ser posterior a endDate',
+        );
+      }
+    }
     return this.orders.listAdmin({
-      status: status || undefined,
+      status: status ? (status as PaymentOrderStatus) : undefined,
       eventId: eventId || undefined,
       startDate: startDate || undefined,
       endDate: endDate || undefined,
@@ -238,7 +247,7 @@ export class AdminController {
     const result = await this.prisma.paymentOrder.update({
       where: { id: orderId },
       data: {
-        status: status as any,
+        status: status as PaymentOrderStatus,
         updatedAt: new Date(),
       },
     });
