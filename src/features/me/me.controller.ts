@@ -20,6 +20,7 @@ interface UpdateProfileBody {
   location?: string | null;
   avatarUrl?: string | null;
   avatarColor?: string | null;
+  notificationSettings?: unknown;
 }
 
 interface CaptureReferralBody {
