@@ -12,7 +12,9 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     rawBody: true,
     // Prod: keep debug off, but keep transaction logs (log/warn/error).
-    logger: isProd ? ['log', 'warn', 'error'] : ['log', 'debug', 'warn', 'error'],
+    logger: isProd
+      ? ['log', 'warn', 'error']
+      : ['log', 'debug', 'warn', 'error'],
   });
   // Ensure req.ip honors X-Forwarded-For behind proxies/load balancers.
   const instance = app.getHttpAdapter().getInstance();

@@ -53,7 +53,7 @@ export class MailService {
           `Después de instalar, inicia sesión con este correo (${payload.to}) para ver tu ticket.`,
         ].join('\n');
 
-    // No PII in logs (email/name). Keep only operational hints.
+    // Avoid PII in logs (email/name). Keep only operational hints.
     this.logger.log(
       `[mail] invite requested isAllonsUser=${payload.isAllonsUser} hasTicketId=${Boolean(payload.ticketId)} subject="${subject}"`,
     );

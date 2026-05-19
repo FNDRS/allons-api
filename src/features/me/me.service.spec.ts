@@ -26,6 +26,13 @@ function makePrisma() {
       findUnique: jest.fn(),
       count: jest.fn(() => Promise.resolve(0)),
       delete: jest.fn(),
+      update: jest.fn(),
+    },
+    paymentOrder: {
+      updateMany: jest.fn(() => Promise.resolve({ count: 1 })),
+    },
+    refund: {
+      create: jest.fn(),
     },
     conversationMember: {
       findMany: jest.fn(),
@@ -305,7 +312,7 @@ describe('MeService', () => {
     expect(qr.holderEmail).toBeUndefined();
   });
 
-  it('cancelTicket enforces owner and deletes', async () => {
+  it('cancelTicket enforces owner and soft-deletes', async () => {
     const prisma = makePrisma();
     const service = new MeService(
       prisma,
@@ -324,6 +331,7 @@ describe('MeService', () => {
       id: 't1',
       ownerId: 'u2',
       event: null,
+      paymentOrder: null,
     });
     await expect(service.cancelTicket('u1', 't1')).rejects.toBeInstanceOf(
       ForbiddenException,
@@ -332,12 +340,169 @@ describe('MeService', () => {
     prisma.ticket.findUnique.mockResolvedValueOnce({
       id: 't1',
       ownerId: 'u1',
+      cancelledAt: new Date(),
+      event: null,
+      paymentOrder: null,
+    });
+    await expect(service.cancelTicket('u1', 't1')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+
+    prisma.ticket.findUnique.mockResolvedValueOnce({
+      id: 't1',
+      ownerId: 'u1',
+      cancelledAt: null,
       event: { providerId: null, startsAt: null },
+      paymentOrder: null,
     });
     const res = await service.cancelTicket('u1', 't1');
     expect(res.cancelled).toBe(true);
     // eslint-disable-next-line @typescript-eslint/unbound-method
-    expect(prisma.ticket.delete).toHaveBeenCalled();
+    expect(prisma.ticket.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 't1' },
+        data: expect.objectContaining({ cancelledAt: expect.any(Date) }),
+      }),
+    );
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(prisma.ticket.delete).not.toHaveBeenCalled();
+  });
+
+  it('cancelTicket writes a refund record with status=requested when policy eligible', async () => {
+    const prisma = makePrisma();
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+    );
+
+    prisma.ticket.findUnique.mockResolvedValueOnce({
+      id: 't1',
+      ownerId: 'u1',
+      cancelledAt: null,
+      paymentOrderId: 'po-1',
+      event: {
+        id: 'e1',
+        providerId: 'prov-1',
+        startsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      },
+      paymentOrder: {
+        id: 'po-1',
+        quantity: 1,
+        amountCents: 12000,
+        currency: 'HNL',
+        paygatePaymentId: 'paygate-tx-1',
+      },
+    });
+    prisma.$queryRaw.mockResolvedValueOnce([
+      { refund_enabled: true, refund_deadline_hours: 24 },
+    ]);
+    (prisma.ticket.count as jest.Mock).mockResolvedValueOnce(0);
+
+    await service.cancelTicket('u1', 't1');
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(prisma.refund.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          paymentOrderId: 'po-1',
+          ticketId: 't1',
+          userId: 'u1',
+          amountCents: 12000,
+          status: 'requested',
+          policyEligibleAtRequest: true,
+          paygatePaymentId: 'paygate-tx-1',
+        }),
+      }),
+    );
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(prisma.paymentOrder.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'po-1', status: 'paid' },
+        data: expect.objectContaining({ status: 'refunded' }),
+      }),
+    );
+  });
+
+  it('cancelTicket writes a refund record with status=skipped_policy when not eligible', async () => {
+    const prisma = makePrisma();
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+    );
+
+    prisma.ticket.findUnique.mockResolvedValueOnce({
+      id: 't1',
+      ownerId: 'u1',
+      cancelledAt: null,
+      paymentOrderId: 'po-1',
+      event: {
+        id: 'e1',
+        providerId: 'prov-1',
+        startsAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+      paymentOrder: {
+        id: 'po-1',
+        quantity: 2,
+        amountCents: 20000,
+        currency: 'HNL',
+        paygatePaymentId: null,
+      },
+    });
+    prisma.$queryRaw.mockResolvedValueOnce([
+      { refund_enabled: false, refund_deadline_hours: 24 },
+    ]);
+    (prisma.ticket.count as jest.Mock).mockResolvedValueOnce(1);
+
+    await service.cancelTicket('u1', 't1');
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(prisma.refund.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'skipped_policy',
+          policyEligibleAtRequest: false,
+          amountCents: 10000, // 20000 / quantity 2
+        }),
+      }),
+    );
+    // Other tickets remain on the order; status stays paid.
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(prisma.paymentOrder.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('cancelTicket leaves the order alone when other active tickets remain', async () => {
+    const prisma = makePrisma();
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+    );
+
+    prisma.ticket.findUnique.mockResolvedValueOnce({
+      id: 't1',
+      ownerId: 'u1',
+      cancelledAt: null,
+      paymentOrderId: 'po-1',
+      event: { id: 'e1', providerId: null, startsAt: null },
+      paymentOrder: {
+        id: 'po-1',
+        quantity: 3,
+        amountCents: 30000,
+        currency: 'HNL',
+        paygatePaymentId: null,
+      },
+    });
+    (prisma.ticket.count as jest.Mock).mockResolvedValueOnce(2);
+
+    await service.cancelTicket('u1', 't1');
+
+    // eslint-disable-next-line @typescript-eslint/unbound-method
+    expect(prisma.paymentOrder.updateMany).not.toHaveBeenCalled();
   });
 
   it('listConversations computes unread based on last_read_at', async () => {

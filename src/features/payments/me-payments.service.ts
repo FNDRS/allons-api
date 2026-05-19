@@ -62,7 +62,9 @@ export class MePaymentsService {
         paymentsEnabled: this.flags.paymentsEnabled,
         forceFreeEvents: this.flags.forceFreeEvents,
       });
-      throw new ServiceUnavailableException('Pagos temporalmente deshabilitados');
+      throw new ServiceUnavailableException(
+        'Pagos temporalmente deshabilitados',
+      );
     }
 
     // Basic anti-fraud: prevent rapid-fire creation of pending orders.
@@ -108,7 +110,7 @@ export class MePaymentsService {
     }
 
     const existingSold = await this.prisma.ticket.count({
-      where: { eventId: event.id },
+      where: { eventId: event.id, cancelledAt: null },
     });
     if (event.capacity > 0 && existingSold + quantity > event.capacity) {
       throw new BadRequestException('No hay cupo disponible');
@@ -205,7 +207,7 @@ export class MePaymentsService {
         : order.status;
 
     const tickets = await this.prisma.ticket.findMany({
-      where: { paymentOrderId: order.id },
+      where: { paymentOrderId: order.id, cancelledAt: null },
       select: { id: true },
     });
 
@@ -269,6 +271,7 @@ export class MePaymentsService {
       status: 'paid',
       paygatePaymentId: detail.id,
       paygateRawWebhook: detail,
+      source: 'polling',
     });
     if (!transition.applied) {
       // Someone else (e.g. the webhook) already moved this order.

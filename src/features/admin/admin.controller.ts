@@ -33,7 +33,11 @@ const ALLOWED_STATUSES = new Set([
 
 @UseGuards(AdminSecretGuard)
 @Controller('admin')
-@SkipThrottle({ default: true, 'payment-initiate': true, 'paygate-webhook': true })
+@SkipThrottle({
+  default: true,
+  'payment-initiate': true,
+  'paygate-webhook': true,
+})
 export class AdminController {
   private readonly logger = new Logger(AdminController.name);
 

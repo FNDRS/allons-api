@@ -16,7 +16,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Request } from 'express';
-import { Throttle } from '@nestjs/throttler';
+import { seconds, Throttle } from '@nestjs/throttler';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import {
   InitiatePaymentBodyDto,
@@ -36,7 +36,7 @@ export class MePaymentsController {
   ) {}
 
   @Post('initiate')
-  @Throttle({ 'payment-initiate': { ttl: 60, limit: 10 } })
+  @Throttle({ 'payment-initiate': { ttl: seconds(60), limit: 10 } })
   @ApiOperation({
     summary: 'Start payment (order + Paygate link)',
     description:

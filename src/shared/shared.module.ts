@@ -6,7 +6,17 @@ import { ObservabilityService } from './observability/observability.service';
 
 @Global()
 @Module({
-  providers: [SupabaseAdminService, MailService, FeatureFlagsService, ObservabilityService],
-  exports: [SupabaseAdminService, MailService, FeatureFlagsService, ObservabilityService],
+  providers: [
+    SupabaseAdminService,
+    MailService,
+    FeatureFlagsService,
+    ObservabilityService,
+  ],
+  exports: [
+    SupabaseAdminService,
+    MailService,
+    FeatureFlagsService,
+    ObservabilityService,
+  ],
 })
 export class SharedModule {}

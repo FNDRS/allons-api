@@ -55,7 +55,11 @@ function sanitizeValue(key: string, value: unknown): Json {
     return '[redacted]';
   }
   // Common secret-ish keys.
-  if (k.includes('token') || k.includes('secret') || k.includes('authorization')) {
+  if (
+    k.includes('token') ||
+    k.includes('secret') ||
+    k.includes('authorization')
+  ) {
     return '[redacted]';
   }
 
@@ -74,9 +78,9 @@ function sanitizeValue(key: string, value: unknown): Json {
 
   if (typeof value === 'object') {
     // Don't dump big objects (e.g. full webhook payload). Keep a hint only.
-    const keys = Object.keys(value as Record<string, unknown>);
+    const keys = Object.keys(value);
     return { _type: 'object', _keys: keys.slice(0, 30) };
   }
 
-  return String(value);
+  return '[unknown]';
 }

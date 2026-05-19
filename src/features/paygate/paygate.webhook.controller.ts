@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiBody, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
-import { Throttle } from '@nestjs/throttler';
+import { seconds, Throttle } from '@nestjs/throttler';
 import { ObservabilityService } from '../../shared/observability/observability.service';
 import { PaygateConfigService } from './paygate.config';
 import { PaygateWebhookSignatureError } from './paygate.errors';
@@ -38,7 +38,7 @@ export class PaygateWebhookController {
 
   @Post()
   @HttpCode(200)
-  @Throttle({ 'paygate-webhook': { ttl: 60, limit: 600 } })
+  @Throttle({ 'paygate-webhook': { ttl: seconds(60), limit: 600 } })
   @ApiOperation({
     summary: 'Paygate (Clinpays) webhook receiver',
     description:
@@ -182,6 +182,7 @@ export class PaygateWebhookController {
       status: nextStatus,
       paygatePaymentId: paygateId,
       paygateRawWebhook: payload as any,
+      source: 'webhook',
     });
 
     if (!transitioned.applied) {
@@ -210,7 +211,7 @@ export class PaygateWebhookController {
       return;
     }
     const sold = await this.prisma.ticket.count({
-      where: { eventId: order.eventId },
+      where: { eventId: order.eventId, cancelledAt: null },
     });
     if (eventRow.capacity > 0 && sold + order.quantity > eventRow.capacity) {
       this.logger.error(
