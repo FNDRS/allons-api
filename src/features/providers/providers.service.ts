@@ -18,6 +18,25 @@ interface ProviderMembership {
   role: ProviderRole;
 }
 
+function parseCoordinate(
+  value: unknown,
+  kind: 'latitude' | 'longitude',
+): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const n = typeof value === 'string' ? Number(value) : (value as number);
+  if (!Number.isFinite(n)) {
+    throw new BadRequestException(`${kind} inválida`);
+  }
+  if (kind === 'latitude' && (n < -90 || n > 90)) {
+    throw new BadRequestException('latitude fuera de rango');
+  }
+  if (kind === 'longitude' && (n < -180 || n > 180)) {
+    throw new BadRequestException('longitude fuera de rango');
+  }
+  return n;
+}
+
 interface EventAggregateRow {
   event_id: string;
   sold_count: number;
@@ -1044,6 +1063,14 @@ export class ProvidersService {
     try {
       const member = await this.requireMembership(userId, ['owner', 'admin']);
       if (!title) throw new BadRequestException('title es requerido');
+
+      const latitude = parseCoordinate(body.latitude, 'latitude');
+      const longitude = parseCoordinate(body.longitude, 'longitude');
+      if ((latitude == null) !== (longitude == null)) {
+        throw new BadRequestException(
+          'Debes enviar latitude y longitude juntas (o ambas null).',
+        );
+      }
       const creatorProfile = await this.prisma.profile.findUnique({
         where: { userId },
         select: { userId: true },
@@ -1073,6 +1100,8 @@ export class ProvidersService {
           city: body.city ? this.safeString(body.city) : null,
           venue: body.venue ? this.safeString(body.venue) : null,
           address: body.address ? this.safeString(body.address) : null,
+          latitude: latitude ?? null,
+          longitude: longitude ?? null,
           coverImageUrl: body.coverImageUrl
             ? this.safeString(body.coverImageUrl)
             : null,
@@ -1134,6 +1163,14 @@ export class ProvidersService {
     });
     if (!event) throw new NotFoundException('Evento no encontrado');
 
+    const latitude = parseCoordinate(body.latitude, 'latitude');
+    const longitude = parseCoordinate(body.longitude, 'longitude');
+    if ((latitude == null) !== (longitude == null)) {
+      throw new BadRequestException(
+        'Debes enviar latitude y longitude juntas (o ambas null).',
+      );
+    }
+
     const prevStatus = (event as any).status as string | undefined;
 
     await this.prisma.event.update({
@@ -1172,6 +1209,8 @@ export class ProvidersService {
             : body.address
               ? this.safeString(body.address)
               : undefined,
+        latitude: latitude,
+        longitude: longitude,
         coverImageUrl:
           body.coverImageUrl === null
             ? null
