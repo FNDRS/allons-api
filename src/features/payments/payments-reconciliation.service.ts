@@ -59,6 +59,15 @@ export class PaymentsReconciliationService {
   }
 
   /**
+   * Mints tickets for a paid order that has none. Used by admin manual
+   * overrides so paid orders don't stay ticketless.
+   */
+  async backfillTicketsForPaidOrder(order: PaymentOrder): Promise<boolean> {
+    if (order.status !== 'paid') return false;
+    return this.tryMintTickets(order, 'admin-override');
+  }
+
+  /**
    * Runs every night at 03:00 server time. The sweep is bounded: it
    * only touches orders older than 5 minutes (immediate fulfillment
    * paths have had their turn) and only contacts Paygate for rows

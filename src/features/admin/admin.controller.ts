@@ -15,6 +15,7 @@ import { SkipThrottle } from '@nestjs/throttler';
 import { PaymentOrderStatus } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
+import { PaymentsReconciliationService } from '../payments/payments-reconciliation.service';
 import { AdminSecretGuard } from './admin-secret.guard';
 import type {
   AdminEventActionResponse,
@@ -40,10 +41,12 @@ const ALLOWED_STATUSES = new Set([
 })
 export class AdminController {
   private readonly logger = new Logger(AdminController.name);
+  private payoutInfraReady = false;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly orders: PaymentOrdersRepository,
+    private readonly reconciliation: PaymentsReconciliationService,
   ) {}
 
   @Get('overview-metrics')
@@ -156,6 +159,49 @@ export class AdminController {
     return { ok: true, id: updated.id, status: updated.status };
   }
 
+  @Get('payouts/recent')
+  async listRecentPayouts(@Query('limit') limit?: string) {
+    const take = clampLimit(limit, 100, 20);
+    await this.ensurePayoutRequestsTable();
+
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        provider_id: string;
+        provider_name: string | null;
+        amount_cents: bigint;
+        method: string;
+        status: string;
+        created_at: Date;
+      }>
+    >`
+      SELECT
+        r.id,
+        r.provider_id,
+        p.name AS provider_name,
+        (r.amount * 100)::bigint AS amount_cents,
+        r.method,
+        r.status,
+        r.created_at
+      FROM provider_payout_requests r
+      LEFT JOIN providers p ON p.id = r.provider_id
+      ORDER BY r.created_at DESC
+      LIMIT ${take}
+    `;
+
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        providerId: row.provider_id,
+        providerName: row.provider_name?.trim() || 'Comercio sin nombre',
+        amount: Number(row.amount_cents) / 100,
+        method: row.method,
+        status: row.status,
+        createdAt: row.created_at.toISOString(),
+      })),
+    };
+  }
+
   @Get('payments/summary')
   async getPaymentsSummary() {
     const [paidOrders, pendingOrders, failedOrders, gmvResult] =
@@ -254,6 +300,7 @@ export class AdminController {
       where: { id: orderId },
       data: {
         status: status as PaymentOrderStatus,
+        resolutionSource: 'manual',
         updatedAt: new Date(),
       },
     });
@@ -262,7 +309,45 @@ export class AdminController {
       `Manual override order=${orderId} from=${existing.status} to=${status} reason="${reason.trim()}"`,
     );
 
-    return { ok: true, orderId: result.id, status: result.status };
+    let ticketsMinted: boolean | null = null;
+    if (status === 'paid') {
+      const existingTickets = await this.prisma.ticket.count({
+        where: { paymentOrderId: orderId, cancelledAt: null },
+      });
+      ticketsMinted =
+        existingTickets > 0
+          ? true
+          : await this.reconciliation.backfillTicketsForPaidOrder(result);
+    }
+
+    return {
+      ok: true,
+      orderId: result.id,
+      status: result.status,
+      ticketsMinted,
+    };
+  }
+
+  /** Same DDL as ProvidersService.ensureInfrastructure — table may not exist until first provider call. */
+  private async ensurePayoutRequestsTable() {
+    if (this.payoutInfraReady) return;
+
+    await this.prisma.$executeRaw`
+      CREATE TABLE IF NOT EXISTS provider_payout_requests (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        provider_id uuid NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+        amount numeric(12,2) NOT NULL,
+        method text NOT NULL,
+        status text NOT NULL DEFAULT 'pending',
+        created_by uuid NOT NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      )
+    `;
+    await this.prisma.$executeRaw`
+      CREATE INDEX IF NOT EXISTS provider_payout_requests_provider_idx
+      ON provider_payout_requests(provider_id, created_at DESC)
+    `;
+    this.payoutInfraReady = true;
   }
 }
 
