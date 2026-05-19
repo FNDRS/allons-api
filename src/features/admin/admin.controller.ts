@@ -23,6 +23,9 @@ import type {
   AdminOverviewMetricsResponse,
 } from './admin.types';
 
+type AdminNotificationAudience = 'clients' | 'providers';
+type AdminNotificationTab = 'amigos' | 'eventos' | 'menciones';
+
 const ALLOWED_STATUSES = new Set([
   'draft',
   'published',
@@ -45,6 +48,64 @@ export class AdminController {
     private readonly prisma: PrismaService,
     private readonly orders: PaymentOrdersRepository,
   ) {}
+
+  @Post('notifications/broadcast')
+  async broadcastNotification(
+    @Body()
+    body: {
+      audience?: AdminNotificationAudience;
+      categoryLabel?: string | null;
+      title?: string;
+      description?: string | null;
+      tabs?: AdminNotificationTab[];
+      dedupeKey?: string | null;
+    },
+  ) {
+    const audience = body?.audience;
+    if (audience !== 'clients' && audience !== 'providers') {
+      throw new BadRequestException('audience debe ser clients o providers');
+    }
+    const title = (body?.title ?? '').trim();
+    if (!title) throw new BadRequestException('title es requerido');
+
+    const tabs = Array.isArray(body?.tabs) && body.tabs.length > 0
+      ? body.tabs
+      : (['eventos'] as AdminNotificationTab[]);
+
+    const dedupeKey = (body?.dedupeKey ?? '').trim() || null;
+
+    // Insert per-user notifications by selecting the target audience.
+    // Providers are profiles that have a matching row in `providers`.
+    const sql = audience === 'providers'
+      ? this.prisma.$executeRaw`
+          INSERT INTO notifications (user_id, dedupe_key, category_label, title, description, relevant_tabs)
+          SELECT p.user_id,
+                 ${dedupeKey},
+                 ${body.categoryLabel ?? null},
+                 ${title},
+                 ${body.description ?? null},
+                 ${tabs}::notification_tab[]
+          FROM profiles p
+          JOIN providers pr ON pr.id = p.user_id
+          ON CONFLICT (user_id, dedupe_key) DO NOTHING
+        `
+      : this.prisma.$executeRaw`
+          INSERT INTO notifications (user_id, dedupe_key, category_label, title, description, relevant_tabs)
+          SELECT p.user_id,
+                 ${dedupeKey},
+                 ${body.categoryLabel ?? null},
+                 ${title},
+                 ${body.description ?? null},
+                 ${tabs}::notification_tab[]
+          FROM profiles p
+          LEFT JOIN providers pr ON pr.id = p.user_id
+          WHERE pr.id IS NULL
+          ON CONFLICT (user_id, dedupe_key) DO NOTHING
+        `;
+
+    await sql;
+    return { ok: true };
+  }
 
   @Get('overview-metrics')
   async getOverviewMetrics(): Promise<AdminOverviewMetricsResponse> {

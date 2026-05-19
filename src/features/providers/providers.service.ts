@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { parseTicketQrPayload } from './ticket-qr.utils';
+import { NotificationsService } from '../notifications/notifications.service';
 
 type ProviderRole = 'owner' | 'admin' | 'staff_scanner';
 
@@ -34,6 +35,7 @@ export class ProvidersService {
     private readonly prisma: PrismaService,
     private readonly supabaseAdmin: SupabaseAdminService,
     private readonly config: ConfigService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   private async ensureInfrastructure() {
@@ -945,6 +947,15 @@ export class ProvidersService {
       `Descuento creado: ${code}`,
       eventId,
     );
+
+    // Notify followers (marketing toggle).
+    void this.notifications.maybeNotifyProviderUpdate({
+      providerId: member.providerId,
+      kind: 'discount_created',
+      title: 'Nuevo descuento',
+      description: `CupÃ³n ${code} disponible.`,
+      dedupeKey: `discount:${member.providerId}:${code}`,
+    });
     return this.listProviderDiscounts(userId);
   }
 
@@ -1123,6 +1134,8 @@ export class ProvidersService {
     });
     if (!event) throw new NotFoundException('Evento no encontrado');
 
+    const prevStatus = (event as any).status as string | undefined;
+
     await this.prisma.event.update({
       where: { id: eventId },
       data: {
@@ -1218,6 +1231,19 @@ export class ProvidersService {
       `Evento actualizado: ${event.title}`,
       eventId,
     );
+
+    // If it was just published, notify followers (marketing toggle).
+    const nextStatus = body.status ? this.safeString(body.status) : undefined;
+    const publishedNow = prevStatus !== 'published' && nextStatus === 'published';
+    if (publishedNow) {
+      void this.notifications.maybeNotifyProviderUpdate({
+        providerId: member.providerId,
+        kind: 'event_published',
+        title: 'Nuevo evento publicado',
+        description: event.title,
+        dedupeKey: `event_published:${eventId}`,
+      });
+    }
     return this.getProviderEvent(userId, eventId);
   }
 
@@ -1400,7 +1426,7 @@ export class ProvidersService {
 
     if (ticketId && !eventMismatch) {
       // Atomic block: lock the ticket row, recheck duplicates, insert
-      // the scan record âÿÿ all in one transaction. Two scans of the
+      // the scan record ï¿½ï¿½ï¿½ all in one transaction. Two scans of the
       // same ticket racing in different staff sessions now serialize:
       // the second one sees the first scan's row and lands as
       // `duplicate`.
@@ -1426,7 +1452,7 @@ export class ProvidersService {
         const resolvedName = holderRows[0]?.holder_name ?? 'Invitado';
 
         // Soft-deleted tickets are still queryable on purpose: scanning
-        // one should report "cancelado", not "invalid" âÿÿ otherwise the
+        // one should report "cancelado", not "invalid" ï¿½ï¿½ï¿½ otherwise the
         // doorperson can't tell a fraudulent code apart from a real
         // ticket the buyer cancelled this morning.
         if (ticketRows[0].cancelled_at) {

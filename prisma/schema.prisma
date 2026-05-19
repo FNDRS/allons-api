@@ -240,6 +240,7 @@ enum NotificationTab {
 model Notification {
   id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId        String            @map("user_id") @db.Uuid
+  dedupeKey     String?           @map("dedupe_key")
   categoryLabel String?           @map("category_label")
   title         String
   description   String?
@@ -249,6 +250,7 @@ model Notification {
 
   profile Profile @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
+  @@unique([userId, dedupeKey])
   @@index([userId, createdAt(sort: Desc)])
   @@map("notifications")
 }
