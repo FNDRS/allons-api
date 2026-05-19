@@ -13,12 +13,14 @@ import {
 import type { Request } from 'express';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { ProvidersService } from './providers.service';
+import { PostHogService } from '../../shared/posthog/posthog.service';
 
 @Controller('provider')
 export class ProviderPrivateController {
   constructor(
     private readonly providersService: ProvidersService,
     private readonly supabaseAdmin: SupabaseAdminService,
+    private readonly posthog: PostHogService,
   ) {}
 
   private async getUser(req: Request) {
@@ -141,7 +143,21 @@ export class ProviderPrivateController {
     @Body() body: Record<string, unknown>,
   ) {
     const user = await this.getUser(req);
-    return this.providersService.createProviderEvent(user.id, body);
+    const result = await this.providersService.createProviderEvent(
+      user.id,
+      body,
+    );
+    this.posthog.capture({
+      distinctId: user.id,
+      event: 'provider event created',
+      properties: {
+        event_id:
+          result && typeof result === 'object' && 'id' in result
+            ? String(result.id)
+            : undefined,
+      },
+    });
+    return result;
   }
 
   @Patch('events/:id')
@@ -157,7 +173,13 @@ export class ProviderPrivateController {
   @Delete('events/:id')
   async deleteEvent(@Req() req: Request, @Param('id') id: string) {
     const user = await this.getUser(req);
-    return this.providersService.deleteProviderEvent(user.id, id);
+    const result = await this.providersService.deleteProviderEvent(user.id, id);
+    this.posthog.capture({
+      distinctId: user.id,
+      event: 'provider event deleted',
+      properties: { event_id: id },
+    });
+    return result;
   }
 
   @Get('events/:id/ticket-types')
@@ -198,7 +220,17 @@ export class ProviderPrivateController {
     @Body() body: Record<string, unknown>,
   ) {
     const user = await this.getUser(req);
-    return this.providersService.validateScan(user.id, body);
+    const result = await this.providersService.validateScan(user.id, body);
+    this.posthog.capture({
+      distinctId: user.id,
+      event: 'ticket scan validated',
+      properties: {
+        event_id: typeof body.eventId === 'string' ? body.eventId : undefined,
+        ticket_id:
+          typeof body.ticketId === 'string' ? body.ticketId : undefined,
+      },
+    });
+    return result;
   }
 
   @Get('scans')
@@ -222,6 +254,15 @@ export class ProviderPrivateController {
     @Body() body: { amount?: number; method?: string },
   ) {
     const user = await this.getUser(req);
-    return this.providersService.requestPayout(user.id, body);
+    const result = await this.providersService.requestPayout(user.id, body);
+    this.posthog.capture({
+      distinctId: user.id,
+      event: 'payout requested',
+      properties: {
+        amount: typeof body.amount === 'number' ? body.amount : undefined,
+        method: typeof body.method === 'string' ? body.method : undefined,
+      },
+    });
+    return result;
   }
 }

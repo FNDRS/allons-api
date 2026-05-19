@@ -12,6 +12,7 @@ import { ApiBody, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { seconds, Throttle } from '@nestjs/throttler';
 import { ObservabilityService } from '../../shared/observability/observability.service';
+import { PostHogService } from '../../shared/posthog/posthog.service';
 import { PaygateConfigService } from './paygate.config';
 import { PaygateWebhookSignatureError } from './paygate.errors';
 import { PaygateSignatureVerifier } from './paygate.signature';
@@ -34,6 +35,7 @@ export class PaygateWebhookController {
     private readonly supabaseAdmin: SupabaseAdminService,
     private readonly prisma: PrismaService,
     private readonly obs: ObservabilityService,
+    private readonly posthog: PostHogService,
   ) {}
 
   @Post()
@@ -198,6 +200,34 @@ export class PaygateWebhookController {
       source: 'webhook',
       paygatePaymentId: paygateId,
     });
+
+    if (nextStatus === 'paid') {
+      this.posthog.capture({
+        distinctId: order.userId,
+        event: 'payment completed',
+        properties: {
+          order_id: order.id,
+          event_id: order.eventId,
+          amount_cents: order.amountCents,
+          currency: order.currency,
+          quantity: order.quantity,
+          source: 'webhook',
+        },
+      });
+    } else {
+      this.posthog.capture({
+        distinctId: order.userId,
+        event: 'payment failed',
+        properties: {
+          order_id: order.id,
+          event_id: order.eventId,
+          amount_cents: order.amountCents,
+          currency: order.currency,
+          status: nextStatus,
+          source: 'webhook',
+        },
+      });
+    }
 
     if (nextStatus !== 'paid') return;
 
