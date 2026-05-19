@@ -173,7 +173,7 @@ export class PaygateWebhookController {
       return;
     }
     const sold = await this.prisma.ticket.count({
-      where: { eventId: order.eventId },
+      where: { eventId: order.eventId, cancelledAt: null },
     });
     if (eventRow.capacity > 0 && sold + order.quantity > eventRow.capacity) {
       this.logger.error(

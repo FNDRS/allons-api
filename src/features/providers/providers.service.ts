@@ -1394,24 +1394,65 @@ export class ProvidersService {
     // ticket id (e.g. manual entry of a non-UUID code).
     const persistedCode = ticketId ?? rawCode;
 
-    let status: 'valid' | 'duplicate' | 'invalid' = 'invalid';
+    let status: 'valid' | 'duplicate' | 'invalid' | 'cancelled' = 'invalid';
     let attendeeName = 'Invitado';
     const ticketType = 'General';
 
     if (ticketId && !eventMismatch) {
       // Atomic block: lock the ticket row, recheck duplicates, insert
-      // the scan record ï¿½ï¿½ï¿½ all in one transaction. Two scans of the
+      // the scan record âÿÿ all in one transaction. Two scans of the
       // same ticket racing in different staff sessions now serialize:
       // the second one sees the first scan's row and lands as
       // `duplicate`.
       const txResult = await this.prisma.$transaction(async (tx) => {
-        const ticketRows = await tx.$queryRaw<Array<{ id: string }>>`
-          SELECT id FROM tickets
+        const ticketRows = await tx.$queryRaw<
+          Array<{ id: string; cancelled_at: Date | null }>
+        >`
+          SELECT id, cancelled_at FROM tickets
           WHERE id = ${ticketId}::uuid AND event_id = ${eventId}::uuid
           FOR UPDATE
         `;
         if (ticketRows.length === 0) {
           return { status: 'invalid' as const, attendeeName };
+        }
+
+        const holderRows = await tx.$queryRaw<
+          Array<{ holder_name: string | null }>
+        >`
+          SELECT holder_name FROM ticket_holders
+          WHERE ticket_id = ${ticketId}::uuid
+          LIMIT 1
+        `;
+        const resolvedName = holderRows[0]?.holder_name ?? 'Invitado';
+
+        // Soft-deleted tickets are still queryable on purpose: scanning
+        // one should report "cancelado", not "invalid" âÿÿ otherwise the
+        // doorperson can't tell a fraudulent code apart from a real
+        // ticket the buyer cancelled this morning.
+        if (ticketRows[0].cancelled_at) {
+          await tx.$executeRaw`
+            INSERT INTO provider_scan_records (
+              provider_id,
+              event_id,
+              ticket_id,
+              ticket_code,
+              attendee_name,
+              ticket_type,
+              scanned_by,
+              status
+            )
+            VALUES (
+              ${member.providerId}::uuid,
+              ${eventId}::uuid,
+              ${ticketId}::uuid,
+              ${persistedCode},
+              ${resolvedName},
+              ${ticketType},
+              ${userId}::uuid,
+              'cancelled'
+            )
+          `;
+          return { status: 'cancelled' as const, attendeeName: resolvedName };
         }
 
         const duplicateRows = await tx.$queryRaw<Array<{ total: number }>>`
@@ -1423,18 +1464,6 @@ export class ProvidersService {
         const txStatus: 'valid' | 'duplicate' = isDuplicate
           ? 'duplicate'
           : 'valid';
-
-        // Holder lookup runs for both `valid` and `duplicate` so the
-        // operator can see who's already inside / who's trying to
-        // re-enter.
-        const holderRows = await tx.$queryRaw<
-          Array<{ holder_name: string | null }>
-        >`
-          SELECT holder_name FROM ticket_holders
-          WHERE ticket_id = ${ticketId}::uuid
-          LIMIT 1
-        `;
-        const resolvedName = holderRows[0]?.holder_name ?? 'Invitado';
 
         await tx.$executeRaw`
           INSERT INTO provider_scan_records (

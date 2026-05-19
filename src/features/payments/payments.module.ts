@@ -10,6 +10,7 @@ import { PaymentOrdersRepository } from './payment-orders.repository';
 import { PaymentsReconciliationService } from './payments-reconciliation.service';
 import { ProviderPaymentsController } from './provider-payments.controller';
 import { ProviderPaymentsService } from './provider-payments.service';
+import { RefundsRepository } from './refunds.repository';
 
 @Module({
   imports: [PaygateModule, MeModule, ProvidersModule],
@@ -24,11 +25,13 @@ import { ProviderPaymentsService } from './provider-payments.service';
     MePaymentsService,
     ProviderPaymentsService,
     PaymentsReconciliationService,
+    RefundsRepository,
   ],
   exports: [
     PaymentOrdersRepository,
     MePaymentsService,
     PaymentsReconciliationService,
+    RefundsRepository,
   ],
 })
 export class PaymentsModule {}

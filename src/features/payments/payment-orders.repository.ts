@@ -197,7 +197,11 @@ export class PaymentOrdersRepository {
     return this.prisma.paymentOrder.findMany({
       where: {
         status: 'paid',
-        tickets: { none: {} },
+        // "No active tickets" — soft-deleted ones don't count as
+        // satisfying the order. If they did, an order whose only
+        // ticket got cancelled would be invisible here even though
+        // the user has nothing usable.
+        tickets: { none: { cancelledAt: null } },
         updatedAt: { lt: cutoffUpdated },
       },
       orderBy: { updatedAt: 'desc' },
