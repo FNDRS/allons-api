@@ -201,6 +201,16 @@ export class PaymentOrdersRepository {
     return this.prisma.paymentOrder.count({ where: { status } });
   }
 
+  countStalePending(minutes: number): Promise<number> {
+    const cutoff = new Date(Date.now() - minutes * 60_000);
+    return this.prisma.paymentOrder.count({
+      where: {
+        status: 'pending_payment',
+        createdAt: { lt: cutoff },
+      },
+    });
+  }
+
   listByStatus(status: PaymentOrderStatus): Promise<PaymentOrder[]> {
     return this.prisma.paymentOrder.findMany({
       where: { status },
@@ -209,14 +219,15 @@ export class PaymentOrdersRepository {
   }
 
   listAdmin(filter: {
-    status?: PaymentOrderStatus;
+    status?: string;
     eventId?: string;
     startDate?: string;
     endDate?: string;
+    staleMinutes?: number;
     limit: number;
     offset: number;
   }): Promise<{ total: number; items: PaymentOrder[] }> {
-    const where: Prisma.PaymentOrderWhereInput = {};
+    const where: Record<string, unknown> = {};
     if (filter.status) where.status = filter.status;
     if (filter.eventId) where.eventId = filter.eventId;
     if (filter.startDate || filter.endDate) {
@@ -225,14 +236,19 @@ export class PaymentOrdersRepository {
         ...(filter.endDate ? { lte: new Date(filter.endDate) } : {}),
       };
     }
+    if (filter.staleMinutes) {
+      const cutoff = new Date(Date.now() - filter.staleMinutes * 60_000);
+      where.createdAt = { ...(where.createdAt as Record<string, unknown> || {}), lt: cutoff };
+      where.status = 'pending_payment';
+    }
     return Promise.all([
       this.prisma.paymentOrder.findMany({
-        where,
+        where: where as any,
         orderBy: { createdAt: 'desc' },
         take: filter.limit,
         skip: filter.offset,
       }),
-      this.prisma.paymentOrder.count({ where }),
+      this.prisma.paymentOrder.count({ where: where as any }),
     ]).then(([items, total]) => ({ items, total }));
   }
 }

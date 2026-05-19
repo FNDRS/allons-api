@@ -152,7 +152,7 @@ export class AdminController {
 
   @Get('payments/summary')
   async getPaymentsSummary() {
-    const [paidOrders, pendingOrders, failedOrders, gmvResult] =
+    const [paidOrders, pendingOrders, failedOrders, gmvResult, staleCount] =
       await Promise.all([
         this.orders.countByStatus('paid'),
         this.orders.countByStatus('pending_payment'),
@@ -161,6 +161,7 @@ export class AdminController {
           where: { status: 'paid' },
           _sum: { amountCents: true },
         }),
+        this.orders.countStalePending(60),
       ]);
 
     const gmvCents = gmvResult._sum.amountCents ?? 0;
@@ -170,6 +171,7 @@ export class AdminController {
       paidOrdersCount: paidOrders,
       pendingOrdersCount: pendingOrders,
       failedOrdersCount: failedOrders,
+      stalePendingCount: staleCount,
       lastUpdated: new Date().toISOString(),
     };
   }
@@ -188,6 +190,7 @@ export class AdminController {
     @Query('eventId') eventId?: string,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('staleMinutes') staleMinutes?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
@@ -202,20 +205,15 @@ export class AdminController {
     if (endDate && Number.isNaN(new Date(endDate).getTime())) {
       throw new BadRequestException('endDate no es una fecha válida');
     }
-    if (startDate && endDate) {
-      const startMs = new Date(startDate).getTime();
-      const endMs = new Date(endDate).getTime();
-      if (startMs > endMs) {
-        throw new BadRequestException(
-          'startDate no puede ser posterior a endDate',
-        );
-      }
+    if (startDate && endDate && new Date(startDate).getTime() > new Date(endDate).getTime()) {
+      throw new BadRequestException('startDate no puede ser posterior a endDate');
     }
     return this.orders.listAdmin({
-      status: status ? (status as PaymentOrderStatus) : undefined,
+      status: status || undefined,
       eventId: eventId || undefined,
       startDate: startDate || undefined,
       endDate: endDate || undefined,
+      staleMinutes: staleMinutes ? Number(staleMinutes) : undefined,
       limit: clampLimit(limit, 200, 50),
       offset: clampOffset(offset),
     });
