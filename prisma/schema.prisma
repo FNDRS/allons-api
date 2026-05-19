@@ -21,6 +21,7 @@ model Profile {
   avatarUrl   String?  @map("avatar_url")
   avatarColor String?  @map("avatar_color")
   location    String?
+  notificationSettings Json?   @map("notification_settings")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
