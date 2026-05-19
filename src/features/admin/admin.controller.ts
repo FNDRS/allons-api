@@ -258,6 +258,47 @@ export class AdminController {
 
     return { ok: true, orderId: result.id, status: result.status };
   }
+
+  @Get('payouts/recent')
+  async listRecentPayouts(@Query('limit') limit?: string) {
+    const take = clampLimit(limit, 100, 20);
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        provider_id: string;
+        provider_name: string;
+        amount: unknown;
+        method: string;
+        status: string;
+        created_at: Date;
+      }>
+    >`
+      SELECT
+        r.id,
+        r.provider_id,
+        p.name AS provider_name,
+        r.amount,
+        r.method,
+        r.status,
+        r.created_at
+      FROM provider_payout_requests r
+      JOIN providers p ON p.id = r.provider_id
+      ORDER BY r.created_at DESC
+      LIMIT ${take}
+    `;
+
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        providerId: row.provider_id,
+        providerName: row.provider_name,
+        amount: Number(row.amount),
+        method: row.method,
+        status: row.status,
+        createdAt: row.created_at.toISOString(),
+      })),
+    };
+  }
 }
 
 function clampOffset(raw: string | undefined, fallback = 0) {
