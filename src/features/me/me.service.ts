@@ -23,6 +23,52 @@ interface UpdateProfileInput {
   location?: string | null;
   avatarUrl?: string | null;
   avatarColor?: string | null;
+  notificationSettings?: unknown;
+}
+
+type NotificationSettings = {
+  push: {
+    eventReminders: boolean;
+    friendActivity: boolean;
+    marketing: boolean;
+  };
+  inApp: {
+    eventReminders: boolean;
+    friendActivity: boolean;
+    marketing: boolean;
+  };
+};
+
+const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  push: { eventReminders: true, friendActivity: true, marketing: false },
+  inApp: { eventReminders: true, friendActivity: true, marketing: false },
+};
+
+function coerceNotificationSettings(input: unknown): NotificationSettings {
+  if (!input || typeof input !== 'object') return DEFAULT_NOTIFICATION_SETTINGS;
+  const obj = input as any;
+
+  function readSection(section: any) {
+    return {
+      eventReminders:
+        typeof section?.eventReminders === 'boolean'
+          ? section.eventReminders
+          : DEFAULT_NOTIFICATION_SETTINGS.push.eventReminders,
+      friendActivity:
+        typeof section?.friendActivity === 'boolean'
+          ? section.friendActivity
+          : DEFAULT_NOTIFICATION_SETTINGS.push.friendActivity,
+      marketing:
+        typeof section?.marketing === 'boolean'
+          ? section.marketing
+          : DEFAULT_NOTIFICATION_SETTINGS.push.marketing,
+    };
+  }
+
+  return {
+    push: readSection(obj.push),
+    inApp: readSection(obj.inApp),
+  };
 }
 
 export interface NotificationItemDto {
@@ -190,6 +236,10 @@ export class MeService {
     const profileAvatarColor = nonEmptyOrUndefined(profile?.avatarColor);
     const profileLocation = nonEmptyOrUndefined(profile?.location);
 
+    const notificationSettings = coerceNotificationSettings(
+      (profile as any)?.notificationSettings,
+    );
+
     return {
       userId,
       email: email ?? null,
@@ -199,6 +249,7 @@ export class MeService {
       avatarColor: profileAvatarColor ?? fallbackAvatarColor,
       location: profileLocation ?? fallbackLocation ?? null,
       interests: (profile?.interests ?? []).map((row) => row.interest.name),
+      notificationSettings,
     };
   }
 
@@ -213,6 +264,11 @@ export class MeService {
     if (input.location !== undefined) data.location = input.location;
     if (input.avatarUrl !== undefined) data.avatarUrl = input.avatarUrl;
     if (input.avatarColor !== undefined) data.avatarColor = input.avatarColor;
+    if (input.notificationSettings !== undefined) {
+      data.notificationSettings = coerceNotificationSettings(
+        input.notificationSettings,
+      );
+    }
 
     const fallbackName =
       typeof metadata.name === 'string' ? metadata.name : undefined;
