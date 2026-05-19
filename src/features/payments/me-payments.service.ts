@@ -66,7 +66,7 @@ export class MePaymentsService {
     }
 
     const existingSold = await this.prisma.ticket.count({
-      where: { eventId: event.id },
+      where: { eventId: event.id, cancelledAt: null },
     });
     if (event.capacity > 0 && existingSold + quantity > event.capacity) {
       throw new BadRequestException('No hay cupo disponible');
@@ -145,7 +145,7 @@ export class MePaymentsService {
         : order.status;
 
     const tickets = await this.prisma.ticket.findMany({
-      where: { paymentOrderId: order.id },
+      where: { paymentOrderId: order.id, cancelledAt: null },
       select: { id: true },
     });
 

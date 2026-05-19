@@ -1392,35 +1392,45 @@ export class ProvidersService {
     if (!event) throw new NotFoundException('Evento no encontrado');
 
     const ticketId = this.parseTicketId(ticketCode);
-    let status: 'valid' | 'duplicate' | 'invalid' = 'invalid';
+    let status: 'valid' | 'duplicate' | 'invalid' | 'cancelled' = 'invalid';
     let attendeeName = 'Invitado';
     const ticketType = 'General';
 
     if (ticketId) {
+      // Soft-deleted tickets are still queryable on purpose: scanning
+      // one should report "cancelado", not "invalid" — otherwise the
+      // doorperson can't tell a fraudulent code apart from a real
+      // ticket the buyer cancelled this morning.
       const ticket = await this.prisma.ticket.findFirst({
         where: { id: ticketId, eventId },
-        select: { id: true },
+        select: { id: true, cancelledAt: true },
       });
       if (ticket) {
-        const duplicate = await this.prisma.$queryRaw<Array<{ total: number }>>`
-          SELECT COUNT(*)::int AS total
-          FROM provider_scan_records
-          WHERE ticket_id = ${ticket.id}::uuid
-            AND status = 'valid'
-        `;
-        if ((duplicate[0]?.total ?? 0) > 0) {
-          status = 'duplicate';
+        if (ticket.cancelledAt) {
+          status = 'cancelled';
         } else {
-          status = 'valid';
-          const holder = await this.prisma.$queryRaw<
-            Array<{ holder_name: string | null }>
+          const duplicate = await this.prisma.$queryRaw<
+            Array<{ total: number }>
           >`
-            SELECT holder_name
-            FROM ticket_holders
+            SELECT COUNT(*)::int AS total
+            FROM provider_scan_records
             WHERE ticket_id = ${ticket.id}::uuid
-            LIMIT 1
+              AND status = 'valid'
           `;
-          attendeeName = holder[0]?.holder_name ?? attendeeName;
+          if ((duplicate[0]?.total ?? 0) > 0) {
+            status = 'duplicate';
+          } else {
+            status = 'valid';
+            const holder = await this.prisma.$queryRaw<
+              Array<{ holder_name: string | null }>
+            >`
+              SELECT holder_name
+              FROM ticket_holders
+              WHERE ticket_id = ${ticket.id}::uuid
+              LIMIT 1
+            `;
+            attendeeName = holder[0]?.holder_name ?? attendeeName;
+          }
         }
       }
     }

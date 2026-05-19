@@ -530,10 +530,14 @@ export class MeService {
     };
 
     const tickets = await this.prisma.ticket.findMany({
-      where:
-        invitedTicketIds.length > 0
-          ? { OR: [ownedWhere, invitedWhere] }
-          : ownedWhere,
+      where: {
+        AND: [
+          invitedTicketIds.length > 0
+            ? { OR: [ownedWhere, invitedWhere] }
+            : ownedWhere,
+          { cancelledAt: null },
+        ],
+      },
       include: {
         event: {
           include: {
@@ -944,7 +948,7 @@ export class MeService {
 
     const ticket = await this.prisma.ticket.findUnique({
       where: { id: ticketId },
-      include: { event: true },
+      include: { event: true, paymentOrder: true },
     });
     if (!ticket) {
       throw new NotFoundException('Ticket no encontrado');
@@ -952,13 +956,59 @@ export class MeService {
     if (ticket.ownerId !== userId) {
       throw new ForbiddenException('El ticket no pertenece al usuario');
     }
+    if (ticket.cancelledAt) {
+      throw new BadRequestException('El ticket ya fue cancelado');
+    }
 
     const refundPolicy = await this.getRefundPolicyForProvider(
       ticket.event?.providerId ?? null,
       ticket.event?.startsAt ?? null,
     );
 
-    await this.prisma.ticket.delete({ where: { id: ticket.id } });
+    // Soft-delete: keep the row so the scanner can show "ticket
+    // cancelado" instead of "not found", so sold_count math stays
+    // auditable, and so the refund record below has a stable FK target.
+    await this.prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { cancelledAt: new Date() },
+    });
+
+    // Audit row: every cancellation produces a refund record, even
+    // when the policy says no money goes back. `skipped_policy` is a
+    // valid terminal state — it's how we tell "user wanted out and
+    // we kept the money per policy" apart from "user wants money
+    // back, awaiting processing". Failures here are logged but don't
+    // abort: the cancellation already succeeded from the user's
+    // perspective.
+    if (ticket.paymentOrderId && ticket.paymentOrder) {
+      const order = ticket.paymentOrder;
+      const perTicketAmount =
+        order.quantity > 0
+          ? Math.floor(order.amountCents / order.quantity)
+          : order.amountCents;
+      try {
+        await this.prisma.refund.create({
+          data: {
+            paymentOrderId: order.id,
+            ticketId: ticket.id,
+            userId,
+            amountCents: perTicketAmount,
+            currency: order.currency,
+            reason: 'user_cancelled',
+            status: refundPolicy.eligible ? 'requested' : 'skipped_policy',
+            policyEligibleAtRequest: refundPolicy.eligible,
+            policyDeadlineHoursAtRequest: refundPolicy.deadlineHours ?? null,
+            paygatePaymentId: order.paygatePaymentId ?? null,
+          },
+        });
+      } catch (err) {
+        this.logger.warn(
+          `cancelTicket: failed to write refund record for ticket=${ticket.id}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
 
     // Surface the cancellation on the provider's activity feed and
     // free the seat back to availability so a new buyer can claim it.
@@ -1034,7 +1084,10 @@ export class MeService {
     if (ticket.paymentOrderId) {
       try {
         const remaining = await this.prisma.ticket.count({
-          where: { paymentOrderId: ticket.paymentOrderId },
+          where: {
+            paymentOrderId: ticket.paymentOrderId,
+            cancelledAt: null,
+          },
         });
         if (remaining === 0) {
           const nextStatus = refundPolicy.eligible ? 'refunded' : 'cancelled';
@@ -1607,6 +1660,11 @@ export class MeService {
     if (ticket.ownerId !== userId) {
       throw new ForbiddenException('El ticket no pertenece al usuario');
     }
+    if (ticket.cancelledAt) {
+      throw new BadRequestException(
+        'No se puede compartir un ticket cancelado',
+      );
+    }
 
     const peerAuth = await this.supabaseAdmin.db.auth.admin.getUserById(
       args.peerUserId,
@@ -1696,6 +1754,11 @@ export class MeService {
     if (!ticket) throw new NotFoundException('Ticket no encontrado');
     if (ticket.ownerId !== userId) {
       throw new ForbiddenException('El ticket no pertenece al usuario');
+    }
+    if (ticket.cancelledAt) {
+      throw new BadRequestException(
+        'No se puede invitar a un ticket cancelado',
+      );
     }
 
     const email = (args.email ?? '').trim().toLowerCase();
@@ -1889,7 +1952,7 @@ export class MeService {
 
   async listEventHistory(userId: string) {
     const tickets = await this.prisma.ticket.findMany({
-      where: { ownerId: userId, NOT: { eventId: null } },
+      where: { ownerId: userId, NOT: { eventId: null }, cancelledAt: null },
       include: { event: true },
       orderBy: { createdAt: 'desc' },
     });

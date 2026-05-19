@@ -180,11 +180,13 @@ model Ticket {
   tab            TicketTab @default(eventos)
   themeColor     String?   @map("theme_color")
   attendeeCount  Int       @default(0) @map("attendee_count")
+  cancelledAt    DateTime? @map("cancelled_at") @db.Timestamptz(6)
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   owner        Profile       @relation(fields: [ownerId], references: [userId], onDelete: Cascade)
   event        Event?        @relation(fields: [eventId], references: [id], onDelete: SetNull)
   paymentOrder PaymentOrder? @relation(fields: [paymentOrderId], references: [id], onDelete: SetNull)
+  refunds      Refund[]
 
   @@index([ownerId])
   @@index([eventId])
@@ -280,9 +282,37 @@ model PaymentOrder {
   user    Profile  @relation(fields: [userId], references: [userId], onDelete: Restrict)
   event   Event    @relation(fields: [eventId], references: [id], onDelete: Restrict)
   tickets Ticket[]
+  refunds Refund[]
 
   @@index([userId])
   @@index([eventId])
   @@index([status])
   @@map("payment_orders")
+}
+
+model Refund {
+  id                            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentOrderId                String       @map("payment_order_id") @db.Uuid
+  ticketId                      String?      @map("ticket_id") @db.Uuid
+  userId                        String       @map("user_id") @db.Uuid
+  amountCents                   Int          @map("amount_cents")
+  currency                      String       @default("HNL")
+  reason                        String
+  status                        String
+  policyEligibleAtRequest       Boolean      @map("policy_eligible_at_request")
+  policyDeadlineHoursAtRequest  Int?         @map("policy_deadline_hours_at_request")
+  paygatePaymentId              String?      @map("paygate_payment_id")
+  paygateRefundResponse         Json?        @map("paygate_refund_response")
+  notes                         String?
+  requestedAt                   DateTime     @default(now()) @map("requested_at") @db.Timestamptz(6)
+  resolvedAt                    DateTime?    @map("resolved_at") @db.Timestamptz(6)
+  updatedAt                     DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  paymentOrder PaymentOrder @relation(fields: [paymentOrderId], references: [id], onDelete: Restrict)
+  ticket       Ticket?      @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+
+  @@index([paymentOrderId])
+  @@index([status, requestedAt(sort: Desc)])
+  @@index([userId, requestedAt(sort: Desc)])
+  @@map("refunds")
 }
