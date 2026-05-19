@@ -415,7 +415,9 @@ export class ProvidersService {
   private mapRoleToMemberRole(raw: unknown): ProviderRole {
     const role = this.safeString(raw).toLowerCase();
     if (role === 'owner') return 'owner';
-    if (role === 'admin' || role === 'finance') return 'admin';
+    if (role === 'admin' || role === 'finance' || role === 'comercio') {
+      return 'admin';
+    }
     return 'staff_scanner';
   }
 
@@ -696,15 +698,39 @@ export class ProvidersService {
     if (!email || !name) {
       throw new BadRequestException('email y name son requeridos');
     }
-    if (!['scanner', 'admin', 'finance'].includes(role)) {
+    if (!['scanner', 'admin', 'finance', 'comercio'].includes(role)) {
       throw new BadRequestException('role inválido');
     }
+
+    const comercioRoleRaw = this.safeString(body.comercio_role).toLowerCase();
+    const comercioRole =
+      comercioRoleRaw === 'admin' ||
+      comercioRoleRaw === 'comercio' ||
+      comercioRoleRaw === 'staff'
+        ? comercioRoleRaw
+        : role === 'comercio'
+          ? 'comercio'
+          : role === 'scanner'
+            ? 'staff'
+            : undefined;
+
+    const permsRaw = body.comercio_permissions;
+    const comercioPermissions =
+      permsRaw &&
+      typeof permsRaw === 'object' &&
+      !Array.isArray(permsRaw)
+        ? (permsRaw as Record<string, unknown>)
+        : undefined;
 
     const metadata = {
       role: 'staff',
       full_name: name,
       phone,
       staff_role: role,
+      ...(comercioRole ? { comercio_role: comercioRole } : {}),
+      ...(comercioPermissions
+        ? { comercio_permissions: comercioPermissions }
+        : {}),
       avatar_color: avatarColor,
       brand_name: brandName,
       brand_handle: brandHandle,
@@ -787,7 +813,7 @@ export class ProvidersService {
       name,
       email: invitedEmail,
       phone,
-      role: role === 'admin' ? 'admin' : 'scanner',
+      role,
       avatarColor,
     });
 
