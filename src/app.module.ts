@@ -16,6 +16,7 @@ import { MeModule } from './features/me/me.module';
 import { AdminModule } from './features/admin/admin.module';
 import { PaygateModule } from './features/paygate/paygate.module';
 import { PaymentsModule } from './features/payments/payments.module';
+import { NotificationsModule } from './features/notifications/notifications.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AllonsThrottlerGuard } from './shared/rate-limit/allons-throttler.guard';
@@ -47,6 +48,7 @@ import { AllonsThrottlerGuard } from './shared/rate-limit/allons-throttler.guard
     AdminModule,
     PaygateModule,
     PaymentsModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [
