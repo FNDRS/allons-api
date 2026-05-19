@@ -12,6 +12,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { FeatureFlagsService } from '../../shared/feature-flags.service';
+import { ObservabilityService } from '../../shared/observability/observability.service';
 import { MeService } from '../me/me.service';
 import { PaygateService } from '../paygate/paygate.service';
 import { PaymentOrdersRepository } from './payment-orders.repository';
@@ -44,11 +45,23 @@ export class MePaymentsService {
     private readonly me: MeService,
     private readonly supabaseAdmin: SupabaseAdminService,
     private readonly flags: FeatureFlagsService,
+    private readonly obs: ObservabilityService,
   ) {}
 
   async initiatePayment(userId: string, input: InitiateInput) {
+    this.obs.event('payments.initiate.request', {
+      userId,
+      eventId: input.eventId,
+      quantity: input.quantity,
+    });
+
     if (!this.flags.paymentsEnabled || this.flags.forceFreeEvents) {
       // Keep message stable so the client can detect and show a friendly UX.
+      this.obs.warn('payments.initiate.disabled', {
+        userId,
+        paymentsEnabled: this.flags.paymentsEnabled,
+        forceFreeEvents: this.flags.forceFreeEvents,
+      });
       throw new ServiceUnavailableException('Pagos temporalmente deshabilitados');
     }
 
@@ -61,6 +74,10 @@ export class MePaymentsService {
       },
     });
     if (recentPending >= 3) {
+      this.obs.warn('payments.initiate.blocked_recent_pending', {
+        userId,
+        recentPending,
+      });
       throw new HttpException(
         'Demasiados intentos de pago; intenta de nuevo en unos minutos',
         HttpStatus.TOO_MANY_REQUESTS,
@@ -120,6 +137,14 @@ export class MePaymentsService {
       currency: 'HNL',
     });
 
+    this.obs.event('payments.paygate.link_created', {
+      userId,
+      eventId: event.id,
+      paygateLinkId: link.id,
+      amountCents,
+      currency: link.currency,
+    });
+
     const expiresAt = new Date(
       Date.now() + link.expirationHours * 60 * 60 * 1000,
     );
@@ -133,6 +158,16 @@ export class MePaymentsService {
       currency: link.currency,
       paygateLinkId: link.id,
       expiresAt,
+    });
+
+    this.obs.event('payments.order.created', {
+      orderId: order.id,
+      userId: order.userId,
+      eventId: order.eventId,
+      status: order.status,
+      amountCents: order.amountCents,
+      currency: order.currency,
+      paygateLinkId: order.paygateLinkId,
     });
 
     return {
@@ -241,6 +276,15 @@ export class MePaymentsService {
       return (await this.orders.findById(order.id)) ?? order;
     }
 
+    this.obs.event('payments.order.transitioned', {
+      orderId: order.id,
+      userId: order.userId,
+      from: 'pending_payment',
+      to: 'paid',
+      source: 'polling',
+      paygatePaymentId: detail.id,
+    });
+
     // Mint the tickets — same code path the webhook controller uses.
     // Failures here are logged but not rolled back: the order stays
     // `paid` and the support flow can backfill missing tickets.
@@ -268,6 +312,12 @@ export class MePaymentsService {
         `reconcile: fulfilled order=${order.id} via Paygate polling (paygatePaymentId=${detail.id})`,
       );
     } catch (err) {
+      this.obs.error('payments.order.fulfillment_failed', err, {
+        orderId: order.id,
+        userId: order.userId,
+        eventId: order.eventId,
+        source: 'polling',
+      });
       this.logger.error(
         `reconcile: order ${order.id} marked paid but ticket creation failed: ${
           err instanceof Error ? err.message : String(err)

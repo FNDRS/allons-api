@@ -77,6 +77,7 @@ function buildService(): { service: MePaymentsService; mocks: Mocks } {
       paymentsEnabled: true,
       forceFreeEvents: false,
     } as any,
+    { event: jest.fn(), warn: jest.fn(), error: jest.fn() } as any,
   );
   mocks.prisma.paymentOrder.count.mockResolvedValue(0);
   return { service, mocks };

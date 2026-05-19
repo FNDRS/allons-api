@@ -11,6 +11,7 @@ import {
 import { ApiBody, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { Throttle } from '@nestjs/throttler';
+import { ObservabilityService } from '../../shared/observability/observability.service';
 import { PaygateConfigService } from './paygate.config';
 import { PaygateWebhookSignatureError } from './paygate.errors';
 import { PaygateSignatureVerifier } from './paygate.signature';
@@ -32,6 +33,7 @@ export class PaygateWebhookController {
     private readonly me: MeService,
     private readonly supabaseAdmin: SupabaseAdminService,
     private readonly prisma: PrismaService,
+    private readonly obs: ObservabilityService,
   ) {}
 
   @Post()
@@ -83,11 +85,18 @@ export class PaygateWebhookController {
 
       try {
         this.signature.verify({ rawBody, headers });
+        this.obs.event('payments.webhook.signature_ok', {
+          webhookId: firstHeader(headers, 'x-clinpays-webhook-id') ?? null,
+        });
       } catch (err) {
         if (err instanceof PaygateWebhookSignatureError) {
           this.logger.warn(
             `Paygate webhook rejected (${err.reason}): ${err.message}`,
           );
+          this.obs.warn('payments.webhook.signature_invalid', {
+            reason: err.reason,
+            webhookId: firstHeader(headers, 'x-clinpays-webhook-id') ?? null,
+          });
           throw new UnauthorizedException('Invalid Paygate signature');
         }
         throw err;
@@ -105,6 +114,11 @@ export class PaygateWebhookController {
     this.logger.log(
       `Paygate webhook received${eventHint ? ` (event=${String(eventHint)})` : ''}`,
     );
+
+    this.obs.event('payments.webhook.received', {
+      webhookId: firstHeader(headers, 'x-clinpays-webhook-id') ?? null,
+      eventHint: eventHint ? String(eventHint) : null,
+    });
 
     // Process asynchronously but respond 200 quickly to avoid retries.
     void this.processWebhook(req.body as PaygateWebhookPayload, headers).catch(
@@ -131,6 +145,9 @@ export class PaygateWebhookController {
 
     if (!paygateId) {
       this.logger.warn('Paygate webhook missing _id; ignoring');
+      this.obs.warn('payments.webhook.missing_paygate_id', {
+        webhookId: firstHeader(headers, 'x-clinpays-webhook-id') ?? null,
+      });
       return;
     }
 
@@ -140,6 +157,11 @@ export class PaygateWebhookController {
       this.logger.warn(
         `Paygate webhook for unknown order (paygateId=${paygateId}${orderRef ? `, orderReference=${orderRef}` : ''}${webhookId ? `, webhookId=${webhookId}` : ''})`,
       );
+      this.obs.warn('payments.webhook.unknown_order', {
+        paygateId,
+        webhookId: webhookId ?? null,
+        hasOrderRef: Boolean(orderRef),
+      });
       return;
     }
 
@@ -148,6 +170,11 @@ export class PaygateWebhookController {
       this.logger.warn(
         `Paygate webhook has unhandled status="${rawStatus}" (order=${order.id})`,
       );
+      this.obs.warn('payments.webhook.unhandled_status', {
+        orderId: order.id,
+        paygateId,
+        status: rawStatus,
+      });
       return;
     }
 
@@ -161,6 +188,15 @@ export class PaygateWebhookController {
       // Idempotent duplicate or already terminal.
       return;
     }
+
+    this.obs.event('payments.order.transitioned', {
+      orderId: order.id,
+      userId: order.userId,
+      from: 'pending_payment',
+      to: nextStatus,
+      source: 'webhook',
+      paygatePaymentId: paygateId,
+    });
 
     if (nextStatus !== 'paid') return;
 

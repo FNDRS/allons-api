@@ -30,6 +30,7 @@ import { AllonsThrottlerGuard } from './shared/rate-limit/allons-throttler.guard
         { name: 'payment-initiate', ttl: 60, limit: 10 },
         { name: 'paygate-webhook', ttl: 60, limit: 600 },
       ],
+      setHeaders: true,
     }),
     PrismaModule,
     SharedModule,

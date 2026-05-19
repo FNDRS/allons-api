@@ -10,6 +10,7 @@ import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
 import { MeService } from '../me/me.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ObservabilityService } from '../../shared/observability/observability.service';
 
 async function buildController(env: Record<string, string | undefined>) {
   const moduleRef = await Test.createTestingModule({
@@ -44,6 +45,10 @@ async function buildController(env: Record<string, string | undefined>) {
       {
         provide: ConfigService,
         useValue: { get: (key: string) => env[key] },
+      },
+      {
+        provide: ObservabilityService,
+        useValue: { event: jest.fn(), warn: jest.fn(), error: jest.fn() },
       },
     ],
   }).compile();
