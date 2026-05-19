@@ -14,6 +14,7 @@ import type { PaymentOrder } from './payment-orders.types';
 interface Mocks {
   prisma: {
     event: { findUnique: jest.Mock };
+    paymentOrder: { count: jest.Mock };
     ticket: { count: jest.Mock; findMany: jest.Mock };
     $queryRaw: jest.Mock;
   };
@@ -43,6 +44,7 @@ function buildService(): { service: MePaymentsService; mocks: Mocks } {
   const mocks: Mocks = {
     prisma: {
       event: { findUnique: jest.fn() },
+      paymentOrder: { count: jest.fn() },
       ticket: { count: jest.fn(), findMany: jest.fn() },
       $queryRaw: jest.fn(),
     },
@@ -71,7 +73,12 @@ function buildService(): { service: MePaymentsService; mocks: Mocks } {
     mocks.orders as unknown as PaymentOrdersRepository,
     mocks.me as unknown as MeService,
     mocks.supabaseAdmin as unknown as import('../../shared/supabase/supabase-admin.service').SupabaseAdminService,
+    {
+      paymentsEnabled: true,
+      forceFreeEvents: false,
+    } as any,
   );
+  mocks.prisma.paymentOrder.count.mockResolvedValue(0);
   return { service, mocks };
 }
 

@@ -8,7 +8,17 @@ async function bootstrap() {
   // controller to verify the HMAC signature against the exact bytes
   // Paygate signed (re-serializing JSON would produce a different
   // payload and break the signature check).
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  const isProd = (process.env.NODE_ENV ?? '').toLowerCase() === 'production';
+  const app = await NestFactory.create(AppModule, {
+    rawBody: true,
+    // Prod: keep logs minimal (warn/error). Dev/stg: include log/debug.
+    logger: isProd ? ['warn', 'error'] : ['log', 'debug', 'warn', 'error'],
+  });
+  // Ensure req.ip honors X-Forwarded-For behind proxies/load balancers.
+  const instance = app.getHttpAdapter().getInstance();
+  if (typeof instance?.set === 'function') {
+    instance.set('trust proxy', 1);
+  }
   app.enableCors();
 
   const config = new DocumentBuilder()
