@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiBody, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
+import { Throttle } from '@nestjs/throttler';
 import { PaygateConfigService } from './paygate.config';
 import { PaygateWebhookSignatureError } from './paygate.errors';
 import { PaygateSignatureVerifier } from './paygate.signature';
@@ -35,6 +36,7 @@ export class PaygateWebhookController {
 
   @Post()
   @HttpCode(200)
+  @Throttle({ 'paygate-webhook': { ttl: 60, limit: 600 } })
   @ApiOperation({
     summary: 'Paygate (Clinpays) webhook receiver',
     description:

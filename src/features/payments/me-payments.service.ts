@@ -5,9 +5,13 @@ import {
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
+import { FeatureFlagsService } from '../../shared/feature-flags.service';
 import { MeService } from '../me/me.service';
 import { PaygateService } from '../paygate/paygate.service';
 import { PaymentOrdersRepository } from './payment-orders.repository';
@@ -39,9 +43,30 @@ export class MePaymentsService {
     private readonly orders: PaymentOrdersRepository,
     private readonly me: MeService,
     private readonly supabaseAdmin: SupabaseAdminService,
+    private readonly flags: FeatureFlagsService,
   ) {}
 
   async initiatePayment(userId: string, input: InitiateInput) {
+    if (!this.flags.paymentsEnabled || this.flags.forceFreeEvents) {
+      // Keep message stable so the client can detect and show a friendly UX.
+      throw new ServiceUnavailableException('Pagos temporalmente deshabilitados');
+    }
+
+    // Basic anti-fraud: prevent rapid-fire creation of pending orders.
+    const recentPending = await this.prisma.paymentOrder.count({
+      where: {
+        userId,
+        status: 'pending_payment',
+        createdAt: { gte: new Date(Date.now() - 10 * 60 * 1000) },
+      },
+    });
+    if (recentPending >= 3) {
+      throw new HttpException(
+        'Demasiados intentos de pago; intenta de nuevo en unos minutos',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
     const event = await this.prisma.event.findUnique({
       where: { id: input.eventId },
     });

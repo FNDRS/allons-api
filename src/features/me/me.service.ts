@@ -1286,7 +1286,9 @@ export class MeService {
       INSERT INTO customer_referral_events (user_id, event_name, payload, created_at)
       VALUES (${userId}::uuid, ${eventName}, ${safePayload}::jsonb, now())
     `;
-    console.log('[referrals]', eventName, { userId, ...(payload ?? {}) });
+    this.logger.debug(
+      `[referrals] ${eventName} userId=${userId} payload=${safePayload ?? '{}'} `,
+    );
   }
 
   private async getRefundPolicyForProvider(
