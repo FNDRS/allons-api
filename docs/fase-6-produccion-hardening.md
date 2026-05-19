@@ -63,15 +63,17 @@ Nota:
 
 ## 5) Minimización de logs
 
-En `NODE_ENV=production` el logger de Nest queda limitado a:
-
-- `warn`
-- `error`
+En `NODE_ENV=production` mantenemos logs de transacciones (nivel `log`) además de `warn/error`.
 
 Reglas:
 
 - No loguear payloads de Paygate completos.
 - No loguear secrets/tokens.
+- No loguear PII (emails, teléfonos, nombres). Usar identificadores internos (`orderId`, `eventId`, `userId`).
+
+Implementación:
+
+- `ObservabilityService` emite eventos JSON con sanitización para CloudWatch/Insights.
 
 ## 6) Retención de logs (operación)
 

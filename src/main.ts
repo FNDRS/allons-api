@@ -11,8 +11,8 @@ async function bootstrap() {
   const isProd = (process.env.NODE_ENV ?? '').toLowerCase() === 'production';
   const app = await NestFactory.create(AppModule, {
     rawBody: true,
-    // Prod: keep logs minimal (warn/error). Dev/stg: include log/debug.
-    logger: isProd ? ['warn', 'error'] : ['log', 'debug', 'warn', 'error'],
+    // Prod: keep debug off, but keep transaction logs (log/warn/error).
+    logger: isProd ? ['log', 'warn', 'error'] : ['log', 'debug', 'warn', 'error'],
   });
   // Ensure req.ip honors X-Forwarded-For behind proxies/load balancers.
   const instance = app.getHttpAdapter().getInstance();
