@@ -426,6 +426,29 @@ export class ProvidersService {
     return role === 'staff_scanner' ? 'scanner' : 'admin';
   }
 
+  private parseComercioRoleFromMetadata(
+    metadata: Record<string, unknown> | undefined,
+  ): 'admin' | 'comercio' | 'staff' | undefined {
+    const raw = this.safeString(metadata?.comercio_role).toLowerCase();
+    if (raw === 'admin' || raw === 'comercio' || raw === 'staff') return raw;
+    if (metadata?.role === 'provider') return 'admin';
+    return undefined;
+  }
+
+  private async fetchAuthMetadataByUserIds(
+    userIds: string[],
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const unique = [...new Set(userIds)];
+    const entries = await Promise.all(
+      unique.map(async (id) => {
+        const { data } =
+          await this.supabaseAdmin.db.auth.admin.getUserById(id);
+        return [id, (data?.user?.user_metadata ?? {}) as Record<string, unknown>] as const;
+      }),
+    );
+    return new Map(entries);
+  }
+
   private async getEventAggregates(providerId: string) {
     const rows = await this.prisma.$queryRaw<EventAggregateRow[]>`
       SELECT
@@ -620,17 +643,33 @@ export class ProvidersService {
         END ASC,
         pm.created_at ASC
     `;
-    return rows.map((row) => ({
-      userId: row.user_id,
-      name: row.full_name ?? row.profile_name ?? 'Miembro',
-      email: row.email,
-      phone: row.phone,
-      role: this.mapMemberRoleToClientRole(row.role),
-      avatarColor: row.avatar_color ?? row.profile_avatar_color ?? '#F67010',
-      active: row.active,
-      invitedAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    const metadataByUser = await this.fetchAuthMetadataByUserIds(
+      rows.map((row) => row.user_id),
+    );
+    return rows.map((row) => {
+      const metadata = metadataByUser.get(row.user_id);
+      const comercioRole = this.parseComercioRoleFromMetadata(metadata);
+      const comercioPermissionsRaw = metadata?.comercio_permissions;
+      const comercioPermissions =
+        comercioPermissionsRaw &&
+        typeof comercioPermissionsRaw === 'object' &&
+        !Array.isArray(comercioPermissionsRaw)
+          ? (comercioPermissionsRaw as Record<string, unknown>)
+          : undefined;
+      return {
+        userId: row.user_id,
+        name: row.full_name ?? row.profile_name ?? 'Miembro',
+        email: row.email,
+        phone: row.phone,
+        role: this.mapMemberRoleToClientRole(row.role),
+        ...(comercioRole ? { comercioRole } : {}),
+        ...(comercioPermissions ? { comercioPermissions } : {}),
+        avatarColor: row.avatar_color ?? row.profile_avatar_color ?? '#F67010',
+        active: row.active,
+        invitedAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    });
   }
 
   async upsertProviderStaff(userId: string, body: Record<string, unknown>) {
@@ -874,6 +913,30 @@ export class ProvidersService {
       WHERE provider_id = ${member.providerId}::uuid
         AND user_id = ${targetUserId}::uuid
     `;
+    const permsRaw = body.comercio_permissions;
+    if (
+      permsRaw &&
+      typeof permsRaw === 'object' &&
+      !Array.isArray(permsRaw)
+    ) {
+      const authUser =
+        await this.supabaseAdmin.db.auth.admin.getUserById(targetUserId);
+      if (authUser.data?.user) {
+        const updated = await this.supabaseAdmin.db.auth.admin.updateUserById(
+          targetUserId,
+          {
+            user_metadata: {
+              ...(authUser.data.user.user_metadata ?? {}),
+              comercio_permissions: permsRaw,
+            },
+          },
+        );
+        if (updated.error) {
+          throw new BadRequestException(updated.error.message);
+        }
+      }
+    }
+
     await this.appendActivity(
       member.providerId,
       'staff',
