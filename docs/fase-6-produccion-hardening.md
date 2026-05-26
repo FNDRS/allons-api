@@ -84,6 +84,54 @@ AWS (CloudWatch Logs):
   - `prod`: 30 días
 - Export/Archive opcional a S3 si legal/operaciones requiere histórico.
 
+## 6.1) Alarmas (CloudWatch)
+
+OBS-001: API = CloudWatch (sin PostHog en Nest). Las alarmas viven en AWS, no
+en el repo (no hay IaC). Setup actual: App Runner `allons-api`, región
+`us-east-2`. Los logs de App Runner van al grupo
+`/aws/apprunner/allons-api/<service-id>/application` (obtené `<service-id>` con
+`aws apprunner list-services --region us-east-2`).
+
+`ObservabilityService` emite vía el Logger de Nest, así que cada línea es
+`[Nest] … ERROR [obs] {"type":"error",…}` — **no JSON puro**. Por eso los metric
+filters usan **patrones de término** (substring), no patrones JSON (`{ $.x = … }`).
+
+Métricas (metric filters) recomendadas, namespace `Allons/API`:
+
+| Métrica                 | Patrón de filtro                          | Origen                                  |
+| ----------------------- | ----------------------------------------- | --------------------------------------- |
+| `ErrorCount`            | `"\"type\":\"error\""`                    | cualquier `obs.error(...)`              |
+| `PaymentFulfillFailed`  | `"payments.order.fulfillment_failed"`     | fallo al entregar ticket tras pago      |
+| `WebhookSignatureBad`   | `"payments.webhook.signature_invalid"`    | firma de webhook Paygate inválida       |
+
+Crear (ejemplo, repetir por métrica y por entorno):
+
+```bash
+LOG_GROUP=/aws/apprunner/allons-api/<service-id>/application
+aws logs put-metric-filter --region us-east-2 \
+  --log-group-name "$LOG_GROUP" \
+  --filter-name allons-api-errors \
+  --filter-pattern '"\"type\":\"error\""' \
+  --metric-transformations metricName=ErrorCount,metricNamespace=Allons/API,metricValue=1,defaultValue=0
+
+aws cloudwatch put-metric-alarm --region us-east-2 \
+  --alarm-name allons-api-errors \
+  --namespace Allons/API --metric-name ErrorCount \
+  --statistic Sum --period 300 --evaluation-periods 1 \
+  --threshold 1 --comparison-operator GreaterThanOrEqualToThreshold \
+  --treat-missing-data notBreaching \
+  --alarm-actions <SNS_TOPIC_ARN>
+```
+
+Umbrales sugeridos: `PaymentFulfillFailed` y `WebhookSignatureBad` ≥ 1 en 5 min
+(crítico, paga/seguridad); `ErrorCount` con umbral más alto para evitar ruido.
+Acción → SNS topic (email/Slack del equipo).
+
+Cobertura actual: solo flujos de pago emiten `obs.*`. Errores no manejados aún
+caen en `logger.error` (nivel `ERROR` de Nest) → cubiertos por el filtro
+`ErrorCount`. Ampliar `obs.*` a auth/mail/tickets es follow-up si se necesitan
+métricas por dominio.
+
 ## 7) Rotación de secretos (sin downtime)
 
 ### PAYGATE_BEARER_TOKEN
