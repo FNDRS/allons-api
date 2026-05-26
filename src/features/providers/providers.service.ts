@@ -1776,6 +1776,23 @@ export class ProvidersService {
     const gross = events.reduce((sum, row) => sum + row.revenue, 0);
     const platformFee = 10;
     const feeAmount = (gross * platformFee) / 100;
+
+    // Hold against refunds: a sale only becomes withdrawable once its event's
+    // refund window has closed (or the provider allows no refunds). Revenue
+    // from events still inside the window is reported as `heldBalance` and is
+    // excluded from `availableBalance`, so we never pay out money that could
+    // still be refunded/charged back.
+    const refund = await this.readProviderRefundPolicy(member.providerId);
+    const now = Date.now();
+    const releasedGross = events.reduce(
+      (sum, row) =>
+        isRevenueReleasedForPayout(row, refund, now) ? sum + row.revenue : sum,
+      0,
+    );
+    const netFactor = 1 - platformFee / 100;
+    const releasedNet = releasedGross * netFactor;
+    const heldNet = Math.max((gross - releasedGross) * netFactor, 0);
+
     const pendingRows = await this.prisma.$queryRaw<Array<{ total: number }>>`
       SELECT COALESCE(SUM(amount), 0)::float8 AS total
       FROM provider_payout_requests
@@ -1791,7 +1808,7 @@ export class ProvidersService {
     const pendingBalance = Number(pendingRows[0]?.total ?? 0);
     const paidOut = Number(completedRows[0]?.total ?? 0);
     const availableBalance = Math.max(
-      gross - feeAmount - pendingBalance - paidOut,
+      releasedNet - pendingBalance - paidOut,
       0,
     );
 
@@ -1801,6 +1818,7 @@ export class ProvidersService {
     return {
       availableBalance,
       pendingBalance,
+      heldBalance: heldNet,
       platformFee,
       totals: {
         gross,
@@ -1813,6 +1831,34 @@ export class ProvidersService {
       payouts,
       activity,
     };
+  }
+
+  /**
+   * Reads the provider's refund policy for payout-hold decisions. Defaults to
+   * "no refunds" when the table/row is absent (the table is created lazily by
+   * the refund flow) — i.e. funds are treated as safe to release, matching the
+   * pre-hold behavior for providers that never configured refunds.
+   */
+  private async readProviderRefundPolicy(
+    providerId: string,
+  ): Promise<{ refundEnabled: boolean; deadlineHours: number }> {
+    try {
+      const rows = await this.prisma.$queryRaw<
+        Array<{ refund_enabled: boolean; refund_deadline_hours: number }>
+      >`
+        SELECT refund_enabled, refund_deadline_hours
+        FROM provider_refund_policies
+        WHERE provider_id = ${providerId}::uuid
+        LIMIT 1
+      `;
+      const row = rows[0];
+      return {
+        refundEnabled: Boolean(row?.refund_enabled),
+        deadlineHours: Number(row?.refund_deadline_hours ?? 24),
+      };
+    } catch {
+      return { refundEnabled: false, deadlineHours: 24 };
+    }
   }
 
   async listPayouts(userId: string) {
@@ -1884,4 +1930,66 @@ export class ProvidersService {
     );
     return { requested: true };
   }
+
+  /**
+   * Admin action: marks a pending payout request as completed after the
+   * operator made the bank transfer (settlement stays manual/out-of-band).
+   * Only `pending` → `completed`; rejects any other current state.
+   */
+  async completePayout(payoutId: string) {
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        provider_id: string;
+        amount: number;
+        status: string;
+      }>
+    >`
+      SELECT id, provider_id, amount::float8 AS amount, status
+      FROM provider_payout_requests
+      WHERE id = ${payoutId}::uuid
+      LIMIT 1
+    `;
+    const row = rows[0];
+    if (!row) {
+      throw new NotFoundException('Retiro no encontrado');
+    }
+    if (row.status !== 'pending') {
+      throw new BadRequestException(
+        `El retiro ya está en estado "${row.status}"`,
+      );
+    }
+    await this.prisma.$executeRaw`
+      UPDATE provider_payout_requests
+      SET status = 'completed'
+      WHERE id = ${payoutId}::uuid
+        AND status = 'pending'
+    `;
+    await this.appendActivity(
+      row.provider_id,
+      'payout',
+      `Retiro completado por L. ${Number(row.amount).toFixed(2)}`,
+      'admin',
+    );
+    return { id: row.id, status: 'completed' as const };
+  }
+}
+
+/**
+ * A sale's revenue is safe to pay out once it can no longer be refunded:
+ * the provider allows no refunds, or the event's refund window has closed
+ * (`now` past `startsAt - deadlineHours`). Refund-enabled events without a
+ * start date stay held (refundable indefinitely).
+ */
+function isRevenueReleasedForPayout(
+  event: { startsAt?: Date | string | null },
+  refund: { refundEnabled: boolean; deadlineHours: number },
+  now: number,
+): boolean {
+  if (!refund.refundEnabled) return true;
+  if (!event.startsAt) return false;
+  const startsAtMs = new Date(event.startsAt).getTime();
+  if (!Number.isFinite(startsAtMs)) return false;
+  const cutoff = startsAtMs - refund.deadlineHours * 60 * 60 * 1000;
+  return now > cutoff;
 }
