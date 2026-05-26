@@ -94,6 +94,12 @@ export class ProviderPrivateController {
     return this.providersService.removeProviderStaff(user.id, userId);
   }
 
+  @Post('staff/:userId/remove')
+  async removeStaffPost(@Req() req: Request, @Param('userId') userId: string) {
+    const user = await this.getUser(req);
+    return this.providersService.removeProviderStaff(user.id, userId);
+  }
+
   @Get('discounts')
   async listDiscounts(@Req() req: Request) {
     const user = await this.getUser(req);
