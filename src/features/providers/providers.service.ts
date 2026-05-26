@@ -435,15 +435,30 @@ export class ProvidersService {
     return undefined;
   }
 
+  private resolveStaffMemberName(
+    row: { full_name: string | null; profile_name: string | null },
+    metadata: Record<string, unknown> | undefined,
+  ): string {
+    const fromMember = row.full_name?.trim();
+    if (fromMember) return fromMember;
+    const fromProfile = row.profile_name?.trim();
+    if (fromProfile) return fromProfile;
+    const fromAuth = this.safeString(metadata?.full_name).trim();
+    if (fromAuth) return fromAuth;
+    return 'Miembro';
+  }
+
   private async fetchAuthMetadataByUserIds(
     userIds: string[],
   ): Promise<Map<string, Record<string, unknown>>> {
     const unique = [...new Set(userIds)];
     const entries = await Promise.all(
       unique.map(async (id) => {
-        const { data } =
-          await this.supabaseAdmin.db.auth.admin.getUserById(id);
-        return [id, (data?.user?.user_metadata ?? {}) as Record<string, unknown>] as const;
+        const { data } = await this.supabaseAdmin.db.auth.admin.getUserById(id);
+        return [
+          id,
+          (data?.user?.user_metadata ?? {}) as Record<string, unknown>,
+        ] as const;
       }),
     );
     return new Map(entries);
@@ -658,7 +673,7 @@ export class ProvidersService {
           : undefined;
       return {
         userId: row.user_id,
-        name: row.full_name ?? row.profile_name ?? 'Miembro',
+        name: this.resolveStaffMemberName(row, metadata),
         email: row.email,
         phone: row.phone,
         role: this.mapMemberRoleToClientRole(row.role),
@@ -755,9 +770,7 @@ export class ProvidersService {
 
     const permsRaw = body.comercio_permissions;
     const comercioPermissions =
-      permsRaw &&
-      typeof permsRaw === 'object' &&
-      !Array.isArray(permsRaw)
+      permsRaw && typeof permsRaw === 'object' && !Array.isArray(permsRaw)
         ? (permsRaw as Record<string, unknown>)
         : undefined;
 
@@ -914,11 +927,7 @@ export class ProvidersService {
         AND user_id = ${targetUserId}::uuid
     `;
     const permsRaw = body.comercio_permissions;
-    if (
-      permsRaw &&
-      typeof permsRaw === 'object' &&
-      !Array.isArray(permsRaw)
-    ) {
+    if (permsRaw && typeof permsRaw === 'object' && !Array.isArray(permsRaw)) {
       const authUser =
         await this.supabaseAdmin.db.auth.admin.getUserById(targetUserId);
       if (authUser.data?.user) {
@@ -1362,7 +1371,8 @@ export class ProvidersService {
 
     // If it was just published, notify followers (marketing toggle).
     const nextStatus = body.status ? this.safeString(body.status) : undefined;
-    const publishedNow = prevStatus !== 'published' && nextStatus === 'published';
+    const publishedNow =
+      prevStatus !== 'published' && nextStatus === 'published';
     if (publishedNow) {
       void this.notifications.maybeNotifyProviderUpdate({
         providerId: member.providerId,
