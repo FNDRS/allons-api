@@ -101,6 +101,8 @@ export class SubscriptionService {
         'Solo el dueño del comercio puede comprar el plan',
       );
     }
+    await this.assertNotBlocked(userId);
+    await this.assertInitiateVelocity(membership.providerId);
     const plan = PLAN_CATALOG.find((p) => p.id === planId)!;
 
     // Proration: upgrading mid-term (active, different & pricier plan) charges
@@ -210,6 +212,19 @@ export class SubscriptionService {
     if (next === 'paid') {
       await this.markOrderPaid(order.id, input.paygateId, input.payload);
       await this.ensureActivated(order.id, order.providerId, order.planId);
+    } else if (next === 'refunded') {
+      // Refund/chargeback arrives after payment (order already paid), so update
+      // unconditionally and revoke access immediately.
+      await this.prisma.providerSubscriptionOrder.update({
+        where: { id: order.id },
+        data: {
+          status: 'refunded',
+          paygatePaymentId: input.paygateId,
+          paygateRawWebhook: input.payload as any,
+          updatedAt: new Date(),
+        },
+      });
+      await this.revokeForProvider(order.providerId);
     } else {
       await this.prisma.providerSubscriptionOrder.updateMany({
         where: { id: order.id, status: 'pending_payment' },
@@ -222,6 +237,100 @@ export class SubscriptionService {
       });
     }
     return true;
+  }
+
+  // ---- fraud & limits ----
+
+  /** Blocks initiate when the caller (email or user_id) is on the deny-list. */
+  private async assertNotBlocked(userId: string): Promise<void> {
+    const user = await this.supabaseAdmin.getUserById(userId);
+    const email = user?.email?.toLowerCase() ?? null;
+    const rows = await this.prisma.$queryRaw<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM payment_blocklist
+      WHERE user_id = ${userId}::uuid
+         OR (email IS NOT NULL AND lower(email) = ${email})
+    `;
+    if (Number(rows[0]?.n ?? 0) > 0) {
+      throw new ForbiddenException('Pago no permitido para esta cuenta');
+    }
+  }
+
+  /** Caps pending subscription orders per comercio in a short window. */
+  private async assertInitiateVelocity(providerId: string): Promise<void> {
+    const since = new Date(Date.now() - 10 * 60 * 1000);
+    const recent = await this.prisma.providerSubscriptionOrder.count({
+      where: {
+        providerId,
+        status: 'pending_payment',
+        createdAt: { gte: since },
+      },
+    });
+    if (recent >= 3) {
+      throw new HttpException(
+        'Demasiados intentos de pago; intenta de nuevo en unos minutos',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  /** Revokes access immediately (refund/chargeback/abuse) → status canceled. */
+  async revokeForProvider(providerId: string): Promise<void> {
+    const ownerUserId = await this.getOwnerUserId(providerId);
+    if (!ownerUserId) return;
+    const meta = (await this.getUserMetadata(ownerUserId)) ?? {};
+    await this.supabaseAdmin.db.auth.admin.updateUserById(ownerUserId, {
+      user_metadata: {
+        ...meta,
+        subscription_status: 'canceled',
+        subscription_canceled_at: new Date().toISOString(),
+        subscription_cancel_at_period_end: false,
+      },
+    });
+  }
+
+  // ---- blocklist admin ----
+
+  async listBlocklist() {
+    return this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        email: string | null;
+        userId: string | null;
+        reason: string | null;
+        createdAt: Date;
+      }>
+    >`SELECT id, email, user_id AS "userId", reason, created_at AS "createdAt"
+      FROM payment_blocklist ORDER BY created_at DESC LIMIT 500`;
+  }
+
+  async addToBlocklist(input: {
+    email?: string;
+    userId?: string;
+    reason?: string;
+    createdBy?: string;
+  }): Promise<{ ok: true }> {
+    const email = input.email?.trim().toLowerCase() || null;
+    const userId =
+      input.userId && UUID_REGEX.test(input.userId) ? input.userId : null;
+    if (!email && !userId) {
+      throw new BadRequestException('email o userId es requerido');
+    }
+    const createdBy =
+      input.createdBy && UUID_REGEX.test(input.createdBy)
+        ? input.createdBy
+        : null;
+    await this.prisma.$executeRaw`
+      INSERT INTO payment_blocklist (email, user_id, reason, created_by)
+      VALUES (${email}, ${userId}::uuid, ${input.reason ?? null}, ${createdBy}::uuid)
+    `;
+    return { ok: true };
+  }
+
+  async removeFromBlocklist(id: string): Promise<{ ok: true }> {
+    if (!UUID_REGEX.test(id)) throw new BadRequestException('id inválido');
+    await this.prisma
+      .$executeRaw`DELETE FROM payment_blocklist WHERE id = ${id}::uuid`;
+    return { ok: true };
   }
 
   /** Writes the plan into the owner's user_metadata for a 1-year term. */
@@ -608,7 +717,7 @@ export class SubscriptionService {
 
 function mapPaygateStatus(
   status: string,
-): 'paid' | 'failed' | 'cancelled' | null {
+): 'paid' | 'failed' | 'cancelled' | 'refunded' | null {
   switch (status.toUpperCase()) {
     case 'APPROVED':
       return 'paid';
@@ -618,6 +727,11 @@ function mapPaygateStatus(
     case 'CANCELLED':
     case 'EXPIRED':
       return 'cancelled';
+    case 'REFUNDED':
+    case 'REVERSED':
+    case 'CHARGEBACK':
+    case 'DISPUTED':
+      return 'refunded';
     default:
       return null;
   }
