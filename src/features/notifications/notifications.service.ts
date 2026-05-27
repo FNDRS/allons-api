@@ -1,7 +1,18 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron } from '@nestjs/schedule';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../prisma/prisma.service';
-import type { NotificationTab } from '../../../generated/prisma';
+import { Prisma, type NotificationTab } from '../../../generated/prisma';
+
+const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
+const PUSH_MAX_ATTEMPTS = 3;
+const PUSH_BATCH = 100;
+
+interface ExpoTicket {
+  status: 'ok' | 'error';
+  id?: string;
+  message?: string;
+  details?: { error?: string };
+}
 
 type NotificationSettings = {
   push: {
@@ -85,11 +96,170 @@ export class NotificationsService {
     title: string,
     body?: string | null,
   ) {
-    // Push delivery is not implemented yet. This outbox row is a hook for the future worker.
+    // Queued; the delivery worker (deliverPushOutbox) sends it via Expo.
     await this.prisma.$executeRaw`
       INSERT INTO push_outbox (user_id, title, body, data)
       VALUES (${userId}::uuid, ${title}, ${body ?? null}, ${null}::jsonb)
     `;
+  }
+
+  /** Registers (or re-assigns) an Expo push token for the caller's device. */
+  async registerPushToken(
+    userId: string,
+    token: string,
+    platform?: string | null,
+  ): Promise<void> {
+    const trimmed = (token ?? '').trim();
+    if (
+      !trimmed.startsWith('ExponentPushToken[') &&
+      !trimmed.startsWith('ExpoPushToken[')
+    ) {
+      throw new BadRequestException('Token de push inválido');
+    }
+    const plat = platform === 'ios' || platform === 'android' ? platform : null;
+    await this.prisma.$executeRaw`
+      INSERT INTO push_tokens (user_id, token, platform)
+      VALUES (${userId}::uuid, ${trimmed}, ${plat})
+      ON CONFLICT (token)
+      DO UPDATE SET user_id = EXCLUDED.user_id,
+                    platform = COALESCE(EXCLUDED.platform, push_tokens.platform),
+                    updated_at = now()
+    `;
+  }
+
+  /**
+   * Delivers queued push_outbox rows via the Expo push service. Marks rows
+   * sent/failed (with bounded retries) and prunes tokens Expo reports as
+   * DeviceNotRegistered.
+   */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'push-outbox-delivery' })
+  async deliverPushOutbox(): Promise<void> {
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        user_id: string;
+        title: string;
+        body: string | null;
+        data: unknown;
+      }>
+    >`
+      SELECT id, user_id, title, body, data
+      FROM push_outbox
+      WHERE status = 'pending' AND attempts < ${PUSH_MAX_ATTEMPTS}
+      ORDER BY created_at ASC
+      LIMIT ${PUSH_BATCH}
+    `;
+    if (rows.length === 0) return;
+
+    const userIds = [...new Set(rows.map((r) => r.user_id))];
+    const tokenRows = await this.prisma.$queryRaw<
+      Array<{ user_id: string; token: string }>
+    >(
+      Prisma.sql`SELECT user_id, token FROM push_tokens WHERE user_id IN (${Prisma.join(
+        userIds.map((id) => Prisma.sql`${id}::uuid`),
+      )})`,
+    );
+    const tokensByUser = new Map<string, string[]>();
+    for (const t of tokenRows) {
+      const list = tokensByUser.get(t.user_id) ?? [];
+      list.push(t.token);
+      tokensByUser.set(t.user_id, list);
+    }
+
+    // Expo returns tickets in the same order as the messages we send, so we
+    // keep a parallel array mapping each message back to its row + token.
+    const entries: { rowId: string; token: string }[] = [];
+    const messages: Array<{
+      to: string;
+      title: string;
+      body?: string;
+      data?: unknown;
+    }> = [];
+    for (const r of rows) {
+      for (const token of tokensByUser.get(r.user_id) ?? []) {
+        entries.push({ rowId: r.id, token });
+        messages.push({
+          to: token,
+          title: r.title,
+          body: r.body ?? undefined,
+          data: r.data ?? undefined,
+        });
+      }
+    }
+
+    const deliveredRows = new Set<string>();
+    const deadTokens = new Set<string>();
+    for (let i = 0; i < messages.length; i += PUSH_BATCH) {
+      const chunk = messages.slice(i, i + PUSH_BATCH);
+      const chunkEntries = entries.slice(i, i + PUSH_BATCH);
+      let tickets: ExpoTicket[];
+      try {
+        tickets = await this.sendExpo(chunk);
+      } catch (err) {
+        this.logger.warn(`Expo push send failed: ${String(err)}`);
+        continue;
+      }
+      tickets.forEach((ticket, idx) => {
+        const entry = chunkEntries[idx];
+        if (!entry) return;
+        if (ticket.status === 'ok') deliveredRows.add(entry.rowId);
+        else if (ticket.details?.error === 'DeviceNotRegistered')
+          deadTokens.add(entry.token);
+      });
+    }
+
+    const now = new Date();
+    if (deliveredRows.size > 0) {
+      await this.prisma.$executeRaw(
+        Prisma.sql`UPDATE push_outbox SET status = 'sent', sent_at = ${now}, last_attempt_at = ${now}
+                   WHERE id IN (${Prisma.join(
+                     [...deliveredRows].map((id) => Prisma.sql`${id}::uuid`),
+                   )})`,
+      );
+    }
+    const failedRowIds = rows
+      .map((r) => r.id)
+      .filter((id) => !deliveredRows.has(id));
+    if (failedRowIds.length > 0) {
+      await this.prisma.$executeRaw(
+        Prisma.sql`UPDATE push_outbox
+                   SET attempts = attempts + 1,
+                       last_attempt_at = ${now},
+                       error = 'not delivered',
+                       status = CASE WHEN attempts + 1 >= ${PUSH_MAX_ATTEMPTS} THEN 'failed' ELSE 'pending' END
+                   WHERE status = 'pending' AND id IN (${Prisma.join(
+                     failedRowIds.map((id) => Prisma.sql`${id}::uuid`),
+                   )})`,
+      );
+    }
+    if (deadTokens.size > 0) {
+      await this.prisma.$executeRaw(
+        Prisma.sql`DELETE FROM push_tokens WHERE token IN (${Prisma.join(
+          [...deadTokens].map((t) => Prisma.sql`${t}`),
+        )})`,
+      );
+    }
+  }
+
+  private async sendExpo(
+    messages: Array<{
+      to: string;
+      title: string;
+      body?: string;
+      data?: unknown;
+    }>,
+  ): Promise<ExpoTicket[]> {
+    const res = await fetch(EXPO_PUSH_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(messages),
+    });
+    if (!res.ok) throw new Error(`Expo push HTTP ${res.status}`);
+    const json = (await res.json()) as { data?: ExpoTicket[] };
+    return json.data ?? [];
   }
 
   /** Queues a push reminding a comercio owner that their plan is about to lapse. */
