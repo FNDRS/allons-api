@@ -48,6 +48,8 @@ export interface ProviderSubscription {
   trialEndsAt: string | null;
   currentPeriodEnd: string | null;
   canManage: boolean;
+  /** Owner asked to cancel: keep access until `currentPeriodEnd`, then expire. */
+  cancelAtPeriodEnd: boolean;
 }
 
 const SINGLE_EVENT_LIMITS: ProviderPlanLimits = {
@@ -212,5 +214,6 @@ export function deriveSubscription(
     trialEndsAt,
     currentPeriodEnd,
     canManage,
+    cancelAtPeriodEnd: m.subscription_cancel_at_period_end === true,
   };
 }

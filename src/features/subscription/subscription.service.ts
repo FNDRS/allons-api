@@ -85,6 +85,29 @@ export class SubscriptionService {
     return deriveSubscription(ownerMeta, usage, canManage);
   }
 
+  /**
+   * Owner-only: flag/unflag the subscription to cancel at period end. Keeps
+   * access until `subscription_period_end`; no immediate cut (that's admin).
+   */
+  async setCancelAtPeriodEnd(
+    userId: string,
+    value: boolean,
+  ): Promise<{ ok: true }> {
+    const membership = await this.getMembership(userId);
+    if (!membership || membership.role !== 'owner') {
+      throw new ForbiddenException(
+        'Solo el dueño del comercio puede cancelar el plan',
+      );
+    }
+    const ownerUserId =
+      (await this.getOwnerUserId(membership.providerId)) ?? userId;
+    const meta = (await this.getUserMetadata(ownerUserId)) ?? {};
+    await this.supabaseAdmin.db.auth.admin.updateUserById(ownerUserId, {
+      user_metadata: { ...meta, subscription_cancel_at_period_end: value },
+    });
+    return { ok: true };
+  }
+
   // ---- in-app purchase (Paygate) ----
 
   /** Owner-only: creates a Paygate link + a subscription order for a 1-year term. */

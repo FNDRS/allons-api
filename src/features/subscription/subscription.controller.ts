@@ -36,4 +36,16 @@ export class SubscriptionController {
     const user = await this.getUser(req);
     return this.subscription.getSubscriptionOrder(user.id, orderId);
   }
+
+  @Post('subscription/cancel')
+  async cancel(@Req() req: Request) {
+    const user = await this.getUser(req);
+    return this.subscription.setCancelAtPeriodEnd(user.id, true);
+  }
+
+  @Post('subscription/resume')
+  async resume(@Req() req: Request) {
+    const user = await this.getUser(req);
+    return this.subscription.setCancelAtPeriodEnd(user.id, false);
+  }
 }
