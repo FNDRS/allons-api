@@ -11,6 +11,8 @@ import { MeService } from '../me/me.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { ObservabilityService } from '../../shared/observability/observability.service';
+import { PostHogService } from '../../shared/posthog/posthog.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 
 async function buildController(env: Record<string, string | undefined>) {
   const moduleRef = await Test.createTestingModule({
@@ -49,6 +51,14 @@ async function buildController(env: Record<string, string | undefined>) {
       {
         provide: ObservabilityService,
         useValue: { event: jest.fn(), warn: jest.fn(), error: jest.fn() },
+      },
+      {
+        provide: PostHogService,
+        useValue: { capture: jest.fn() },
+      },
+      {
+        provide: SubscriptionService,
+        useValue: { tryFulfillWebhook: jest.fn().mockResolvedValue(false) },
       },
     ],
   }).compile();
