@@ -10,6 +10,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { parseTicketQrPayload } from './ticket-qr.utils';
 import { NotificationsService } from '../notifications/notifications.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 
 type ProviderRole = 'owner' | 'admin' | 'staff_scanner';
 
@@ -55,6 +56,7 @@ export class ProvidersService {
     private readonly supabaseAdmin: SupabaseAdminService,
     private readonly config: ConfigService,
     private readonly notifications: NotificationsService,
+    private readonly subscriptions: SubscriptionService,
   ) {}
 
   private async ensureInfrastructure() {
@@ -1162,6 +1164,11 @@ export class ProvidersService {
       const member = await this.requireMembership(userId, ['owner', 'admin']);
       if (!title) throw new BadRequestException('title es requerido');
 
+      // Plan limit: publishing a new active event must fit the comercio plan.
+      if ((this.safeString(body.status) || 'draft') === 'published') {
+        await this.subscriptions.assertCanPublishEvent(member.providerId);
+      }
+
       const latitude = parseCoordinate(body.latitude, 'latitude');
       const longitude = parseCoordinate(body.longitude, 'longitude');
       if ((latitude == null) !== (longitude == null)) {
@@ -1270,6 +1277,12 @@ export class ProvidersService {
     }
 
     const prevStatus = (event as any).status as string | undefined;
+
+    // Plan limit: only enforce when transitioning an event into "published".
+    const nextStatusRaw = body.status ? this.safeString(body.status) : undefined;
+    if (nextStatusRaw === 'published' && prevStatus !== 'published') {
+      await this.subscriptions.assertCanPublishEvent(member.providerId);
+    }
 
     await this.prisma.event.update({
       where: { id: eventId },
@@ -1469,6 +1482,12 @@ export class ProvidersService {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
     const name = this.safeString(body.name).trim();
     if (!name) throw new BadRequestException('name es requerido');
+    // Plan limit: total tickets per event must fit the comercio plan.
+    await this.subscriptions.assertWithinTicketCap(
+      member.providerId,
+      eventId,
+      Number(body.total ?? 0),
+    );
     await this.prisma.$executeRaw`
       INSERT INTO provider_event_ticket_types (
         provider_id, event_id, name, kind, price, total, sold_count, active

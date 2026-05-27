@@ -5,9 +5,10 @@ import { AdminPayoutsController } from './admin-payouts.controller';
 import { ProvidersService } from './providers.service';
 import { AdminSecretGuard } from '../admin/admin-secret.guard';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { SubscriptionModule } from '../subscription/subscription.module';
 
 @Module({
-  imports: [NotificationsModule],
+  imports: [NotificationsModule, SubscriptionModule],
   controllers: [
     ProvidersController,
     ProviderPrivateController,

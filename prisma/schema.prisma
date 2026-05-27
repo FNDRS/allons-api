@@ -295,6 +295,30 @@ model PaymentOrder {
   @@map("payment_orders")
 }
 
+/// Paygate orders for provider annual subscription purchases. Kept separate
+/// from `payment_orders` (ticket purchases) so the live ticket flow stays
+/// untouched. Fulfillment activates the plan in the owner's user_metadata.
+model ProviderSubscriptionOrder {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  providerId        String             @map("provider_id") @db.Uuid
+  userId            String             @map("user_id") @db.Uuid
+  planId            String             @map("plan_id")
+  amountCents       Int                @map("amount_cents")
+  currency          String             @default("HNL") @db.VarChar(3)
+  status            PaymentOrderStatus @default(pending_payment)
+  paygateLinkId     String?            @unique @map("paygate_link_id")
+  paygatePaymentId  String?            @unique @map("paygate_payment_id")
+  paygateRawWebhook Json?              @map("paygate_raw_webhook")
+  expiresAt         DateTime?          @map("expires_at") @db.Timestamptz(6)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@index([providerId])
+  @@index([userId])
+  @@index([status])
+  @@map("provider_subscription_orders")
+}
+
 model Refund {
   id                            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   paymentOrderId                String       @map("payment_order_id") @db.Uuid
