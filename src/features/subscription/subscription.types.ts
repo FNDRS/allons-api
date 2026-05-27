@@ -141,13 +141,14 @@ function inFuture(iso: string | null): boolean {
   return Number.isFinite(t) && t > Date.now();
 }
 
-/** True when `iso` is in the past but within the grace window. */
+/** True when `iso` is in the past but within the grace window (inclusive). */
 function withinGrace(iso: string | null): boolean {
   if (!iso) return false;
   const t = new Date(iso).getTime();
   if (!Number.isFinite(t)) return false;
   const elapsed = Date.now() - t;
-  return elapsed > 0 && elapsed < SUBSCRIPTION_GRACE_DAYS * 24 * 60 * 60 * 1000;
+  const graceMs = SUBSCRIPTION_GRACE_DAYS * 24 * 60 * 60 * 1000;
+  return elapsed >= 0 && elapsed <= graceMs;
 }
 
 /**

@@ -209,7 +209,11 @@ export class SubscriptionService {
 
     let periodEndIso: string;
     if (explicitPeriodEndIso) {
-      periodEndIso = explicitPeriodEndIso;
+      const explicitMs = new Date(explicitPeriodEndIso).getTime();
+      if (!Number.isFinite(explicitMs)) {
+        throw new BadRequestException('subscription_period_end inválido');
+      }
+      periodEndIso = new Date(explicitMs).toISOString();
     } else {
       const now = Date.now();
       const existingEndMs =

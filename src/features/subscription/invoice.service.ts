@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomBytes } from 'crypto';
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SubscriptionService } from './subscription.service';
@@ -14,6 +15,29 @@ import {
 
 const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 const INVOICE_DUE_MS = 7 * 24 * 60 * 60 * 1000;
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function assertUuid(value: string, field: string): void {
+  if (!UUID_REGEX.test(value)) {
+    throw new BadRequestException(`${field} inválido`);
+  }
+}
+
+function optionalUuid(
+  value: string | null | undefined,
+  field: string,
+): string | null {
+  if (value == null || value === '') return null;
+  assertUuid(value, field);
+  return value;
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
+  );
+}
 
 export interface GenerateInvoiceInput {
   /** Comercio owner's auth user id. */
@@ -34,7 +58,7 @@ function makeInvoiceNumber(): string {
   const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(
     d.getDate(),
   ).padStart(2, '0')}`;
-  const rand = Math.random().toString(36).slice(2, 7).toUpperCase();
+  const rand = randomBytes(4).toString('hex').toUpperCase();
   return `INV-${ymd}-${rand}`;
 }
 
@@ -54,6 +78,8 @@ export class InvoiceService {
     if (!isPlanId(input.planId)) {
       throw new BadRequestException('planId inválido');
     }
+    assertUuid(input.userId, 'userId');
+    const createdBy = optionalUuid(input.createdBy, 'createdBy');
     // Validates the target is a comercio (throws if no membership and no
     // comercio metadata) and gives the current plan/period for proration.
     const sub = await this.subscription.getSubscription(input.userId);
@@ -97,23 +123,32 @@ export class InvoiceService {
     }
 
     const currency = PLAN_CATALOG.find((p) => p.id === input.planId)!.currency;
-    return this.prisma.providerInvoice.create({
-      data: {
-        invoiceNumber: makeInvoiceNumber(),
-        providerId,
-        userId: input.userId,
-        planId: input.planId,
-        billingInterval: 'annual',
-        amountCents,
-        currency,
-        prorated,
-        periodStart,
-        periodEnd,
-        notes: input.notes ?? null,
-        dueAt: new Date(now.getTime() + INVOICE_DUE_MS),
-        createdBy: input.createdBy ?? null,
-      },
-    });
+    const data = {
+      providerId,
+      userId: input.userId,
+      planId: input.planId,
+      billingInterval: 'annual' as const,
+      amountCents,
+      currency,
+      prorated,
+      periodStart,
+      periodEnd,
+      notes: input.notes ?? null,
+      dueAt: new Date(now.getTime() + INVOICE_DUE_MS),
+      createdBy,
+    };
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await this.prisma.providerInvoice.create({
+          data: { ...data, invoiceNumber: makeInvoiceNumber() },
+        });
+      } catch (err) {
+        if (isUniqueViolation(err) && attempt < 2) continue;
+        throw err;
+      }
+    }
+    throw new BadRequestException('No se pudo generar el número de factura');
   }
 
   async list(filter: { status?: string; providerId?: string }) {
@@ -129,6 +164,7 @@ export class InvoiceService {
       }),
       this.prisma.providerInvoice.groupBy({
         by: ['status'],
+        where,
         _sum: { amountCents: true },
         _count: { _all: true },
       }),
@@ -154,27 +190,40 @@ export class InvoiceService {
 
   /** Marks a pending invoice paid and activates the plan for its exact term. */
   async markPaid(invoiceId: string) {
+    assertUuid(invoiceId, 'invoiceId');
     const inv = await this.prisma.providerInvoice.findUnique({
       where: { id: invoiceId },
     });
     if (!inv) throw new NotFoundException('Factura no encontrada');
-    if (inv.status === 'paid') return inv; // idempotent
+
+    if (inv.status === 'paid') {
+      await this.activateForInvoice(inv);
+      return inv;
+    }
     if (inv.status !== 'pending') {
       throw new BadRequestException('La factura no está pendiente');
     }
-    const updated = await this.prisma.providerInvoice.update({
-      where: { id: invoiceId },
-      data: { status: 'paid', paidAt: new Date() },
+
+    const paidAt = new Date();
+    const marked = await this.prisma.providerInvoice.updateMany({
+      where: { id: invoiceId, status: 'pending' },
+      data: { status: 'paid', paidAt },
     });
-    await this.subscription.activateForProvider(
-      inv.providerId,
-      inv.planId,
-      inv.periodEnd.toISOString(),
-    );
-    return updated;
+
+    const invoice = await this.prisma.providerInvoice.findUnique({
+      where: { id: invoiceId },
+    });
+    if (!invoice) throw new NotFoundException('Factura no encontrada');
+    if (invoice.status !== 'paid') {
+      throw new BadRequestException('La factura no está pendiente');
+    }
+
+    await this.activateForInvoice(invoice);
+    return invoice;
   }
 
   async void(invoiceId: string) {
+    assertUuid(invoiceId, 'invoiceId');
     const inv = await this.prisma.providerInvoice.findUnique({
       where: { id: invoiceId },
     });
@@ -189,5 +238,17 @@ export class InvoiceService {
       where: { id: invoiceId },
       data: { status: 'void' },
     });
+  }
+
+  private async activateForInvoice(inv: {
+    providerId: string;
+    planId: string;
+    periodEnd: Date;
+  }): Promise<void> {
+    await this.subscription.activateForProvider(
+      inv.providerId,
+      inv.planId,
+      inv.periodEnd.toISOString(),
+    );
   }
 }
