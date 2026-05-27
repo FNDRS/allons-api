@@ -15,6 +15,8 @@ import {
   deriveSubscription,
   isPlanId,
   PLAN_CATALOG,
+  PLAN_LIMITS_BY_ID,
+  RULES_VERSION,
   type ProviderPlan,
   type ProviderPlanId,
   type ProviderPlanLimits,
@@ -268,13 +270,26 @@ export class SubscriptionService {
       periodEndIso = new Date(desiredEndMs).toISOString();
     }
 
+    const userMeta: Record<string, unknown> = {
+      ...meta,
+      subscription_plan: planId,
+      subscription_status: 'active',
+      subscription_period_end: periodEndIso,
+    };
+    // Snapshot the rules in effect at purchase so later catalog changes don't
+    // apply retroactively to this term (grandfathering + version-at-purchase).
+    if (isPlanId(planId)) {
+      userMeta.plan_snapshot = {
+        planId,
+        limits: PLAN_LIMITS_BY_ID[planId],
+        priceCents:
+          PLAN_CATALOG.find((p) => p.id === planId)?.priceCents ?? null,
+        rulesVersion: RULES_VERSION,
+        activatedAt: new Date().toISOString(),
+      };
+    }
     await this.supabaseAdmin.db.auth.admin.updateUserById(ownerUserId, {
-      user_metadata: {
-        ...meta,
-        subscription_plan: planId,
-        subscription_status: 'active',
-        subscription_period_end: periodEndIso,
-      },
+      user_metadata: userMeta,
     });
   }
 

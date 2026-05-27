@@ -10,6 +10,13 @@ export type ProviderSubscriptionStatus =
 /** Days a paid plan keeps working after its term ends, before locking. */
 export const SUBSCRIPTION_GRACE_DAYS = 7;
 
+/**
+ * Version of the plan rules/limits + terms. Stamped onto the owner's
+ * `plan_snapshot` at activation so an active term keeps the rules in effect at
+ * purchase even if the catalog changes later. Bump when limits/terms change.
+ */
+export const RULES_VERSION = '2026-05-27';
+
 export type SupportTier = 'standard' | 'priority';
 
 export interface ProviderPlanLimits {
@@ -157,6 +164,41 @@ function withinGrace(iso: string | null): boolean {
  * `free_trial_start`, `free_trial_end`) and the payment webhook
  * (`subscription_status`, `subscription_period_end`).
  */
+/**
+ * Limits captured at purchase (`user_metadata.plan_snapshot`). Used for the
+ * active term so catalog changes don't apply retroactively; `null` falls back
+ * to the live catalog (legacy terms with no snapshot).
+ */
+function readSnapshotLimits(
+  meta: Record<string, unknown>,
+  planId: ProviderPlanId | null,
+): ProviderPlanLimits | null {
+  if (!planId) return null;
+  const snap = meta.plan_snapshot;
+  if (!snap || typeof snap !== 'object') return null;
+  const s = snap as { planId?: unknown; limits?: unknown };
+  if (s.planId !== planId) return null;
+  const l = s.limits as Partial<ProviderPlanLimits> | undefined;
+  if (!l || typeof l !== 'object') return null;
+  const numOrNull = (v: unknown): v is number | null =>
+    v === null || typeof v === 'number';
+  if (
+    !numOrNull(l.maxActiveEvents) ||
+    !numOrNull(l.maxTicketsPerEvent) ||
+    !numOrNull(l.maxMembers) ||
+    !numOrNull(l.maxStaff)
+  ) {
+    return null;
+  }
+  return {
+    maxActiveEvents: l.maxActiveEvents,
+    maxTicketsPerEvent: l.maxTicketsPerEvent,
+    maxMembers: l.maxMembers,
+    maxStaff: l.maxStaff,
+    supportTier: l.supportTier === 'priority' ? 'priority' : 'standard',
+  };
+}
+
 export function deriveSubscription(
   meta: Record<string, unknown> | null | undefined,
   usage: ProviderUsage,
@@ -196,12 +238,13 @@ export function deriveSubscription(
     status = withinGrace(currentPeriodEnd) ? 'past_due' : 'expired';
   }
 
+  // Active term uses the limits snapshotted at purchase (grandfathering);
+  // trial and legacy-without-snapshot fall back to the live catalog.
+  const snapshotLimits = readSnapshotLimits(m, planId);
   const limits =
     status === 'trialing'
       ? TRIAL_LIMITS
-      : planId
-        ? PLAN_LIMITS_BY_ID[planId]
-        : TRIAL_LIMITS;
+      : (snapshotLimits ?? (planId ? PLAN_LIMITS_BY_ID[planId] : TRIAL_LIMITS));
 
   return {
     planId,

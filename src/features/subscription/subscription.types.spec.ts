@@ -112,4 +112,49 @@ describe('deriveSubscription', () => {
     expect(sub.status).toBe('trialing');
     expect(sub.planId).toBeNull();
   });
+
+  it('uses plan_snapshot limits (grandfathering) over the live catalog', () => {
+    const sub = deriveSubscription(
+      {
+        subscription_plan: 'basico',
+        subscription_status: 'active',
+        subscription_period_end: new Date(
+          Date.now() + 86_400_000,
+        ).toISOString(),
+        plan_snapshot: {
+          planId: 'basico',
+          limits: {
+            maxActiveEvents: 99,
+            maxTicketsPerEvent: 9999,
+            maxMembers: 9,
+            maxStaff: 9,
+            supportTier: 'priority',
+          },
+        },
+      },
+      EMPTY_USAGE,
+      true,
+    );
+
+    // Live basico is 4 / 500; the snapshot wins for this term.
+    expect(sub.limits.maxActiveEvents).toBe(99);
+    expect(sub.limits.maxTicketsPerEvent).toBe(9999);
+  });
+
+  it('falls back to live catalog limits when there is no snapshot', () => {
+    const sub = deriveSubscription(
+      {
+        subscription_plan: 'basico',
+        subscription_status: 'active',
+        subscription_period_end: new Date(
+          Date.now() + 86_400_000,
+        ).toISOString(),
+      },
+      EMPTY_USAGE,
+      true,
+    );
+
+    expect(sub.limits.maxActiveEvents).toBe(4);
+    expect(sub.limits.maxTicketsPerEvent).toBe(500);
+  });
 });
