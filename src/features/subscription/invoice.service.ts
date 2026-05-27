@@ -54,12 +54,13 @@ export class InvoiceService {
     if (!isPlanId(input.planId)) {
       throw new BadRequestException('planId inválido');
     }
-    const providerId = await this.subscription.resolveProviderId(input.userId);
-    if (!providerId) {
-      throw new BadRequestException('El usuario no pertenece a un comercio');
-    }
-
+    // Validates the target is a comercio (throws if no membership and no
+    // comercio metadata) and gives the current plan/period for proration.
     const sub = await this.subscription.getSubscription(input.userId);
+    // Provision the provider row if the comercio never hit the provider API.
+    const providerId = await this.subscription.resolveOrCreateProviderId(
+      input.userId,
+    );
     const full = priceFor(input.planId);
     const now = new Date();
     const currentPeriodEnd = sub.currentPeriodEnd

@@ -249,6 +249,54 @@ export class SubscriptionService {
     return membership?.providerId ?? null;
   }
 
+  /**
+   * Like `resolveProviderId` but provisions a provider + owner membership when
+   * the comercio has none yet (lazy rows, mirroring ProvidersService's
+   * `ensureDefaultMembership`). Used by admin invoicing so any comercio —
+   * even one that never hit the provider API — can be billed.
+   */
+  async resolveOrCreateProviderId(userId: string): Promise<string> {
+    const existing = await this.getMembership(userId);
+    if (existing) return existing.providerId;
+
+    const legacy = await this.prisma.provider.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+    const providerId =
+      legacy?.id ??
+      (
+        await this.prisma.provider.create({
+          data: { name: await this.providerNameFor(userId) },
+          select: { id: true },
+        })
+      ).id;
+
+    await this.prisma.$executeRaw`
+      INSERT INTO provider_members (provider_id, user_id, role, active)
+      VALUES (${providerId}::uuid, ${userId}::uuid, 'owner', true)
+      ON CONFLICT (provider_id, user_id)
+      DO UPDATE SET active = true, role = 'owner', updated_at = now()
+    `;
+    return providerId;
+  }
+
+  private async providerNameFor(userId: string): Promise<string> {
+    const profile = await this.prisma.profile.findUnique({
+      where: { userId },
+      select: { fullName: true, username: true },
+    });
+    const meta = await this.getUserMetadata(userId);
+    const brandName =
+      typeof meta?.brand_name === 'string' ? meta.brand_name.trim() : '';
+    return (
+      brandName ||
+      profile?.fullName?.trim() ||
+      profile?.username?.trim() ||
+      'Mi comercio'
+    );
+  }
+
   /** Activates the plan when the order is paid, even if another path marked it first. */
   private async ensureActivated(
     orderId: string,
