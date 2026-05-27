@@ -7,6 +7,7 @@ const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const PUSH_MAX_ATTEMPTS = 3;
 const PUSH_BATCH = 100;
 const EXPO_FETCH_TIMEOUT_MS = 15_000;
+const PUSH_PROCESSING_STALE_MINUTES = 10;
 const EXPO_PUSH_TOKEN_RE =
   /^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]{20,120}\]$/;
 
@@ -113,10 +114,7 @@ export class NotificationsService {
     platform?: string | null,
   ): Promise<void> {
     const trimmed = (token ?? '').trim();
-    if (
-      trimmed.length > 160 ||
-      !EXPO_PUSH_TOKEN_RE.test(trimmed)
-    ) {
+    if (trimmed.length > 160 || !EXPO_PUSH_TOKEN_RE.test(trimmed)) {
       throw new BadRequestException('Token de push inválido');
     }
     const plat = platform === 'ios' || platform === 'android' ? platform : null;
@@ -137,6 +135,13 @@ export class NotificationsService {
    */
   @Cron(CronExpression.EVERY_MINUTE, { name: 'push-outbox-delivery' })
   async deliverPushOutbox(): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE push_outbox
+      SET status = 'pending'
+      WHERE status = 'processing'
+        AND last_attempt_at < now() - make_interval(mins => ${PUSH_PROCESSING_STALE_MINUTES})
+    `;
+
     // Atomically claim rows so concurrent workers / overlapping crons cannot
     // deliver the same notification twice.
     const rows = await this.prisma.$queryRaw<
@@ -157,7 +162,7 @@ export class NotificationsService {
         FOR UPDATE SKIP LOCKED
       )
       UPDATE push_outbox AS po
-      SET last_attempt_at = now()
+      SET status = 'processing', last_attempt_at = now()
       FROM claimed
       WHERE po.id = claimed.id
       RETURNING po.id, po.user_id, po.title, po.body, po.data
@@ -226,7 +231,7 @@ export class NotificationsService {
       await this.prisma.$executeRaw(
         Prisma.sql`UPDATE push_outbox
                    SET status = 'sent', sent_at = ${now}, last_attempt_at = ${now}, error = NULL
-                   WHERE status = 'pending' AND id IN (${Prisma.join(
+                   WHERE status = 'processing' AND id IN (${Prisma.join(
                      [...deliveredRows].map((id) => Prisma.sql`${id}::uuid`),
                    )})`,
       );
@@ -241,7 +246,7 @@ export class NotificationsService {
                        last_attempt_at = ${now},
                        error = 'not delivered',
                        status = CASE WHEN attempts + 1 >= ${PUSH_MAX_ATTEMPTS} THEN 'failed' ELSE 'pending' END
-                   WHERE status = 'pending' AND id IN (${Prisma.join(
+                   WHERE status = 'processing' AND id IN (${Prisma.join(
                      failedRowIds.map((id) => Prisma.sql`${id}::uuid`),
                    )})`,
       );
@@ -264,10 +269,7 @@ export class NotificationsService {
     }>,
   ): Promise<ExpoTicket[]> {
     const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(),
-      EXPO_FETCH_TIMEOUT_MS,
-    );
+    const timeout = setTimeout(() => controller.abort(), EXPO_FETCH_TIMEOUT_MS);
     try {
       const res = await fetch(EXPO_PUSH_URL, {
         method: 'POST',
@@ -278,8 +280,17 @@ export class NotificationsService {
         body: JSON.stringify(messages),
         signal: controller.signal,
       });
-      if (!res.ok) throw new Error(`Expo push HTTP ${res.status}`);
-      const json = (await res.json()) as { data?: ExpoTicket[] };
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => '');
+        const snippet = errBody ? `: ${errBody.slice(0, 200)}` : '';
+        throw new Error(`Expo push HTTP ${res.status}${snippet}`);
+      }
+      let json: { data?: ExpoTicket[] };
+      try {
+        json = (await res.json()) as { data?: ExpoTicket[] };
+      } catch {
+        throw new Error('Expo push invalid JSON response');
+      }
       return json.data ?? [];
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') {
