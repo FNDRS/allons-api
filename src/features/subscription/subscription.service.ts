@@ -58,9 +58,9 @@ export class SubscriptionService {
       const callerMeta = await this.getUserMetadata(userId);
       const hasComercioContext = Boolean(
         callerMeta?.comercio_role ??
-          callerMeta?.free_trial_end ??
-          callerMeta?.subscription_plan ??
-          callerMeta?.subscription_status,
+        callerMeta?.free_trial_end ??
+        callerMeta?.subscription_plan ??
+        callerMeta?.subscription_status,
       );
       if (!hasComercioContext) {
         throw new ForbiddenException('No tienes acceso provider');
@@ -101,23 +101,54 @@ export class SubscriptionService {
     }
     const plan = PLAN_CATALOG.find((p) => p.id === planId)!;
 
+    // Proration: upgrading mid-term (active, different & pricier plan) charges
+    // only the price difference for the remaining days and keeps the current
+    // term end. Otherwise it's a full annual term (periodEnd null → activation
+    // sets/extends a year).
+    const sub = await this.getSubscription(userId);
+    const nowMs = Date.now();
+    const currentEndMs = sub.currentPeriodEnd
+      ? new Date(sub.currentPeriodEnd).getTime()
+      : 0;
+    const currentPrice = sub.planId
+      ? (PLAN_CATALOG.find((p) => p.id === sub.planId)?.priceCents ?? 0)
+      : 0;
+    const isUpgrade =
+      sub.status === 'active' &&
+      sub.planId !== null &&
+      sub.planId !== planId &&
+      currentEndMs > nowMs &&
+      plan.priceCents > currentPrice;
+
+    let amountCents = plan.priceCents;
+    let periodEnd: Date | null = null;
+    if (isUpgrade) {
+      const remaining = currentEndMs - nowMs;
+      amountCents = Math.max(
+        1,
+        Math.round(
+          ((plan.priceCents - currentPrice) * remaining) / ONE_YEAR_MS,
+        ),
+      );
+      periodEnd = new Date(currentEndMs);
+    }
+
     const link = await this.paygate.createPaymentLink({
       description: `Suscripción ${plan.name} · Allons`,
-      amount: Number((plan.priceCents / 100).toFixed(2)),
+      amount: Number((amountCents / 100).toFixed(2)),
       currency: 'HNL',
     });
-    const expiresAt = new Date(
-      Date.now() + link.expirationHours * 60 * 60 * 1000,
-    );
+    const expiresAt = new Date(nowMs + link.expirationHours * 60 * 60 * 1000);
 
     const order = await this.prisma.providerSubscriptionOrder.create({
       data: {
         providerId: membership.providerId,
         userId,
         planId,
-        amountCents: plan.priceCents,
+        amountCents,
         currency: link.currency,
         paygateLinkId: link.id,
+        periodEnd,
         expiresAt,
       },
     });
@@ -192,29 +223,49 @@ export class SubscriptionService {
   }
 
   /** Writes the plan into the owner's user_metadata for a 1-year term. */
-  async activateForProvider(providerId: string, planId: string): Promise<void> {
+  /**
+   * Writes the active plan into the owner's user_metadata. With
+   * `explicitPeriodEndIso` (paid invoice) the term end is set exactly; without
+   * it (Paygate webhook/poll) the term extends a year from the later of now or
+   * the current end.
+   */
+  async activateForProvider(
+    providerId: string,
+    planId: string,
+    explicitPeriodEndIso?: string,
+  ): Promise<void> {
     const ownerUserId = await this.getOwnerUserId(providerId);
     if (!ownerUserId) return;
     const meta = (await this.getUserMetadata(ownerUserId)) ?? {};
-    const now = Date.now();
-    const existingEndMs =
-      typeof meta.subscription_period_end === 'string'
-        ? new Date(meta.subscription_period_end).getTime()
-        : NaN;
-    const base =
-      Number.isFinite(existingEndMs) && existingEndMs > now
-        ? existingEndMs
-        : now;
-    const desiredEndMs = base + ONE_YEAR_MS;
 
-    // Idempotent for duplicate webhook/poll races on the same payment.
-    if (
-      meta.subscription_status === 'active' &&
-      meta.subscription_plan === planId &&
-      Number.isFinite(existingEndMs) &&
-      existingEndMs >= desiredEndMs - 86_400_000
-    ) {
-      return;
+    let periodEndIso: string;
+    if (explicitPeriodEndIso) {
+      const explicitMs = new Date(explicitPeriodEndIso).getTime();
+      if (!Number.isFinite(explicitMs)) {
+        throw new BadRequestException('subscription_period_end inválido');
+      }
+      periodEndIso = new Date(explicitMs).toISOString();
+    } else {
+      const now = Date.now();
+      const existingEndMs =
+        typeof meta.subscription_period_end === 'string'
+          ? new Date(meta.subscription_period_end).getTime()
+          : NaN;
+      const base =
+        Number.isFinite(existingEndMs) && existingEndMs > now
+          ? existingEndMs
+          : now;
+      const desiredEndMs = base + ONE_YEAR_MS;
+      // Idempotent for duplicate webhook/poll races on the same payment.
+      if (
+        meta.subscription_status === 'active' &&
+        meta.subscription_plan === planId &&
+        Number.isFinite(existingEndMs) &&
+        existingEndMs >= desiredEndMs - 86_400_000
+      ) {
+        return;
+      }
+      periodEndIso = new Date(desiredEndMs).toISOString();
     }
 
     await this.supabaseAdmin.db.auth.admin.updateUserById(ownerUserId, {
@@ -222,9 +273,45 @@ export class SubscriptionService {
         ...meta,
         subscription_plan: planId,
         subscription_status: 'active',
-        subscription_period_end: new Date(desiredEndMs).toISOString(),
+        subscription_period_end: periodEndIso,
       },
     });
+  }
+
+  /** Read-only list of subscription payment orders + revenue totals (admin). */
+  async listOrders(filter: { status?: string }) {
+    const rows = await this.prisma.providerSubscriptionOrder.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 500,
+    });
+    let paidCents = 0;
+    let paidCount = 0;
+    let pendingCount = 0;
+    for (const o of rows) {
+      if (o.status === 'paid') {
+        paidCents += o.amountCents;
+        paidCount += 1;
+      } else if (o.status === 'pending_payment') {
+        pendingCount += 1;
+      }
+    }
+    const filtered = filter.status
+      ? rows.filter((o) => o.status === filter.status)
+      : rows;
+    return {
+      items: filtered.map((o) => ({
+        id: o.id,
+        userId: o.userId,
+        providerId: o.providerId,
+        planId: o.planId,
+        amountCents: o.amountCents,
+        currency: o.currency,
+        status: o.status,
+        periodEnd: o.periodEnd?.toISOString() ?? null,
+        createdAt: o.createdAt.toISOString(),
+      })),
+      totals: { paidCents, paidCount, pendingCount },
+    };
   }
 
   /** Activates the plan when the order is paid, even if another path marked it first. */
@@ -237,7 +324,11 @@ export class SubscriptionService {
       where: { id: orderId },
     });
     if (order?.status === 'paid') {
-      await this.activateForProvider(providerId, planId);
+      await this.activateForProvider(
+        providerId,
+        planId,
+        order.periodEnd?.toISOString(),
+      );
     }
   }
 
@@ -248,6 +339,7 @@ export class SubscriptionService {
       paygateLinkId: string | null;
       providerId: string;
       planId: string;
+      periodEnd: Date | null;
       createdAt: Date;
       expiresAt: Date | null;
     },
@@ -281,7 +373,11 @@ export class SubscriptionService {
         })) as T | null) ?? order
       );
     }
-    await this.activateForProvider(order.providerId, order.planId);
+    await this.activateForProvider(
+      order.providerId,
+      order.planId,
+      updated.periodEnd?.toISOString(),
+    );
     return updated as unknown as T;
   }
 

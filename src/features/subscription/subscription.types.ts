@@ -3,8 +3,12 @@ export type ProviderPlanId = 'single_event' | 'basico' | 'pro';
 export type ProviderSubscriptionStatus =
   | 'trialing'
   | 'active'
+  | 'past_due'
   | 'expired'
   | 'canceled';
+
+/** Days a paid plan keeps working after its term ends, before locking. */
+export const SUBSCRIPTION_GRACE_DAYS = 7;
 
 export type SupportTier = 'standard' | 'priority';
 
@@ -125,6 +129,7 @@ function isStatus(value: unknown): value is ProviderSubscriptionStatus {
   return (
     value === 'trialing' ||
     value === 'active' ||
+    value === 'past_due' ||
     value === 'expired' ||
     value === 'canceled'
   );
@@ -134,6 +139,16 @@ function inFuture(iso: string | null): boolean {
   if (!iso) return false;
   const t = new Date(iso).getTime();
   return Number.isFinite(t) && t > Date.now();
+}
+
+/** True when `iso` is in the past but within the grace window (inclusive). */
+function withinGrace(iso: string | null): boolean {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return false;
+  const elapsed = Date.now() - t;
+  const graceMs = SUBSCRIPTION_GRACE_DAYS * 24 * 60 * 60 * 1000;
+  return elapsed >= 0 && elapsed <= graceMs;
 }
 
 /**
@@ -170,14 +185,15 @@ export function deriveSubscription(
     status = planId ? 'active' : 'trialing';
   }
 
-  // Paid plans store `subscription_status: active` in metadata; derive expired
-  // when the annual term has ended so enforcement blocks writes without a cron.
+  // Paid plans store `subscription_status: active` in metadata; once the term
+  // ends, keep working for a grace window (past_due) then lock (expired) — no
+  // cron needed since this is derived on every read.
   if (
-    status === 'active' &&
+    (status === 'active' || status === 'past_due') &&
     currentPeriodEnd &&
     !inFuture(currentPeriodEnd)
   ) {
-    status = 'expired';
+    status = withinGrace(currentPeriodEnd) ? 'past_due' : 'expired';
   }
 
   const limits =

@@ -4,8 +4,16 @@ import { PrismaService } from '../../prisma/prisma.service';
 import type { NotificationTab } from '../../../generated/prisma';
 
 type NotificationSettings = {
-  push: { eventReminders: boolean; friendActivity: boolean; marketing: boolean };
-  inApp: { eventReminders: boolean; friendActivity: boolean; marketing: boolean };
+  push: {
+    eventReminders: boolean;
+    friendActivity: boolean;
+    marketing: boolean;
+  };
+  inApp: {
+    eventReminders: boolean;
+    friendActivity: boolean;
+    marketing: boolean;
+  };
 };
 
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
@@ -72,12 +80,29 @@ export class NotificationsService {
     });
   }
 
-  private async enqueuePush(userId: string, title: string, body?: string | null) {
+  private async enqueuePush(
+    userId: string,
+    title: string,
+    body?: string | null,
+  ) {
     // Push delivery is not implemented yet. This outbox row is a hook for the future worker.
     await this.prisma.$executeRaw`
       INSERT INTO push_outbox (user_id, title, body, data)
       VALUES (${userId}::uuid, ${title}, ${body ?? null}, ${null}::jsonb)
     `;
+  }
+
+  /** Queues a push reminding a comercio owner that their plan is about to lapse. */
+  async notifyProviderRenewalDue(
+    userId: string,
+    daysLeft: number,
+  ): Promise<void> {
+    const title = 'Tu plan vence pronto';
+    const body =
+      daysLeft <= 0
+        ? 'Tu plan de Allons vence hoy. Renueva para no perder acceso.'
+        : `Tu plan de Allons vence en ${daysLeft} ${daysLeft === 1 ? 'día' : 'días'}. Renueva para no perder acceso.`;
+    await this.enqueuePush(userId, title, body);
   }
 
   async maybeNotifyFriendMessage(args: {
@@ -94,7 +119,9 @@ export class NotificationsService {
       select: { fullName: true, username: true },
     });
     const senderName =
-      (sender?.fullName ?? '').trim() || (sender?.username ?? '').trim() || 'Nuevo mensaje';
+      (sender?.fullName ?? '').trim() ||
+      (sender?.username ?? '').trim() ||
+      'Nuevo mensaje';
 
     await this.createInAppNotification({
       userId: args.recipientUserId,
@@ -127,7 +154,9 @@ export class NotificationsService {
       )
     `;
 
-    const followerRows = await this.prisma.$queryRaw<Array<{ user_id: string }>>`
+    const followerRows = await this.prisma.$queryRaw<
+      Array<{ user_id: string }>
+    >`
       SELECT user_id
       FROM provider_follows
       WHERE provider_id = ${args.providerId}::uuid
@@ -169,12 +198,21 @@ export class NotificationsService {
     const windowMinutes = 15;
     const hoursBefore = 6;
     const now = new Date();
-    const from = new Date(now.getTime() + (hoursBefore * 60 - windowMinutes) * 60_000);
-    const to = new Date(now.getTime() + (hoursBefore * 60 + windowMinutes) * 60_000);
+    const from = new Date(
+      now.getTime() + (hoursBefore * 60 - windowMinutes) * 60_000,
+    );
+    const to = new Date(
+      now.getTime() + (hoursBefore * 60 + windowMinutes) * 60_000,
+    );
 
     // Tickets for events starting in the reminder window.
     const rows = await this.prisma.$queryRaw<
-      Array<{ user_id: string; event_id: string; title: string; starts_at: Date }>
+      Array<{
+        user_id: string;
+        event_id: string;
+        title: string;
+        starts_at: Date;
+      }>
     >`
       SELECT DISTINCT t.owner_id AS user_id, e.id AS event_id, e.title, e.starts_at
       FROM tickets t
@@ -276,7 +314,7 @@ export class NotificationsService {
       `;
       if (events.length === 0) continue;
 
-      const top = events[0]!.title;
+      const top = events[0].title;
       await this.prisma.notification.create({
         data: {
           userId: user_id,
@@ -288,20 +326,28 @@ export class NotificationsService {
         },
       });
       if (settings.push.marketing) {
-        void this.enqueuePush(user_id, 'Te podría interesar', `Nuevo evento: ${top}`);
+        void this.enqueuePush(
+          user_id,
+          'Te podría interesar',
+          `Nuevo evento: ${top}`,
+        );
       }
       created += 1;
     }
 
     if (created > 0) {
-      this.logger.log(`weekly recommendations: created=${created} week=${weekKey}`);
+      this.logger.log(
+        `weekly recommendations: created=${created} week=${weekKey}`,
+      );
     }
   }
 }
 
 function weekOfYear(date: Date) {
   // Simple ISO-ish week key: YYYY-WW. Good enough for dedupe keys.
-  const target = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const target = new Date(
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
+  );
   const dayNr = (target.getUTCDay() + 6) % 7;
   target.setUTCDate(target.getUTCDate() - dayNr + 3);
   const firstThursday = new Date(Date.UTC(target.getUTCFullYear(), 0, 4));
