@@ -1,5 +1,6 @@
 /**
- * Dev-only: wipes Allons application data (+ auth identities), preserves waitlist*.
+ * Dev-only: wipes Allons application data (+ auth identities).
+ * Does NOT truncate: waitlist*, waitlist_qr_sources, admin_audit_logs.
  *
  * Env (all required to run):
  *   DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
@@ -89,8 +90,13 @@ const DELETE_ORDER_EXACT = [
   'messages',
   'conversation_members',
   'conversations',
+  'refunds',
   'ticket_holders',
   'tickets',
+  'payment_orders',
+  'provider_subscription_orders',
+  'push_outbox',
+  'push_tokens',
   'event_attendees',
   'event_interests',
   'event_media',
