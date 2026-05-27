@@ -17,6 +17,7 @@ import {
   PLAN_CATALOG,
   PLAN_LIMITS_BY_ID,
   RULES_VERSION,
+  taxBreakdownIncluded,
   type ProviderPlan,
   type ProviderPlanId,
   type ProviderPlanLimits,
@@ -166,6 +167,7 @@ export class SubscriptionService {
       currency: 'HNL',
     });
     const expiresAt = new Date(nowMs + link.expirationHours * 60 * 60 * 1000);
+    const { baseCents, taxCents } = taxBreakdownIncluded(amountCents);
 
     const order = await this.prisma.providerSubscriptionOrder.create({
       data: {
@@ -173,6 +175,8 @@ export class SubscriptionService {
         userId,
         planId,
         amountCents,
+        baseCents,
+        taxCents,
         currency: link.currency,
         paygateLinkId: link.id,
         periodEnd,
@@ -452,6 +456,8 @@ export class SubscriptionService {
         providerId: o.providerId,
         planId: o.planId,
         amountCents: o.amountCents,
+        baseCents: o.baseCents,
+        taxCents: o.taxCents,
         currency: o.currency,
         status: o.status,
         periodEnd: o.periodEnd?.toISOString() ?? null,

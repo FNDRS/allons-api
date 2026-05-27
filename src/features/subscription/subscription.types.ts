@@ -134,6 +134,18 @@ export function isPlanId(value: unknown): value is ProviderPlanId {
   return value === 'single_event' || value === 'basico' || value === 'pro';
 }
 
+/** Honduras ISV. Subscription prices are tax-INCLUSIVE (base + ISV = total). */
+export const ISV_RATE_PCT = 15;
+
+/** Splits a tax-inclusive total into base + ISV. */
+export function taxBreakdownIncluded(totalCents: number): {
+  baseCents: number;
+  taxCents: number;
+} {
+  const baseCents = Math.round(totalCents / (1 + ISV_RATE_PCT / 100));
+  return { baseCents, taxCents: totalCents - baseCents };
+}
+
 function isStatus(value: unknown): value is ProviderSubscriptionStatus {
   return (
     value === 'trialing' ||
