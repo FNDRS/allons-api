@@ -15,12 +15,21 @@ import { SkipThrottle } from '@nestjs/throttler';
 import { PaymentOrderStatus } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
+import { PaygateService } from '../paygate/paygate.service';
+import { PostHogQueryService } from '../../shared/posthog/posthog-query.service';
 import { AdminSecretGuard } from './admin-secret.guard';
+import { activeEventsWhere } from './admin.metrics';
+import {
+  mapAdminEventDetail,
+  mapAdminEventListItem,
+} from './admin.event-mapper';
 import type {
   AdminEventActionResponse,
+  AdminEventDetailItem,
   AdminEventListItem,
   AdminEventListResponse,
   AdminOverviewMetricsResponse,
+  AdminPlatformStatusResponse,
 } from './admin.types';
 
 type AdminNotificationAudience = 'clients' | 'providers';
@@ -47,6 +56,8 @@ export class AdminController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly orders: PaymentOrdersRepository,
+    private readonly paygate: PaygateService,
+    private readonly posthogQuery: PostHogQueryService,
   ) {}
 
   @Post('notifications/broadcast')
@@ -112,37 +123,90 @@ export class AdminController {
     const from = new Date();
     from.setDate(from.getDate() - 30);
 
-    const activeEventsPromise = this.prisma.event.count({
-      where: {
-        status: 'published',
-        OR: [{ endsAt: null }, { endsAt: { gte: new Date() } }],
-      },
-    });
-    const tickets30dPromise = this.prisma.ticket.count({
-      where: { createdAt: { gte: from } },
-    });
-
-    const scans30dPromise = this.prisma.$queryRaw<Array<{ total: number }>>`
-        SELECT COUNT(*)::int AS total
-        FROM provider_scan_records
-        WHERE status = 'valid'
-          AND scanned_at >= ${from}::timestamptz
-      `
-      .then((rows) => Number(rows[0]?.total ?? 0))
-      .catch(() => 0);
-
-    const [activeEvents, tickets30d, scans30d] = await Promise.all([
-      activeEventsPromise,
-      tickets30dPromise,
-      scans30dPromise,
+    const [activeEvents, totalEvents, tickets30d, gmv30d, posthogErrors30d] =
+      await Promise.all([
+      this.safeOverviewMetric('activeEvents', () =>
+        this.prisma.event.count({ where: activeEventsWhere() }),
+      ),
+      this.safeOverviewMetric('totalEvents', () => this.prisma.event.count()),
+      this.safeOverviewMetric('tickets30d', () =>
+        this.prisma.ticket.count({
+          where: { createdAt: { gte: from } },
+        }),
+      ),
+      this.safeOverviewMetric('gmv30d', async () => {
+        const result = await this.prisma.paymentOrder.aggregate({
+          where: { status: 'paid', createdAt: { gte: from } },
+          _sum: { amountCents: true },
+        });
+        return (result._sum.amountCents ?? 0) / 100;
+      }),
+      this.posthogQuery.countExceptionsLast30Days(),
     ]);
 
     return {
       activeEvents,
+      totalEvents,
       tickets30d,
-      scans30d,
-      gmv30d: null,
+      posthogErrors30d,
+      gmv30d,
     };
+  }
+
+  @Get('platform-status')
+  async platformStatus(): Promise<AdminPlatformStatusResponse> {
+    const windowMinutes = Number(process.env.MASS_SIGNUP_WINDOW_MINUTES) || 10;
+    const threshold = Number(process.env.MASS_SIGNUP_THRESHOLD) || 30;
+    const cooldownMinutes =
+      Number(process.env.MASS_SIGNUP_COOLDOWN_MINUTES) || 60;
+    const cron = process.env.MASS_SIGNUP_CRON ?? '*/1 * * * *';
+
+    const recipients = (process.env.ROOT_ADMIN_EMAILS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const resendConfigured = Boolean((process.env.RESEND_API_KEY ?? '').trim());
+    const recipientsConfigured = recipients.length > 0;
+
+    const adminAuditLogsReady = await this.prisma.adminAuditLog
+      .count({ take: 1 })
+      .then(() => true)
+      .catch(() => false);
+
+    const paygateHealth = await this.paygate
+      .health()
+      .then((h) => ({ configured: h.configured, connectivityStatus: h.connectivity.status }))
+      .catch(() => ({ configured: false, connectivityStatus: 'unknown' }));
+
+    return {
+      adminAuditLogsReady,
+      paygate: paygateHealth,
+      massSignupAlerts: {
+        mode: 'cron',
+        enabled: recipientsConfigured && resendConfigured,
+        windowMinutes,
+        threshold,
+        cooldownMinutes,
+        cron,
+        recipientsConfigured,
+        resendConfigured,
+      },
+    };
+  }
+
+  /** Best-effort KPI — missing tables or partial migrations must not 500 the dashboard. */
+  private async safeOverviewMetric(
+    label: string,
+    fn: () => Promise<number>,
+  ): Promise<number> {
+    try {
+      return await fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`overview-metrics ${label} unavailable: ${message}`);
+      return 0;
+    }
   }
 
   @Get('events')
@@ -168,32 +232,19 @@ export class AdminController {
       this.prisma.event.count({ where }),
     ]);
 
-    const items: AdminEventListItem[] = rows.map((e) => ({
-      id: e.id,
-      title: e.title,
-      description: e.description,
-      status: e.status,
-      eventType: e.eventType,
-      recurrence: e.recurrence,
-      startsAt: e.startsAt?.toISOString() ?? null,
-      endsAt: e.endsAt?.toISOString() ?? null,
-      city: e.city,
-      venue: e.venue,
-      themeColor: e.themeColor,
-      capacity: e.capacity,
-      ticketMode: e.ticketMode,
-      createdAt: e.createdAt.toISOString(),
-      updatedAt: e.updatedAt.toISOString(),
-      provider: e.provider
-        ? {
-            id: e.provider.id,
-            name: e.provider.name,
-            handle: e.provider.handle,
-          }
-        : null,
-    }));
+    const items: AdminEventListItem[] = rows.map(mapAdminEventListItem);
 
     return { total, items };
+  }
+
+  @Get('events/:id')
+  async getEvent(@Param('id') id: string): Promise<AdminEventDetailItem> {
+    const event = await this.prisma.event.findUnique({
+      where: { id },
+      include: { provider: true },
+    });
+    if (!event) throw new NotFoundException('Event not found');
+    return mapAdminEventDetail(event);
   }
 
   @Patch('events/:id/status')

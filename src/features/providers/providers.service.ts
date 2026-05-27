@@ -1991,6 +1991,7 @@ export class ProvidersService {
    * joined with the provider name. Read-only; guarded at the controller.
    */
   async listAllPayouts(limit: number) {
+    await this.ensureInfrastructure();
     const safeLimit = Math.min(Math.max(Math.trunc(limit) || 20, 1), 100);
     const rows = await this.prisma.$queryRaw<
       Array<{
@@ -2074,6 +2075,7 @@ export class ProvidersService {
    * Only `pending` → `completed`; rejects any other current state.
    */
   async completePayout(payoutId: string) {
+    await this.ensureInfrastructure();
     const rows = await this.prisma.$queryRaw<
       Array<{
         id: string;
