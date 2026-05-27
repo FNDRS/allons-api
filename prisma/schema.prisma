@@ -309,6 +309,9 @@ model ProviderSubscriptionOrder {
   paygateLinkId     String?            @unique @map("paygate_link_id")
   paygatePaymentId  String?            @unique @map("paygate_payment_id")
   paygateRawWebhook Json?              @map("paygate_raw_webhook")
+  /// Set for prorated upgrades — activation keeps this exact term end instead
+  /// of extending a year. Null for full new-term purchases/renewals.
+  periodEnd         DateTime?          @map("period_end") @db.Timestamptz(6)
   expiresAt         DateTime?          @map("expires_at") @db.Timestamptz(6)
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
@@ -317,36 +320,6 @@ model ProviderSubscriptionOrder {
   @@index([userId])
   @@index([status])
   @@map("provider_subscription_orders")
-}
-
-/// Manual subscription invoices issued by Allons admins. Admin generates a
-/// (possibly prorated) invoice, the comercio pays offline, the admin marks it
-/// paid and the plan is activated. Accounting source of truth.
-model ProviderInvoice {
-  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  invoiceNumber   String    @unique @map("invoice_number")
-  providerId      String    @map("provider_id") @db.Uuid
-  userId          String    @map("user_id") @db.Uuid
-  planId          String    @map("plan_id")
-  billingInterval String    @default("annual") @map("billing_interval")
-  amountCents     Int       @map("amount_cents")
-  currency        String    @default("HNL") @db.VarChar(3)
-  /// pending | paid | void
-  status          String    @default("pending")
-  prorated        Boolean   @default(false)
-  periodStart     DateTime  @map("period_start") @db.Timestamptz(6)
-  periodEnd       DateTime  @map("period_end") @db.Timestamptz(6)
-  notes           String?
-  issuedAt        DateTime  @default(now()) @map("issued_at") @db.Timestamptz(6)
-  dueAt           DateTime? @map("due_at") @db.Timestamptz(6)
-  paidAt          DateTime? @map("paid_at") @db.Timestamptz(6)
-  createdBy       String?   @map("created_by") @db.Uuid
-  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  @@index([providerId])
-  @@index([status])
-  @@map("provider_invoices")
 }
 
 model Refund {

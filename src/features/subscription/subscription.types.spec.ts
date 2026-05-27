@@ -75,7 +75,9 @@ describe('deriveSubscription', () => {
       {
         subscription_plan: 'basico',
         subscription_status: 'active',
-        subscription_period_end: new Date(Date.now() - graceMs - 1).toISOString(),
+        subscription_period_end: new Date(
+          Date.now() - graceMs - 1,
+        ).toISOString(),
       },
       EMPTY_USAGE,
       true,
