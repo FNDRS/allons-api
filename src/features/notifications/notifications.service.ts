@@ -139,7 +139,7 @@ export class NotificationsService {
       UPDATE push_outbox
       SET status = 'pending'
       WHERE status = 'processing'
-        AND last_attempt_at < now() - make_interval(mins => ${PUSH_PROCESSING_STALE_MINUTES})
+        AND last_attempt_at < now() - make_interval(mins => ${PUSH_PROCESSING_STALE_MINUTES}::int)
     `;
 
     // Atomically claim rows so concurrent workers / overlapping crons cannot
