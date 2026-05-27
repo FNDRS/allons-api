@@ -58,9 +58,9 @@ export class SubscriptionService {
       const callerMeta = await this.getUserMetadata(userId);
       const hasComercioContext = Boolean(
         callerMeta?.comercio_role ??
-          callerMeta?.free_trial_end ??
-          callerMeta?.subscription_plan ??
-          callerMeta?.subscription_status,
+        callerMeta?.free_trial_end ??
+        callerMeta?.subscription_plan ??
+        callerMeta?.subscription_status,
       );
       if (!hasComercioContext) {
         throw new ForbiddenException('No tienes acceso provider');
@@ -192,29 +192,45 @@ export class SubscriptionService {
   }
 
   /** Writes the plan into the owner's user_metadata for a 1-year term. */
-  async activateForProvider(providerId: string, planId: string): Promise<void> {
+  /**
+   * Writes the active plan into the owner's user_metadata. With
+   * `explicitPeriodEndIso` (paid invoice) the term end is set exactly; without
+   * it (Paygate webhook/poll) the term extends a year from the later of now or
+   * the current end.
+   */
+  async activateForProvider(
+    providerId: string,
+    planId: string,
+    explicitPeriodEndIso?: string,
+  ): Promise<void> {
     const ownerUserId = await this.getOwnerUserId(providerId);
     if (!ownerUserId) return;
     const meta = (await this.getUserMetadata(ownerUserId)) ?? {};
-    const now = Date.now();
-    const existingEndMs =
-      typeof meta.subscription_period_end === 'string'
-        ? new Date(meta.subscription_period_end).getTime()
-        : NaN;
-    const base =
-      Number.isFinite(existingEndMs) && existingEndMs > now
-        ? existingEndMs
-        : now;
-    const desiredEndMs = base + ONE_YEAR_MS;
 
-    // Idempotent for duplicate webhook/poll races on the same payment.
-    if (
-      meta.subscription_status === 'active' &&
-      meta.subscription_plan === planId &&
-      Number.isFinite(existingEndMs) &&
-      existingEndMs >= desiredEndMs - 86_400_000
-    ) {
-      return;
+    let periodEndIso: string;
+    if (explicitPeriodEndIso) {
+      periodEndIso = explicitPeriodEndIso;
+    } else {
+      const now = Date.now();
+      const existingEndMs =
+        typeof meta.subscription_period_end === 'string'
+          ? new Date(meta.subscription_period_end).getTime()
+          : NaN;
+      const base =
+        Number.isFinite(existingEndMs) && existingEndMs > now
+          ? existingEndMs
+          : now;
+      const desiredEndMs = base + ONE_YEAR_MS;
+      // Idempotent for duplicate webhook/poll races on the same payment.
+      if (
+        meta.subscription_status === 'active' &&
+        meta.subscription_plan === planId &&
+        Number.isFinite(existingEndMs) &&
+        existingEndMs >= desiredEndMs - 86_400_000
+      ) {
+        return;
+      }
+      periodEndIso = new Date(desiredEndMs).toISOString();
     }
 
     await this.supabaseAdmin.db.auth.admin.updateUserById(ownerUserId, {
@@ -222,9 +238,15 @@ export class SubscriptionService {
         ...meta,
         subscription_plan: planId,
         subscription_status: 'active',
-        subscription_period_end: new Date(desiredEndMs).toISOString(),
+        subscription_period_end: periodEndIso,
       },
     });
+  }
+
+  /** Resolves the comercio (provider) the user belongs to, or null. */
+  async resolveProviderId(userId: string): Promise<string | null> {
+    const membership = await this.getMembership(userId);
+    return membership?.providerId ?? null;
   }
 
   /** Activates the plan when the order is paid, even if another path marked it first. */

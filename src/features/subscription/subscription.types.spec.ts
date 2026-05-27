@@ -3,12 +3,31 @@ import { deriveSubscription } from './subscription.types';
 const EMPTY_USAGE = { activeEvents: 0, members: 0, staff: 0 };
 
 describe('deriveSubscription', () => {
-  it('derives expired when subscription_status is active but period_end is past', () => {
+  it('derives past_due when the paid term just ended (within grace)', () => {
     const sub = deriveSubscription(
       {
         subscription_plan: 'basico',
         subscription_status: 'active',
-        subscription_period_end: new Date(Date.now() - 86_400_000).toISOString(),
+        subscription_period_end: new Date(
+          Date.now() - 86_400_000,
+        ).toISOString(),
+      },
+      EMPTY_USAGE,
+      true,
+    );
+
+    expect(sub.status).toBe('past_due');
+    expect(sub.planId).toBe('basico');
+  });
+
+  it('derives expired when the paid term ended past the grace window', () => {
+    const sub = deriveSubscription(
+      {
+        subscription_plan: 'basico',
+        subscription_status: 'active',
+        subscription_period_end: new Date(
+          Date.now() - 8 * 86_400_000,
+        ).toISOString(),
       },
       EMPTY_USAGE,
       true,
@@ -23,7 +42,9 @@ describe('deriveSubscription', () => {
       {
         subscription_plan: 'pro',
         subscription_status: 'active',
-        subscription_period_end: new Date(Date.now() + 86_400_000).toISOString(),
+        subscription_period_end: new Date(
+          Date.now() + 86_400_000,
+        ).toISOString(),
       },
       EMPTY_USAGE,
       true,

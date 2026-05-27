@@ -1,8 +1,4 @@
-import {
-  ForbiddenException,
-  HttpException,
-  HttpStatus,
-} from '@nestjs/common';
+import { ForbiddenException, HttpException, HttpStatus } from '@nestjs/common';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import type { PaygateService } from '../paygate/paygate.service';
@@ -135,7 +131,7 @@ describe('SubscriptionService', () => {
   });
 
   describe('assertCanPublishEvent', () => {
-    it('throws 402 subscription_expired when the paid term ended', async () => {
+    it('throws 402 subscription_expired when the paid term ended past grace', async () => {
       const { service, mocks } = buildService();
       mocks.prisma.$queryRaw
         .mockResolvedValueOnce([{ userId: 'owner-1' }])
@@ -145,7 +141,7 @@ describe('SubscriptionService', () => {
           subscription_plan: 'basico',
           subscription_status: 'active',
           subscription_period_end: new Date(
-            Date.now() - 86_400_000,
+            Date.now() - 8 * 86_400_000,
           ).toISOString(),
         },
       });
