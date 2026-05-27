@@ -304,6 +304,9 @@ model ProviderSubscriptionOrder {
   userId            String             @map("user_id") @db.Uuid
   planId            String             @map("plan_id")
   amountCents       Int                @map("amount_cents")
+  /// Tax-inclusive breakdown (ISV): base + tax = amountCents.
+  baseCents         Int?               @map("base_cents")
+  taxCents          Int?               @map("tax_cents")
   currency          String             @default("HNL") @db.VarChar(3)
   status            PaymentOrderStatus @default(pending_payment)
   paygateLinkId     String?            @unique @map("paygate_link_id")
