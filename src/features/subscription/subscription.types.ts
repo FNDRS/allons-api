@@ -1,0 +1,190 @@
+export type ProviderPlanId = 'single_event' | 'basico' | 'pro';
+
+export type ProviderSubscriptionStatus =
+  | 'trialing'
+  | 'active'
+  | 'expired'
+  | 'canceled';
+
+export type SupportTier = 'standard' | 'priority';
+
+export interface ProviderPlanLimits {
+  /** `null` means unlimited. */
+  maxActiveEvents: number | null;
+  maxTicketsPerEvent: number | null;
+  /** Collaborators (comercio members), excluding the owner. */
+  maxMembers: number | null;
+  maxStaff: number | null;
+  supportTier: SupportTier;
+}
+
+export interface ProviderPlan {
+  id: ProviderPlanId;
+  name: string;
+  priceCents: number;
+  currency: string;
+  billingInterval: 'annual';
+  limits: ProviderPlanLimits;
+  tagline?: string;
+  highlighted?: boolean;
+}
+
+export interface ProviderUsage {
+  activeEvents: number;
+  members: number;
+  staff: number;
+}
+
+export interface ProviderSubscription {
+  planId: ProviderPlanId | null;
+  planName: string;
+  status: ProviderSubscriptionStatus;
+  limits: ProviderPlanLimits;
+  usage: ProviderUsage;
+  trialEndsAt: string | null;
+  currentPeriodEnd: string | null;
+  canManage: boolean;
+}
+
+const SINGLE_EVENT_LIMITS: ProviderPlanLimits = {
+  maxActiveEvents: 1,
+  maxTicketsPerEvent: null,
+  maxMembers: 0,
+  maxStaff: 3,
+  supportTier: 'standard',
+};
+
+const BASICO_LIMITS: ProviderPlanLimits = {
+  maxActiveEvents: 4,
+  maxTicketsPerEvent: 500,
+  maxMembers: 0,
+  maxStaff: 1,
+  supportTier: 'standard',
+};
+
+const PRO_LIMITS: ProviderPlanLimits = {
+  maxActiveEvents: null,
+  maxTicketsPerEvent: null,
+  maxMembers: 5,
+  maxStaff: 15,
+  supportTier: 'priority',
+};
+
+/** Full (Pro-level) access during the free trial. */
+export const TRIAL_LIMITS: ProviderPlanLimits = { ...PRO_LIMITS };
+
+export const PLAN_LIMITS_BY_ID: Record<ProviderPlanId, ProviderPlanLimits> = {
+  single_event: SINGLE_EVENT_LIMITS,
+  basico: BASICO_LIMITS,
+  pro: PRO_LIMITS,
+};
+
+export const PLAN_NAME_BY_ID: Record<ProviderPlanId, string> = {
+  single_event: 'Evento Único',
+  basico: 'Básico',
+  pro: 'Pro',
+};
+
+/** Annual prices in HNL cents. Keep in sync with allons-mobile `lib/subscription.ts`. */
+export const PLAN_CATALOG: ProviderPlan[] = [
+  {
+    id: 'single_event',
+    name: 'Evento Único',
+    priceCents: 250000,
+    currency: 'HNL',
+    billingInterval: 'annual',
+    limits: SINGLE_EVENT_LIMITS,
+    tagline: 'Para un único evento al año',
+  },
+  {
+    id: 'basico',
+    name: 'Básico',
+    priceCents: 590000,
+    currency: 'HNL',
+    billingInterval: 'annual',
+    limits: BASICO_LIMITS,
+    tagline: 'Para comercios en crecimiento',
+  },
+  {
+    id: 'pro',
+    name: 'Pro',
+    priceCents: 1290000,
+    currency: 'HNL',
+    billingInterval: 'annual',
+    limits: PRO_LIMITS,
+    tagline: 'Eventos y tickets ilimitados',
+    highlighted: true,
+  },
+];
+
+export function isPlanId(value: unknown): value is ProviderPlanId {
+  return value === 'single_event' || value === 'basico' || value === 'pro';
+}
+
+function isStatus(value: unknown): value is ProviderSubscriptionStatus {
+  return (
+    value === 'trialing' ||
+    value === 'active' ||
+    value === 'expired' ||
+    value === 'canceled'
+  );
+}
+
+function inFuture(iso: string | null): boolean {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) && t > Date.now();
+}
+
+/**
+ * Derives the subscription from a comercio owner's `user_metadata`. The
+ * canonical fields are written by allons-admin (`subscription_plan`,
+ * `free_trial_start`, `free_trial_end`) and the payment webhook
+ * (`subscription_status`, `subscription_period_end`).
+ */
+export function deriveSubscription(
+  meta: Record<string, unknown> | null | undefined,
+  usage: ProviderUsage,
+  canManage: boolean,
+): ProviderSubscription {
+  const m = meta ?? {};
+  const rawPlan = m.subscription_plan;
+  const planId = isPlanId(rawPlan) ? rawPlan : null;
+  const trialEndsAt =
+    typeof m.free_trial_end === 'string' ? m.free_trial_end : null;
+  const currentPeriodEnd =
+    typeof m.subscription_period_end === 'string'
+      ? m.subscription_period_end
+      : null;
+
+  let status: ProviderSubscriptionStatus;
+  if (isStatus(m.subscription_status)) {
+    status = m.subscription_status;
+  } else if (planId && inFuture(currentPeriodEnd)) {
+    status = 'active';
+  } else if (inFuture(trialEndsAt)) {
+    status = 'trialing';
+  } else if (trialEndsAt && !planId) {
+    status = 'expired';
+  } else {
+    status = planId ? 'active' : 'trialing';
+  }
+
+  const limits =
+    status === 'trialing'
+      ? TRIAL_LIMITS
+      : planId
+        ? PLAN_LIMITS_BY_ID[planId]
+        : TRIAL_LIMITS;
+
+  return {
+    planId,
+    planName: planId ? PLAN_NAME_BY_ID[planId] : 'Prueba',
+    status,
+    limits,
+    usage,
+    trialEndsAt,
+    currentPeriodEnd,
+    canManage,
+  };
+}
