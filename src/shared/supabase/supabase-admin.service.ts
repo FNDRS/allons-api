@@ -58,6 +58,18 @@ export class SupabaseAdminService {
     return data.user;
   }
 
+  /**
+   * Fetches a user by id via the service-role admin API. Returns null when
+   * admin isn't configured or the user is missing, so callers can degrade
+   * gracefully (e.g. fall back to default fee config).
+   */
+  async getUserById(userId: string): Promise<User | null> {
+    if (!this.client) return null;
+    const { data, error } = await this.client.auth.admin.getUserById(userId);
+    if (error || !data?.user) return null;
+    return data.user;
+  }
+
   private extractBearerToken(header?: string) {
     if (!header) return null;
     const [type, token] = header.split(' ');
