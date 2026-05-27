@@ -25,6 +25,8 @@ import {
 const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 /** Give the webhook a head start before polling reconciles against Paygate. */
 const RECONCILE_GRACE_MS = 4_000;
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type MembershipRole = 'owner' | 'admin' | 'staff_scanner';
 interface Membership {
@@ -52,6 +54,19 @@ export class SubscriptionService {
 
   async getSubscription(userId: string): Promise<ProviderSubscription> {
     const membership = await this.getMembership(userId);
+    if (!membership) {
+      const callerMeta = await this.getUserMetadata(userId);
+      const hasComercioContext = Boolean(
+        callerMeta?.comercio_role ??
+          callerMeta?.free_trial_end ??
+          callerMeta?.subscription_plan ??
+          callerMeta?.subscription_status,
+      );
+      if (!hasComercioContext) {
+        throw new ForbiddenException('No tienes acceso provider');
+      }
+    }
+
     const providerId = membership?.providerId ?? null;
     const ownerUserId = providerId
       ? ((await this.getOwnerUserId(providerId)) ?? userId)
@@ -60,8 +75,8 @@ export class SubscriptionService {
     const ownerMeta = await this.getUserMetadata(ownerUserId);
     const canManage = membership
       ? membership.role === 'owner'
-      : (await this.callerComercioRole(userId, ownerUserId, ownerMeta)) !==
-        'member';
+      : (await this.callerComercioRole(userId, ownerUserId, ownerMeta)) ===
+        'admin';
 
     const usage = providerId
       ? await this.countUsage(providerId)
@@ -160,12 +175,8 @@ export class SubscriptionService {
     const next = mapPaygateStatus(input.rawStatus);
     if (!next) return true; // ours, but nothing to do for this status
     if (next === 'paid') {
-      const paid = await this.markOrderPaid(
-        order.id,
-        input.paygateId,
-        input.payload,
-      );
-      if (paid) await this.activateForProvider(order.providerId, order.planId);
+      await this.markOrderPaid(order.id, input.paygateId, input.payload);
+      await this.ensureActivated(order.id, order.providerId, order.planId);
     } else {
       await this.prisma.providerSubscriptionOrder.updateMany({
         where: { id: order.id, status: 'pending_payment' },
@@ -185,16 +196,49 @@ export class SubscriptionService {
     const ownerUserId = await this.getOwnerUserId(providerId);
     if (!ownerUserId) return;
     const meta = (await this.getUserMetadata(ownerUserId)) ?? {};
+    const now = Date.now();
+    const existingEndMs =
+      typeof meta.subscription_period_end === 'string'
+        ? new Date(meta.subscription_period_end).getTime()
+        : NaN;
+    const base =
+      Number.isFinite(existingEndMs) && existingEndMs > now
+        ? existingEndMs
+        : now;
+    const desiredEndMs = base + ONE_YEAR_MS;
+
+    // Idempotent for duplicate webhook/poll races on the same payment.
+    if (
+      meta.subscription_status === 'active' &&
+      meta.subscription_plan === planId &&
+      Number.isFinite(existingEndMs) &&
+      existingEndMs >= desiredEndMs - 86_400_000
+    ) {
+      return;
+    }
+
     await this.supabaseAdmin.db.auth.admin.updateUserById(ownerUserId, {
       user_metadata: {
         ...meta,
         subscription_plan: planId,
         subscription_status: 'active',
-        subscription_period_end: new Date(
-          Date.now() + ONE_YEAR_MS,
-        ).toISOString(),
+        subscription_period_end: new Date(desiredEndMs).toISOString(),
       },
     });
+  }
+
+  /** Activates the plan when the order is paid, even if another path marked it first. */
+  private async ensureActivated(
+    orderId: string,
+    providerId: string,
+    planId: string,
+  ): Promise<void> {
+    const order = await this.prisma.providerSubscriptionOrder.findUnique({
+      where: { id: orderId },
+    });
+    if (order?.status === 'paid') {
+      await this.activateForProvider(providerId, planId);
+    }
   }
 
   private async reconcileOrder<
@@ -230,6 +274,7 @@ export class SubscriptionService {
 
     const updated = await this.markOrderPaid(order.id, detail.id, detail);
     if (!updated) {
+      await this.ensureActivated(order.id, order.providerId, order.planId);
       return (
         ((await this.prisma.providerSubscriptionOrder.findUnique({
           where: { id: order.id },
@@ -267,10 +312,12 @@ export class SubscriptionService {
 
   private async findOrderByPaygate(paygateId: string, orderRef: string | null) {
     if (orderRef) {
-      const byId = await this.prisma.providerSubscriptionOrder
-        .findUnique({ where: { id: orderRef } })
-        .catch(() => null);
-      if (byId) return byId;
+      if (UUID_REGEX.test(orderRef)) {
+        const byId = await this.prisma.providerSubscriptionOrder.findUnique({
+          where: { id: orderRef },
+        });
+        if (byId) return byId;
+      }
       const byLink = await this.prisma.providerSubscriptionOrder.findUnique({
         where: { paygateLinkId: orderRef },
       });
@@ -397,7 +444,7 @@ export class SubscriptionService {
         ? ownerMeta
         : await this.getUserMetadata(callerId);
     const role = meta?.comercio_role;
-    return typeof role === 'string' ? role : 'admin';
+    return typeof role === 'string' ? role : 'member';
   }
 
   private async countActiveEvents(providerId: string): Promise<number> {

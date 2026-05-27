@@ -1164,8 +1164,9 @@ export class ProvidersService {
       const member = await this.requireMembership(userId, ['owner', 'admin']);
       if (!title) throw new BadRequestException('title es requerido');
 
-      // Plan limit: publishing a new active event must fit the comercio plan.
-      if ((this.safeString(body.status) || 'draft') === 'published') {
+      // Plan limit: entering an active event status must fit the comercio plan.
+      const requestedStatus = this.safeString(body.status) || 'draft';
+      if (requestedStatus === 'published' || requestedStatus === 'sold_out') {
         await this.subscriptions.assertCanPublishEvent(member.providerId);
       }
 
@@ -1278,9 +1279,17 @@ export class ProvidersService {
 
     const prevStatus = (event as any).status as string | undefined;
 
-    // Plan limit: only enforce when transitioning an event into "published".
-    const nextStatusRaw = body.status ? this.safeString(body.status) : undefined;
-    if (nextStatusRaw === 'published' && prevStatus !== 'published') {
+    // Plan limit: enforce when transitioning into any active event status.
+    const nextStatusRaw = body.status
+      ? this.safeString(body.status)
+      : undefined;
+    const isActiveStatus = (s: string | undefined) =>
+      s === 'published' || s === 'sold_out';
+    if (
+      nextStatusRaw &&
+      isActiveStatus(nextStatusRaw) &&
+      !isActiveStatus(prevStatus)
+    ) {
       await this.subscriptions.assertCanPublishEvent(member.providerId);
     }
 
@@ -1518,6 +1527,30 @@ export class ProvidersService {
     body: Record<string, unknown>,
   ) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
+    if (body.total !== undefined) {
+      const rows = await this.prisma.$queryRaw<
+        { eventId: string; total: number }[]
+      >`
+        SELECT event_id AS "eventId", total
+        FROM provider_event_ticket_types
+        WHERE id = ${ticketTypeId}::uuid
+          AND provider_id = ${member.providerId}::uuid
+          AND active = true
+        LIMIT 1
+      `;
+      const row = rows[0];
+      if (row) {
+        const newTotal = Number(body.total ?? 0);
+        const delta = newTotal - Number(row.total ?? 0);
+        if (delta > 0) {
+          await this.subscriptions.assertWithinTicketCap(
+            member.providerId,
+            row.eventId,
+            delta,
+          );
+        }
+      }
+    }
     await this.prisma.$executeRaw`
       UPDATE provider_event_ticket_types
       SET

@@ -170,6 +170,16 @@ export function deriveSubscription(
     status = planId ? 'active' : 'trialing';
   }
 
+  // Paid plans store `subscription_status: active` in metadata; derive expired
+  // when the annual term has ended so enforcement blocks writes without a cron.
+  if (
+    status === 'active' &&
+    currentPeriodEnd &&
+    !inFuture(currentPeriodEnd)
+  ) {
+    status = 'expired';
+  }
+
   const limits =
     status === 'trialing'
       ? TRIAL_LIMITS
