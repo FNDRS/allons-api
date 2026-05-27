@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Resend } from 'resend';
 import {
   buildTicketInvitationEmail,
+  buildMassSignupAlertEmail,
   type TicketInvitationLinks,
 } from './templates';
 
@@ -133,6 +134,54 @@ export class MailService {
         previewText: text,
         deepLink,
       };
+    }
+  }
+
+  async sendMassSignupAlert(payload: {
+    to: string[];
+    count: number;
+    windowMinutes: number;
+    threshold: number;
+  }) {
+    const { subject, html, text } = buildMassSignupAlertEmail({
+      count: payload.count,
+      windowMinutes: payload.windowMinutes,
+      threshold: payload.threshold,
+    });
+
+    const opHints = `count=${payload.count} window=${payload.windowMinutes}m threshold=${payload.threshold}`;
+
+    if (!this.resend) {
+      this.logger.warn(
+        `[mail] mass-signup alert logged (no provider) ${opHints}`,
+      );
+      return false;
+    }
+
+    try {
+      const { error } = await this.resend.emails.send({
+        from: this.from,
+        to: payload.to,
+        subject,
+        html,
+        text,
+      });
+      if (error) {
+        this.logger.error(
+          `[mail] mass-signup alert send failed (${error.name}) ${opHints}`,
+        );
+        return false;
+      }
+
+      this.logger.log(`[mail] mass-signup alert sent ${opHints}`);
+      return true;
+    } catch (err) {
+      this.logger.error(
+        `[mail] mass-signup alert send threw: ${
+          err instanceof Error ? err.message : 'unknown error'
+        } ${opHints}`,
+      );
+      return false;
     }
   }
 }

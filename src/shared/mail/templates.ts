@@ -33,6 +33,12 @@ export interface BuiltEmail {
   text: string;
 }
 
+export interface MassSignupAlertParams {
+  count: number;
+  windowMinutes: number;
+  threshold: number;
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -133,6 +139,37 @@ export function buildTicketInvitationEmail(
     <p style="margin:0;color:${MUTED};font-size:14px;line-height:20px;">Después de instalar, inicia sesión con este correo (<strong>${escapeHtml(
       params.to,
     )}</strong>) para ver tu ticket.</p>
+  `);
+
+  return { subject, html, text };
+}
+
+export function buildMassSignupAlertEmail(
+  params: MassSignupAlertParams,
+): BuiltEmail {
+  const subject = `Alerta: picos de registros (${params.count} en ${params.windowMinutes} min)`;
+  const text = [
+    'Alerta Allons',
+    '',
+    `Detectamos un pico de registros en Supabase Auth: ${params.count} signups en los últimos ${params.windowMinutes} minutos.`,
+    `Umbral configurado: ${params.threshold}.`,
+    '',
+    'Revisa si es tráfico legítimo o abuso (bots).',
+  ].join('\n');
+
+  const html = layout(`
+    <p style="margin:0 0 16px;font-size:18px;font-weight:600;">Alerta</p>
+    <p style="margin:0 0 16px;font-size:16px;line-height:24px;">
+      Detectamos un pico de registros en <strong>Supabase Auth</strong>:
+      <strong>${params.count}</strong> signups en los últimos <strong>${params.windowMinutes}</strong> minutos.
+    </p>
+    <p style="margin:0 0 24px;font-size:14px;line-height:20px;color:${MUTED};">
+      Umbral configurado: ${params.threshold}. Si esto no es esperado, considera activar rate limiting adicional, captcha o revisar logs.
+    </p>
+    <p style="margin:0;">${button(
+      'https://supabase.com/dashboard/project/_/auth/users',
+      'Abrir Auth Users',
+    )}</p>
   `);
 
   return { subject, html, text };

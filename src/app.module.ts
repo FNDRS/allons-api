@@ -18,6 +18,7 @@ import { PaygateModule } from './features/paygate/paygate.module';
 import { PaymentsModule } from './features/payments/payments.module';
 import { NotificationsModule } from './features/notifications/notifications.module';
 import { SubscriptionModule } from './features/subscription/subscription.module';
+import { AuthWebhooksModule } from './features/auth-webhooks/auth-webhooks.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AllonsThrottlerGuard } from './shared/rate-limit/allons-throttler.guard';
@@ -51,6 +52,7 @@ import { AllonsThrottlerGuard } from './shared/rate-limit/allons-throttler.guard
     PaymentsModule,
     NotificationsModule,
     SubscriptionModule,
+    AuthWebhooksModule,
   ],
   controllers: [AppController],
   providers: [

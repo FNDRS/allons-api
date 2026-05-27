@@ -4,6 +4,7 @@ import { MailService } from './mail/mail.service';
 import { FeatureFlagsService } from './feature-flags.service';
 import { ObservabilityService } from './observability/observability.service';
 import { PostHogService } from './posthog/posthog.service';
+import { PostHogQueryService } from './posthog/posthog-query.service';
 
 @Global()
 @Module({
@@ -13,6 +14,7 @@ import { PostHogService } from './posthog/posthog.service';
     FeatureFlagsService,
     ObservabilityService,
     PostHogService,
+    PostHogQueryService,
   ],
   exports: [
     SupabaseAdminService,
@@ -20,6 +22,7 @@ import { PostHogService } from './posthog/posthog.service';
     FeatureFlagsService,
     ObservabilityService,
     PostHogService,
+    PostHogQueryService,
   ],
 })
 export class SharedModule {}

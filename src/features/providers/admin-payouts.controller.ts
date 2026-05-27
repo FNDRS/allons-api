@@ -7,6 +7,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { AdminSecretGuard } from '../admin/admin-secret.guard';
 import { ProvidersService } from './providers.service';
 
@@ -18,6 +19,11 @@ import { ProvidersService } from './providers.service';
  */
 @UseGuards(AdminSecretGuard)
 @Controller('admin/payouts')
+@SkipThrottle({
+  default: true,
+  'payment-initiate': true,
+  'paygate-webhook': true,
+})
 export class AdminPayoutsController {
   constructor(private readonly providersService: ProvidersService) {}
 
