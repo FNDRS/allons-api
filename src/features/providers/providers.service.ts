@@ -38,6 +38,30 @@ function parseCoordinate(
   return n;
 }
 
+type EventRefundPolicyValue = 'none' | 'partial' | 'full';
+
+function parseEventRefundFields(body: Record<string, unknown>): {
+  policy: EventRefundPolicyValue;
+  partialPct: number | null;
+  deadlineDays: number | null;
+} {
+  const raw = String(body.refundPolicy ?? 'none').trim();
+  const policy: EventRefundPolicyValue =
+    raw === 'partial' || raw === 'full' ? raw : 'none';
+  if (policy === 'none') {
+    return { policy, partialPct: null, deadlineDays: null };
+  }
+  const partialPct =
+    policy === 'partial'
+      ? Math.max(1, Math.min(99, Number(body.refundPartialPct ?? 50) || 50))
+      : null;
+  const deadlineDays = Math.max(
+    0,
+    Number(body.refundDeadlineDays ?? 2) || 2,
+  );
+  return { policy, partialPct, deadlineDays };
+}
+
 interface EventAggregateRow {
   event_id: string;
   sold_count: number;
@@ -393,7 +417,12 @@ export class ProvidersService {
               : ''
             : '';
       const url = candidate.trim();
-      if (url) unique.add(url);
+      if (
+        url.startsWith('https://') ||
+        url.startsWith('http://')
+      ) {
+        unique.add(url);
+      }
     }
     return Array.from(unique);
   }
@@ -1144,6 +1173,9 @@ export class ProvidersService {
       recurrenceCustom: (event as any).recurrenceCustom ?? null,
       ticketMode: (event as any).ticketMode ?? 'paid',
       capacity: Number((event as any).capacity ?? 0),
+      refundPolicy: (event as any).refundPolicy ?? 'none',
+      refundPartialPct: (event as any).refundPartialPct ?? null,
+      refundDeadlineDays: (event as any).refundDeadlineDays ?? null,
       ticketsSold: sold,
       revenue: ticketTypes.reduce((sum, row) => sum + row.sold * row.price, 0),
       attendees: sold,
@@ -1220,6 +1252,7 @@ export class ProvidersService {
       });
       this.logger.log(`createProviderEvent:created eventId=${created.id}`);
 
+      const refund = parseEventRefundFields(body);
       await this.prisma.$executeRaw`
         UPDATE events
         SET
@@ -1230,7 +1263,10 @@ export class ProvidersService {
           }::jsonb,
           ticket_mode = ${this.safeString(body.ticketMode) || 'paid'},
           capacity = ${Number(body.capacity ?? 0)},
-          status = ${this.safeString(body.status) || 'draft'}
+          status = ${this.safeString(body.status) || 'draft'},
+          refund_policy = ${refund.policy},
+          refund_partial_pct = ${refund.partialPct},
+          refund_deadline_days = ${refund.deadlineDays}
         WHERE id = ${created.id}::uuid
       `;
       this.logger.debug(
@@ -1362,6 +1398,10 @@ export class ProvidersService {
       },
     });
 
+    const refund =
+      body.refundPolicy !== undefined
+        ? parseEventRefundFields(body)
+        : null;
     await this.prisma.$executeRaw`
       UPDATE events
       SET
@@ -1379,6 +1419,21 @@ export class ProvidersService {
           ELSE capacity
         END,
         status = COALESCE(${body.status ? this.safeString(body.status) : null}, status),
+        refund_policy = CASE
+          WHEN ${refund !== null}
+          THEN ${refund?.policy ?? 'none'}
+          ELSE refund_policy
+        END,
+        refund_partial_pct = CASE
+          WHEN ${refund !== null}
+          THEN ${refund?.partialPct ?? null}::integer
+          ELSE refund_partial_pct
+        END,
+        refund_deadline_days = CASE
+          WHEN ${refund !== null}
+          THEN ${refund?.deadlineDays ?? null}::integer
+          ELSE refund_deadline_days
+        END,
         updated_at = now()
       WHERE id = ${eventId}::uuid
     `;

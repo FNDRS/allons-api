@@ -9,6 +9,8 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseDate, parseList } from './events.types';
 
+const PUBLIC_EVENT_STATUSES = ['published', 'sold_out'] as const;
+
 @Controller('events')
 export class EventsController {
   constructor(private readonly prisma: PrismaService) {}
@@ -48,6 +50,7 @@ export class EventsController {
 
     return {
       ...cityClause,
+      status: { in: [...PUBLIC_EVENT_STATUSES] },
       ...(types.length > 0
         ? {
             interests: {
@@ -177,6 +180,11 @@ export class EventsController {
 
     if (!event) throw new NotFoundException('Evento no encontrado');
 
+    const status = String((event as { status?: string }).status ?? 'draft');
+    if (!PUBLIC_EVENT_STATUSES.includes(status as (typeof PUBLIC_EVENT_STATUSES)[number])) {
+      throw new NotFoundException('Evento no encontrado');
+    }
+
     const ticketTypeRows = await this.prisma.$queryRaw<
       Array<{ id: string; name: string; price: number }>
     >`
@@ -192,6 +200,14 @@ export class EventsController {
       name: row.name,
       priceCents: Math.round(Number(row.price) * 100),
     }));
+
+    const refundPolicyRaw = String(
+      (event as { refundPolicy?: string }).refundPolicy ?? 'none',
+    );
+    const refundPolicy =
+      refundPolicyRaw === 'partial' || refundPolicyRaw === 'full'
+        ? refundPolicyRaw
+        : 'none';
 
     const attendeeRows = await this.prisma.$queryRaw<
       Array<{
@@ -232,12 +248,22 @@ export class EventsController {
         return true;
       });
 
+    const coverUrl = event.coverImageUrl?.trim() ?? '';
+    const mediaGallery = (event.media ?? []).map((m) => ({
+      id: m.id,
+      url: m.url,
+    }));
+    const gallery =
+      coverUrl && !mediaGallery.some((m) => m.url === coverUrl)
+        ? [{ id: 'cover', url: coverUrl }, ...mediaGallery]
+        : mediaGallery;
+
     return {
       ...event,
       attendeeCount: attendees.length,
       attendees,
       types: (event.interests ?? []).map((x) => x.interest.slug),
-      gallery: (event.media ?? []).map((m) => ({ id: m.id, url: m.url })),
+      gallery,
       providerReviews: (event.provider?.reviews ?? []).map((r) => ({
         id: r.id,
         authorName: r.authorName,
@@ -245,7 +271,14 @@ export class EventsController {
         rating: r.rating,
         createdAt: r.createdAt,
       })),
-      ...(entryTypes.length > 0 ? { entryTypes } : {}),
+      entryTypes,
+      refundPolicy,
+      refundPartialPct:
+        (event as { refundPartialPct?: number | null }).refundPartialPct ??
+        null,
+      refundDeadlineDays:
+        (event as { refundDeadlineDays?: number | null }).refundDeadlineDays ??
+        null,
     };
   }
 }

@@ -889,6 +889,51 @@ export class MeService {
               ${selectedTicketType ? `L. ${Number(selectedTicketType.price).toFixed(2)}` : null}
             )
           `;
+
+            const soldOutRows = await tx.$queryRaw<Array<{ id: string }>>`
+            UPDATE events e
+            SET status = 'sold_out', updated_at = now()
+            WHERE e.id = ${event.id}::uuid
+              AND e.status = 'published'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM provider_event_ticket_types t
+                WHERE t.event_id = e.id
+                  AND t.active = true
+                  AND t.total > 0
+                  AND t.sold_count < t.total
+              )
+              AND (
+                EXISTS (
+                  SELECT 1
+                  FROM provider_event_ticket_types t
+                  WHERE t.event_id = e.id
+                    AND t.active = true
+                    AND t.total > 0
+                )
+                OR (
+                  COALESCE(e.capacity, 0) > 0
+                  AND (
+                    SELECT COUNT(*)::int
+                    FROM tickets tk
+                    WHERE tk.event_id = e.id
+                      AND tk.cancelled_at IS NULL
+                  ) >= e.capacity
+                )
+              )
+            RETURNING e.id
+          `;
+            if (soldOutRows.length > 0) {
+              await tx.$executeRaw`
+              INSERT INTO provider_activity_log (provider_id, type, message, meta)
+              VALUES (
+                ${event.providerId}::uuid,
+                'event',
+                ${`¡Sold out! ${event.title} se agotó`},
+                'sold_out'
+              )
+            `;
+            }
           }
 
           return { inserted, selectedTicketType };

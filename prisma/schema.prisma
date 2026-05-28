@@ -100,6 +100,9 @@ model Event {
   ticketMode       String    @default("paid") @map("ticket_mode")
   capacity         Int       @default(0)
   status           String    @default("draft")
+  refundPolicy     String    @default("none") @map("refund_policy")
+  refundPartialPct Int?      @map("refund_partial_pct")
+  refundDeadlineDays Int?    @map("refund_deadline_days")
   createdBy        String?   @map("created_by") @db.Uuid
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
