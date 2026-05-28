@@ -2033,8 +2033,12 @@ export class ProvidersService {
   async requestPayout(userId: string, body: Record<string, unknown>) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
     const amount = Number(body.amount ?? 0);
+    // Deposit destination is the comercio's bank account registered out-of-band
+    // with Allons (we do not store cards or accounts in-app). The neutral label
+    // here is only shown in the payout history; the actual bank transfer is
+    // made manually by the operator after `completePayout`.
     const method =
-      this.safeString(body.method).trim() || 'BAC Honduras · ****4521';
+      this.safeString(body.method).trim() || 'Transferencia bancaria';
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException('amount inválido');
     }
