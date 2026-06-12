@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { parseTicketQrPayload } from './ticket-qr.utils';
@@ -55,10 +56,7 @@ function parseEventRefundFields(body: Record<string, unknown>): {
     policy === 'partial'
       ? Math.max(1, Math.min(99, Number(body.refundPartialPct ?? 50) || 50))
       : null;
-  const deadlineDays = Math.max(
-    0,
-    Number(body.refundDeadlineDays ?? 2) || 2,
-  );
+  const deadlineDays = Math.max(0, Number(body.refundDeadlineDays ?? 2) || 2);
   return { policy, partialPct, deadlineDays };
 }
 
@@ -417,10 +415,7 @@ export class ProvidersService {
               : ''
             : '';
       const url = candidate.trim();
-      if (
-        url.startsWith('https://') ||
-        url.startsWith('http://')
-      ) {
+      if (url.startsWith('https://') || url.startsWith('http://')) {
         unique.add(url);
       }
     }
@@ -450,6 +445,33 @@ export class ProvidersService {
       return 'admin';
     }
     return 'staff_scanner';
+  }
+
+  /**
+   * Authorization guard for staff role changes. A non-owner caller (e.g. an
+   * `admin`) may neither grant the `owner` role nor modify an existing owner's
+   * membership — this closes an intra-tenant privilege-escalation path where an
+   * admin could promote itself (or anyone) to owner, or demote the real owner.
+   */
+  private async assertStaffRoleChangeAllowed(
+    member: ProviderMembership,
+    targetUserId: string,
+    desiredRole: ProviderRole | null,
+  ): Promise<void> {
+    if (member.role === 'owner') return;
+    if (desiredRole === 'owner') {
+      throw new ForbiddenException('Solo el owner puede asignar el rol owner');
+    }
+    const existing = await this.prisma.$queryRaw<Array<{ role: string }>>`
+      SELECT role
+      FROM provider_members
+      WHERE provider_id = ${member.providerId}::uuid
+        AND user_id = ${targetUserId}::uuid
+      LIMIT 1
+    `;
+    if (existing[0]?.role === 'owner') {
+      throw new ForbiddenException('No puedes modificar al owner del comercio');
+    }
   }
 
   private mapMemberRoleToClientRole(raw: unknown): 'scanner' | 'admin' {
@@ -725,6 +747,7 @@ export class ProvidersService {
       throw new BadRequestException('userId es requerido');
     }
     const role = this.mapRoleToMemberRole(body.role);
+    await this.assertStaffRoleChangeAllowed(member, targetUserId, role);
     await this.prisma.$executeRaw`
       INSERT INTO provider_members (
         provider_id, user_id, role, active, full_name, email, phone, avatar_color, updated_at
@@ -848,7 +871,6 @@ export class ProvidersService {
             ...(match.user_metadata ?? {}),
             ...metadata,
             login_email: email,
-            temporary_password: temporaryPassword,
           },
         },
       );
@@ -864,7 +886,6 @@ export class ProvidersService {
           data: {
             ...metadata,
             login_email: email,
-            temporary_password: temporaryPassword,
           },
           redirectTo,
         },
@@ -909,7 +930,11 @@ export class ProvidersService {
   }
 
   private generateTemporaryPassword() {
-    const random = Math.random().toString(36).slice(2, 10);
+    // Cryptographically secure (~96 bits). The `Allons#` prefix and `9` suffix
+    // guarantee upper/lower/digit/symbol complexity regardless of the random
+    // segment. This value is returned once to the inviting owner/admin and is
+    // never persisted (see invite flow): the user must change it on first login.
+    const random = randomBytes(12).toString('base64url');
     return `Allons#${random}9`;
   }
 
@@ -929,6 +954,7 @@ export class ProvidersService {
       LIMIT 1
     `;
     if (!existing[0]) throw new NotFoundException('Miembro no encontrado');
+    await this.assertStaffRoleChangeAllowed(member, targetUserId, role);
     await this.prisma.$executeRaw`
       UPDATE provider_members
       SET
@@ -1399,9 +1425,7 @@ export class ProvidersService {
     });
 
     const refund =
-      body.refundPolicy !== undefined
-        ? parseEventRefundFields(body)
-        : null;
+      body.refundPolicy !== undefined ? parseEventRefundFields(body) : null;
     await this.prisma.$executeRaw`
       UPDATE events
       SET
@@ -2098,27 +2122,41 @@ export class ProvidersService {
       throw new BadRequestException('amount inválido');
     }
 
-    const dashboard = await this.getDashboard(userId);
-    if (amount > dashboard.availableBalance) {
-      throw new BadRequestException('Saldo insuficiente');
-    }
+    await this.prisma.$transaction(
+      async (tx) => {
+        // Serialize concurrent payout requests for this provider. The
+        // transaction-scoped advisory lock is held until commit, so a competing
+        // request blocks here until the first one's `pending` row is committed
+        // and visible. This closes the check-then-insert (TOCTOU) race in which
+        // N simultaneous requests all read the same pre-insert balance, all pass
+        // the check, and all insert — withdrawing more than the available
+        // balance. `availableBalance` already subtracts pending payout rows.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${member.providerId}))`;
 
-    await this.prisma.$executeRaw`
-      INSERT INTO provider_payout_requests (
-        provider_id,
-        amount,
-        method,
-        status,
-        created_by
-      )
-      VALUES (
-        ${member.providerId}::uuid,
-        ${amount},
-        ${method},
-        'pending',
-        ${userId}::uuid
-      )
-    `;
+        const dashboard = await this.getDashboard(userId);
+        if (amount > dashboard.availableBalance) {
+          throw new BadRequestException('Saldo insuficiente');
+        }
+
+        await tx.$executeRaw`
+          INSERT INTO provider_payout_requests (
+            provider_id,
+            amount,
+            method,
+            status,
+            created_by
+          )
+          VALUES (
+            ${member.providerId}::uuid,
+            ${amount},
+            ${method},
+            'pending',
+            ${userId}::uuid
+          )
+        `;
+      },
+      { timeout: 15000 },
+    );
     await this.appendActivity(
       member.providerId,
       'payout',

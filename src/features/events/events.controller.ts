@@ -6,6 +6,7 @@ import {
   Param,
   Query,
 } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { attachMinPriceCents } from './events-pricing.util';
 import { parseDate, parseList } from './events.types';
@@ -176,7 +177,11 @@ export class EventsController {
     if (!event) throw new NotFoundException('Evento no encontrado');
 
     const status = String((event as { status?: string }).status ?? 'draft');
-    if (!PUBLIC_EVENT_STATUSES.includes(status as (typeof PUBLIC_EVENT_STATUSES)[number])) {
+    if (
+      !PUBLIC_EVENT_STATUSES.includes(
+        status as (typeof PUBLIC_EVENT_STATUSES)[number],
+      )
+    ) {
       throw new NotFoundException('Evento no encontrado');
     }
 
@@ -232,7 +237,16 @@ export class EventsController {
     const seen = new Set<string>();
     const attendees = attendeeRows
       .map((row) => ({
-        id: row.user_id ?? row.holder_email.toLowerCase(),
+        // This endpoint is public (unauthenticated). Never expose holder_email
+        // here. For attendees without a linked profile, derive a stable opaque
+        // id from the email so de-duplication and client keys still work
+        // without leaking the address itself.
+        id:
+          row.user_id ??
+          `anon:${createHash('sha256')
+            .update(row.holder_email.toLowerCase())
+            .digest('hex')
+            .slice(0, 16)}`,
         name: row.full_name ?? row.username ?? row.holder_name,
         avatarUrl: row.avatar_url,
         avatarColor: row.avatar_color ?? '#5a4a4a',
