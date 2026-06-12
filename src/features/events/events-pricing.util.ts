@@ -21,13 +21,13 @@ export async function attachMinPriceCents<T extends { id: string }>(
 
   const minPriceByEventId = new Map(
     rows.map((row) => [
-      row.event_id,
+      row.event_id.toLowerCase(),
       Math.round(Number(row.min_price) * 100),
     ]),
   );
 
   return events.map((event) => ({
     ...event,
-    minPriceCents: minPriceByEventId.get(event.id) ?? null,
+    minPriceCents: minPriceByEventId.get(event.id.toLowerCase()) ?? null,
   }));
 }
