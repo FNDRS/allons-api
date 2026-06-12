@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseList } from '../events/events.types';
+import { attachMinPriceCents } from '../events/events-pricing.util';
 import {
   ConversationsService,
   parseMessageBody,
@@ -1733,10 +1734,11 @@ export class MeService {
       orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
       take: 8,
     });
-    return events.map((event) => ({
+    const mapped = events.map((event) => ({
       ...event,
       types: (event.interests ?? []).map((x) => x.interest.slug),
     }));
+    return attachMinPriceCents(this.prisma, mapped);
   }
 
   async shareTicketWithUser(

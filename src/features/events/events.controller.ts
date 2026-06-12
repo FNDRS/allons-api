@@ -7,6 +7,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { attachMinPriceCents } from './events-pricing.util';
 import { parseDate, parseList } from './events.types';
 
 const PUBLIC_EVENT_STATUSES = ['published', 'sold_out'] as const;
@@ -91,18 +92,16 @@ export class EventsController {
       to,
     });
 
-    return this.prisma.event
-      .findMany({
-        where,
-        include: { provider: true, interests: { include: { interest: true } } },
-        orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
-      })
-      .then((rows) =>
-        rows.map((e) => ({
-          ...e,
-          types: (e.interests ?? []).map((x) => x.interest.slug),
-        })),
-      );
+    const rows = await this.prisma.event.findMany({
+      where,
+      include: { provider: true, interests: { include: { interest: true } } },
+      orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
+    });
+    const mapped = rows.map((e) => ({
+      ...e,
+      types: (e.interests ?? []).map((x) => x.interest.slug),
+    }));
+    return attachMinPriceCents(this.prisma, mapped);
   }
 
   @Get('top')
@@ -117,22 +116,20 @@ export class EventsController {
       types,
     });
 
-    return this.prisma.event
-      .findMany({
-        where: {
-          OR: [{ startsAt: { gte: new Date() } }, { startsAt: null }],
-          ...where,
-        },
-        include: { provider: true, interests: { include: { interest: true } } },
-        orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
-        take: 5,
-      })
-      .then((rows) =>
-        rows.map((e) => ({
-          ...e,
-          types: (e.interests ?? []).map((x) => x.interest.slug),
-        })),
-      );
+    const rows = await this.prisma.event.findMany({
+      where: {
+        OR: [{ startsAt: { gte: new Date() } }, { startsAt: null }],
+        ...where,
+      },
+      include: { provider: true, interests: { include: { interest: true } } },
+      orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
+      take: 5,
+    });
+    const mapped = rows.map((e) => ({
+      ...e,
+      types: (e.interests ?? []).map((x) => x.interest.slug),
+    }));
+    return attachMinPriceCents(this.prisma, mapped);
   }
 
   @Get('friends')
@@ -147,19 +144,17 @@ export class EventsController {
       types,
     });
 
-    return this.prisma.event
-      .findMany({
-        where,
-        include: { provider: true, interests: { include: { interest: true } } },
-        orderBy: { createdAt: 'desc' },
-        take: 6,
-      })
-      .then((rows) =>
-        rows.map((e) => ({
-          ...e,
-          types: (e.interests ?? []).map((x) => x.interest.slug),
-        })),
-      );
+    const rows = await this.prisma.event.findMany({
+      where,
+      include: { provider: true, interests: { include: { interest: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+    });
+    const mapped = rows.map((e) => ({
+      ...e,
+      types: (e.interests ?? []).map((x) => x.interest.slug),
+    }));
+    return attachMinPriceCents(this.prisma, mapped);
   }
 
   @Get(':id')
