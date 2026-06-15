@@ -29,8 +29,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
-    # Safety: do not deploy on prod branch until we have a prod service.
-    if: ${{ github.ref_name == 'stg' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'stg') }}
+    # Deploys the single App Runner service from main (stg branch retired).
+    if: ${{ github.ref_name == 'main' || github.event_name == 'workflow_dispatch' }}
 
     env:
       AWS_REGION: us-east-2
