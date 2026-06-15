@@ -48,13 +48,13 @@ export class AuthWebhooksService {
       DEFAULT_COOLDOWN_MINUTES;
 
     // Count signups in Supabase Auth schema.
-    const [{ total } = { total: 0 }] = await this.prisma
-      .$queryRaw<Array<{ total: number }>>`
+    const [{ total } = { total: 0 }] = await this.prisma.$queryRaw<
+      Array<{ total: number }>
+    >`
         SELECT COUNT(*)::int AS total
         FROM auth.users
         WHERE created_at >= (now() - (${windowMinutes}::text || ' minutes')::interval)
-      `
-      .catch(() => [{ total: 0 }]);
+      `.catch(() => [{ total: 0 }]);
 
     if (total < threshold) {
       // Keep noise down: log only when close to threshold.

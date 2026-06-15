@@ -1,7 +1,4 @@
-import type {
-  AdminEventDetailItem,
-  AdminEventListItem,
-} from './admin.types';
+import type { AdminEventDetailItem, AdminEventListItem } from './admin.types';
 
 type EventRow = {
   id: string;

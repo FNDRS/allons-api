@@ -123,12 +123,18 @@ describe('AppController (e2e)', () => {
         provider: { id: 'p1', handle: 'allons' },
       },
     ]);
+    // attachMinPriceCents queries ticket types for the returned events.
+    prismaMock.$queryRaw.mockResolvedValueOnce([]);
 
     const res = await request(app.getHttpServer()).get('/events').expect(200);
     const body = res.body as Array<{ provider?: { handle?: string } }>;
     expect(body[0]?.provider?.handle).toBe('allons');
     expect(prismaMock.event.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: {} }),
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: { in: ['published', 'sold_out'] },
+        }),
+      }),
     );
   });
 
@@ -137,7 +143,9 @@ describe('AppController (e2e)', () => {
 
     await request(app.getHttpServer()).get('/events?city=CDMX').expect(200);
     expect(prismaMock.event.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { city: { in: ['CDMX'] } } }),
+      expect.objectContaining({
+        where: expect.objectContaining({ city: { in: ['CDMX'] } }),
+      }),
     );
   });
 
@@ -257,7 +265,9 @@ describe('AppController (e2e)', () => {
       .expect(200);
     expect(res.body.attendeeCount).toBe(3);
     expect(res.body.types).toEqual(['musica']);
-    expect(res.body.gallery?.[0]?.url).toBe('https://example.com/1.png');
+    // getOne prepends the cover image to the media gallery.
+    expect(res.body.gallery?.[0]?.url).toBe('https://example.com/cover.png');
+    expect(res.body.gallery?.[1]?.url).toBe('https://example.com/1.png');
     expect(res.body.providerReviews?.[0]?.authorName).toBe('Humberto');
   });
 

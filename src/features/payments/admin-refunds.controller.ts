@@ -1,9 +1,6 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { AdminSecretGuard } from '../admin/admin-secret.guard';
-import {
-  RefundsRepository,
-  type RefundStatus,
-} from './refunds.repository';
+import { RefundsRepository, type RefundStatus } from './refunds.repository';
 
 const REFUND_STATUSES: RefundStatus[] = [
   'requested',

@@ -505,7 +505,7 @@ describe('MeService', () => {
     expect(prisma.paymentOrder.updateMany).not.toHaveBeenCalled();
   });
 
-  it('listConversations computes unread based on last_read_at', async () => {
+  it('listConversations marks conversations as read (read receipts disabled)', async () => {
     const prisma = makePrisma();
     const conversationsService: any = {
       ensureConversationReadsTable: jest.fn(() => Promise.resolve(undefined)),
@@ -555,7 +555,11 @@ describe('MeService', () => {
       { get: jest.fn() } as unknown as ConfigService,
     );
     const res = await service.listConversations('u1');
-    expect(res[0]).toMatchObject({ id: 'c1', unread: true, tabs: ['eventos'] });
+    expect(res[0]).toMatchObject({
+      id: 'c1',
+      unread: false,
+      tabs: ['eventos'],
+    });
   });
 
   it('listNotifications groups today and previous', async () => {

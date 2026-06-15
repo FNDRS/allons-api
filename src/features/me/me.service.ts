@@ -1649,14 +1649,19 @@ export class MeService {
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       )
-      .map(async ({ updatedAt: _updatedAt, lastSenderId: _lastSenderId, ...rest }) => {
-        // Read receipts are intentionally disabled (no "mark as read").
-        return {
-          ...rest,
-          unread: false,
-        };
-      });
-    return Promise.all(visibleRows);
+      // Drop updatedAt/lastSenderId from the payload; read receipts are
+      // intentionally disabled (no "mark as read").
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        lastMessage: row.lastMessage,
+        peerUserId: row.peerUserId,
+        avatarUrl: row.avatarUrl,
+        avatarColor: row.avatarColor,
+        tabs: row.tabs,
+        unread: false,
+      }));
+    return visibleRows;
   }
 
   async listNotifications(userId: string) {

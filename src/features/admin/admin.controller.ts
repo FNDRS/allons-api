@@ -82,16 +82,18 @@ export class AdminController {
     const title = (body?.title ?? '').trim();
     if (!title) throw new BadRequestException('title es requerido');
 
-    const tabs = Array.isArray(body?.tabs) && body.tabs.length > 0
-      ? body.tabs
-      : (['eventos'] as AdminNotificationTab[]);
+    const tabs =
+      Array.isArray(body?.tabs) && body.tabs.length > 0
+        ? body.tabs
+        : (['eventos'] as AdminNotificationTab[]);
 
     const dedupeKey = (body?.dedupeKey ?? '').trim() || null;
 
     // Insert per-user notifications by selecting the target audience.
     // Providers are profiles that have a matching row in `providers`.
-    const sql = audience === 'providers'
-      ? this.prisma.$executeRaw`
+    const sql =
+      audience === 'providers'
+        ? this.prisma.$executeRaw`
           INSERT INTO notifications (user_id, dedupe_key, category_label, title, description, relevant_tabs)
           SELECT p.user_id,
                  ${dedupeKey},
@@ -103,7 +105,7 @@ export class AdminController {
           JOIN providers pr ON pr.id = p.user_id
           ON CONFLICT (user_id, dedupe_key) DO NOTHING
         `
-      : this.prisma.$executeRaw`
+        : this.prisma.$executeRaw`
           INSERT INTO notifications (user_id, dedupe_key, category_label, title, description, relevant_tabs)
           SELECT p.user_id,
                  ${dedupeKey},
@@ -128,24 +130,24 @@ export class AdminController {
 
     const [activeEvents, totalEvents, tickets30d, gmv30d, posthogErrors30d] =
       await Promise.all([
-      this.safeOverviewMetric('activeEvents', () =>
-        this.prisma.event.count({ where: activeEventsWhere() }),
-      ),
-      this.safeOverviewMetric('totalEvents', () => this.prisma.event.count()),
-      this.safeOverviewMetric('tickets30d', () =>
-        this.prisma.ticket.count({
-          where: { createdAt: { gte: from } },
+        this.safeOverviewMetric('activeEvents', () =>
+          this.prisma.event.count({ where: activeEventsWhere() }),
+        ),
+        this.safeOverviewMetric('totalEvents', () => this.prisma.event.count()),
+        this.safeOverviewMetric('tickets30d', () =>
+          this.prisma.ticket.count({
+            where: { createdAt: { gte: from } },
+          }),
+        ),
+        this.safeOverviewMetric('gmv30d', async () => {
+          const result = await this.prisma.paymentOrder.aggregate({
+            where: { status: 'paid', createdAt: { gte: from } },
+            _sum: { amountCents: true },
+          });
+          return (result._sum.amountCents ?? 0) / 100;
         }),
-      ),
-      this.safeOverviewMetric('gmv30d', async () => {
-        const result = await this.prisma.paymentOrder.aggregate({
-          where: { status: 'paid', createdAt: { gte: from } },
-          _sum: { amountCents: true },
-        });
-        return (result._sum.amountCents ?? 0) / 100;
-      }),
-      this.posthogQuery.countExceptionsLast30Days(),
-    ]);
+        this.posthogQuery.countExceptionsLast30Days(),
+      ]);
 
     return {
       activeEvents,
@@ -179,7 +181,10 @@ export class AdminController {
 
     const paygateHealth = await this.paygate
       .health()
-      .then((h) => ({ configured: h.configured, connectivityStatus: h.connectivity.status }))
+      .then((h) => ({
+        configured: h.configured,
+        connectivityStatus: h.connectivity.status,
+      }))
       .catch(() => ({ configured: false, connectivityStatus: 'unknown' }));
 
     return {

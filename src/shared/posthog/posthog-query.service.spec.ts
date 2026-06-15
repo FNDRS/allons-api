@@ -26,7 +26,7 @@ describe('PostHogQueryService', () => {
 
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ results: [[42]] }),
+      json: () => Promise.resolve({ results: [[42]] }),
     }) as typeof fetch;
 
     const service = new PostHogQueryService();

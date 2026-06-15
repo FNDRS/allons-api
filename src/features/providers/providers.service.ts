@@ -46,7 +46,9 @@ function parseEventRefundFields(body: Record<string, unknown>): {
   partialPct: number | null;
   deadlineDays: number | null;
 } {
-  const raw = String(body.refundPolicy ?? 'none').trim();
+  const raw = (
+    typeof body.refundPolicy === 'string' ? body.refundPolicy : 'none'
+  ).trim();
   const policy: EventRefundPolicyValue =
     raw === 'partial' || raw === 'full' ? raw : 'none';
   if (policy === 'none') {
@@ -508,10 +510,7 @@ export class ProvidersService {
     const entries = await Promise.all(
       unique.map(async (id) => {
         const { data } = await this.supabaseAdmin.db.auth.admin.getUserById(id);
-        return [
-          id,
-          (data?.user?.user_metadata ?? {}) as Record<string, unknown>,
-        ] as const;
+        return [id, data?.user?.user_metadata ?? {}] as const;
       }),
     );
     return new Map(entries);

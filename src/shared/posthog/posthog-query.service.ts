@@ -15,10 +15,9 @@ export class PostHogQueryService {
   async countExceptionsLast30Days(): Promise<number | null> {
     const apiKey = process.env.POSTHOG_PERSONAL_API_KEY?.trim();
     const projectId = process.env.POSTHOG_PROJECT_ID?.trim();
-    const host = (process.env.POSTHOG_HOST ?? 'https://us.i.posthog.com').replace(
-      /\/+$/,
-      '',
-    );
+    const host = (
+      process.env.POSTHOG_HOST ?? 'https://us.i.posthog.com'
+    ).replace(/\/+$/, '');
 
     if (!apiKey || !projectId) {
       return null;
