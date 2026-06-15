@@ -102,7 +102,10 @@ export class MePaymentsService {
       );
     }
 
-    const unitPriceCents = await this.getEventUnitPriceCents(event.id);
+    const unitPriceCents = await this.getEventUnitPriceCents(
+      event.id,
+      input.entryTypeId,
+    );
     if (unitPriceCents <= 0) {
       throw new BadRequestException(
         'El evento no tiene precio configurado para tickets pagos',
@@ -375,8 +378,33 @@ export class MePaymentsService {
     };
   }
 
-  private async getEventUnitPriceCents(eventId: string): Promise<number> {
+  private async getEventUnitPriceCents(
+    eventId: string,
+    entryTypeId?: string | null,
+  ): Promise<number> {
     try {
+      // When a specific tier is requested, price by it (and verify it belongs
+      // to this event and is active) rather than always charging the default
+      // tier — otherwise a buyer selecting VIP would be billed the cheapest
+      // price.
+      if (entryTypeId) {
+        const rows = await this.prisma.$queryRaw<Array<{ price: number }>>`
+          SELECT price::float8 AS price
+          FROM provider_event_ticket_types
+          WHERE id = ${entryTypeId}::uuid
+            AND event_id = ${eventId}::uuid
+            AND active = true
+          LIMIT 1
+        `;
+        const price = rows[0]?.price;
+        if (!Number.isFinite(price)) {
+          throw new BadRequestException(
+            'El tipo de entrada seleccionado no es válido para este evento',
+          );
+        }
+        return Math.round(Number(price) * 100);
+      }
+
       const rows = await this.prisma.$queryRaw<Array<{ price: number }>>`
         SELECT price::float8 AS price
         FROM provider_event_ticket_types
@@ -395,7 +423,10 @@ export class MePaymentsService {
       const price = rows[0]?.price;
       if (!Number.isFinite(price)) return 0;
       return Math.round(Number(price) * 100);
-    } catch {
+    } catch (error) {
+      // Preserve a deliberate 4xx (e.g. invalid tier); only wrap unexpected
+      // failures as a 500.
+      if (error instanceof HttpException) throw error;
       throw new InternalServerErrorException(
         'No se pudo determinar el precio del ticket para el evento',
       );

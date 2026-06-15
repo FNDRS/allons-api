@@ -16,7 +16,10 @@ describe('MailService', () => {
       ticketId: 't1',
       isAllonsUser: true,
     });
+    // No RESEND_API_KEY in tests → logs only, no real send, no provider id.
     expect(res.delivered).toBe(true);
+    expect(res.id).toBeNull();
+    expect(res.subject).toBe('Tienes una invitación en Allons');
     expect(res.deepLink).toBe(`${DEEP_LINK_TICKETS}/t1`);
     expect(res.previewText).toContain(`${WEB_FALLBACK_TICKETS}/t1`);
   });

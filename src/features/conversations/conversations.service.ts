@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 export type MessageKind = 'text' | 'event_invite' | 'system';
 export type InviteStatus = 'active' | 'accepted' | 'expired';
@@ -39,7 +40,10 @@ export interface PeerDto {
 
 @Injectable()
 export class ConversationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
+  ) {}
 
   async ensureConversationReadsTable() {
     await this.prisma.$executeRaw`
@@ -111,7 +115,6 @@ export class ConversationsService {
   }
 
   async getConversation(userId: string, conversationId: string) {
-    await this.ensureConversationReadsTable();
     await this.ensureTicketHoldersColumns();
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
@@ -138,13 +141,6 @@ export class ConversationsService {
           }),
         )
       : false;
-
-    await this.prisma.$executeRaw`
-      INSERT INTO conversation_reads (conversation_id, user_id, last_read_at)
-      VALUES (${conversation.id}::uuid, ${userId}::uuid, now())
-      ON CONFLICT (conversation_id, user_id)
-      DO UPDATE SET last_read_at = EXCLUDED.last_read_at
-    `;
 
     const messages = await Promise.all(
       conversation.messages.map(async (m) => {
@@ -216,6 +212,15 @@ export class ConversationsService {
         body: JSON.stringify(safePayload),
       },
     });
+
+    if (peerUserId) {
+      void this.notifications.maybeNotifyFriendMessage({
+        recipientUserId: peerUserId,
+        senderUserId: userId,
+        messageId: message.id,
+        preview: previewFromBody(message.body),
+      });
+    }
     return this.toMessageDto(message);
   }
 
@@ -282,6 +287,16 @@ function sanitizePayload(payload: MessagePayload): MessagePayload {
     };
   }
   return { type, text: payload.text ?? '' };
+}
+
+function previewFromBody(body: string) {
+  try {
+    const parsed = JSON.parse(body) as { text?: string };
+    const text = typeof parsed?.text === 'string' ? parsed.text : '';
+    return text.trim().slice(0, 140);
+  } catch {
+    return '';
+  }
 }
 
 export function parseMessageBody(body: string): MessagePayload {

@@ -2,7 +2,7 @@ name: Deploy (AWS App Runner)
 
 on:
   push:
-    branches: [stg]
+    branches: [main]
   # Prepared for future prod deploys.
   # When ready, add `prod` to branches and configure the PROD secrets below.
   workflow_dispatch:

@@ -194,6 +194,8 @@ describe('AppController (e2e)', () => {
       petFriendly: false,
       parkingAvailable: false,
       minAge: null,
+      status: 'published',
+      coverImageUrl: 'https://example.com/cover.png',
       provider: {
         id: 'p1',
         handle: 'allons',

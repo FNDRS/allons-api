@@ -14,12 +14,14 @@ import {
 import type { Request } from 'express';
 import { MeService } from './me.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
+import { PostHogService } from '../../shared/posthog/posthog.service';
 
 interface UpdateProfileBody {
   fullName?: string | null;
   location?: string | null;
   avatarUrl?: string | null;
   avatarColor?: string | null;
+  notificationSettings?: unknown;
 }
 
 interface CaptureReferralBody {
@@ -33,6 +35,7 @@ export class MeController {
   constructor(
     private readonly meService: MeService,
     private readonly supabaseAdmin: SupabaseAdminService,
+    private readonly posthog: PostHogService,
   ) {}
 
   @Get()
@@ -40,11 +43,13 @@ export class MeController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
-    return this.meService.getProfile(
+    const profile = await this.meService.getProfile(
       user.id,
       user.email,
       user.user_metadata ?? {},
     );
+    this.posthog.identify({ distinctId: user.id });
+    return profile;
   }
 
   @Patch()
@@ -171,6 +176,16 @@ export class MeController {
       this.controllerLogger.log(
         `POST /me/tickets done totalMs=${Date.now() - serviceStartedAt} created=${result.createdCount}`,
       );
+      this.posthog.capture({
+        distinctId: user.id,
+        event: 'ticket purchased',
+        properties: {
+          event_id: body.eventId,
+          quantity,
+          created_count: result.createdCount,
+          has_referral_code: Boolean(body.referralCode),
+        },
+      });
       return result;
     } catch (err) {
       this.controllerLogger.error(
@@ -178,6 +193,7 @@ export class MeController {
           err instanceof Error ? err.message : String(err)
         }`,
       );
+      this.posthog.captureException(err, user.id, { event_id: body.eventId });
       throw err;
     }
   }
@@ -187,7 +203,13 @@ export class MeController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
-    return this.meService.cancelTicket(user.id, ticketId);
+    const result = await this.meService.cancelTicket(user.id, ticketId);
+    this.posthog.capture({
+      distinctId: user.id,
+      event: 'ticket cancelled',
+      properties: { ticket_id: ticketId },
+    });
+    return result;
   }
 
   @Post('tickets/:ticketId/share')
@@ -202,10 +224,16 @@ export class MeController {
     if (!body?.peerUserId || typeof body.peerUserId !== 'string') {
       throw new BadRequestException('peerUserId es requerido');
     }
-    return this.meService.shareTicketWithUser(user.id, {
+    const result = await this.meService.shareTicketWithUser(user.id, {
       ticketId,
       peerUserId: body.peerUserId,
     });
+    this.posthog.capture({
+      distinctId: user.id,
+      event: 'ticket shared',
+      properties: { ticket_id: ticketId },
+    });
+    return result;
   }
 
   @Post('tickets/:ticketId/invite')
@@ -226,12 +254,18 @@ export class MeController {
         : undefined) ??
       user.email ??
       'Un amigo';
-    return this.meService.inviteTicketRecipient(user.id, {
+    const result = await this.meService.inviteTicketRecipient(user.id, {
       ticketId,
       email: body.email,
       name: body.name ?? null,
       inviterName,
     });
+    this.posthog.capture({
+      distinctId: user.id,
+      event: 'ticket invite sent',
+      properties: { ticket_id: ticketId },
+    });
+    return result;
   }
 
   @Post('tickets/:ticketId/accept')
@@ -242,11 +276,17 @@ export class MeController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
-    return this.meService.acceptTicketInvitation(
+    const result = await this.meService.acceptTicketInvitation(
       user.id,
       user.email ?? null,
       ticketId,
     );
+    this.posthog.capture({
+      distinctId: user.id,
+      event: 'ticket invite accepted',
+      properties: { ticket_id: ticketId },
+    });
+    return result;
   }
 
   @Get('conversations')

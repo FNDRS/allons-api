@@ -21,6 +21,7 @@ model Profile {
   avatarUrl   String?  @map("avatar_url")
   avatarColor String?  @map("avatar_color")
   location    String?
+  notificationSettings Json?   @map("notification_settings")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
@@ -85,6 +86,8 @@ model Event {
   city             String?
   venue            String?
   address          String?
+  latitude         Float?   @map("latitude") @db.DoublePrecision
+  longitude        Float?   @map("longitude") @db.DoublePrecision
   coverImageUrl    String?   @map("cover_image_url")
   themeColor       String?   @map("theme_color")
   smokingAllowed   Boolean   @default(false) @map("smoking_allowed")
@@ -97,6 +100,9 @@ model Event {
   ticketMode       String    @default("paid") @map("ticket_mode")
   capacity         Int       @default(0)
   status           String    @default("draft")
+  refundPolicy     String    @default("none") @map("refund_policy")
+  refundPartialPct Int?      @map("refund_partial_pct")
+  refundDeadlineDays Int?    @map("refund_deadline_days")
   createdBy        String?   @map("created_by") @db.Uuid
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
@@ -239,6 +245,7 @@ enum NotificationTab {
 model Notification {
   id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId        String            @map("user_id") @db.Uuid
+  dedupeKey     String?           @map("dedupe_key")
   categoryLabel String?           @map("category_label")
   title         String
   description   String?
@@ -248,6 +255,7 @@ model Notification {
 
   profile Profile @relation(fields: [userId], references: [userId], onDelete: Cascade)
 
+  @@unique([userId, dedupeKey])
   @@index([userId, createdAt(sort: Desc)])
   @@map("notifications")
 }
@@ -288,6 +296,36 @@ model PaymentOrder {
   @@index([eventId])
   @@index([status])
   @@map("payment_orders")
+}
+
+/// Paygate orders for provider annual subscription purchases. Kept separate
+/// from `payment_orders` (ticket purchases) so the live ticket flow stays
+/// untouched. Fulfillment activates the plan in the owner's user_metadata.
+model ProviderSubscriptionOrder {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  providerId        String             @map("provider_id") @db.Uuid
+  userId            String             @map("user_id") @db.Uuid
+  planId            String             @map("plan_id")
+  amountCents       Int                @map("amount_cents")
+  /// Tax-inclusive breakdown (ISV): base + tax = amountCents.
+  baseCents         Int?               @map("base_cents")
+  taxCents          Int?               @map("tax_cents")
+  currency          String             @default("HNL") @db.VarChar(3)
+  status            PaymentOrderStatus @default(pending_payment)
+  paygateLinkId     String?            @unique @map("paygate_link_id")
+  paygatePaymentId  String?            @unique @map("paygate_payment_id")
+  paygateRawWebhook Json?              @map("paygate_raw_webhook")
+  /// Set for prorated upgrades — activation keeps this exact term end instead
+  /// of extending a year. Null for full new-term purchases/renewals.
+  periodEnd         DateTime?          @map("period_end") @db.Timestamptz(6)
+  expiresAt         DateTime?          @map("expires_at") @db.Timestamptz(6)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@index([providerId])
+  @@index([userId])
+  @@index([status])
+  @@map("provider_subscription_orders")
 }
 
 model Refund {

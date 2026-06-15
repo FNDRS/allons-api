@@ -12,6 +12,7 @@ import { ApiBody, ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { seconds, Throttle } from '@nestjs/throttler';
 import { ObservabilityService } from '../../shared/observability/observability.service';
+import { PostHogService } from '../../shared/posthog/posthog.service';
 import { PaygateConfigService } from './paygate.config';
 import { PaygateWebhookSignatureError } from './paygate.errors';
 import { PaygateSignatureVerifier } from './paygate.signature';
@@ -20,6 +21,7 @@ import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
 import { MeService } from '../me/me.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 
 @ApiTags('webhooks')
 @Controller('webhooks/paygate')
@@ -34,6 +36,8 @@ export class PaygateWebhookController {
     private readonly supabaseAdmin: SupabaseAdminService,
     private readonly prisma: PrismaService,
     private readonly obs: ObservabilityService,
+    private readonly posthog: PostHogService,
+    private readonly subscription: SubscriptionService,
   ) {}
 
   @Post()
@@ -153,6 +157,17 @@ export class PaygateWebhookController {
 
     const order = await this.findOrder({ paygateId, orderRef });
     if (!order) {
+      // Not a ticket order — it may be a provider subscription purchase.
+      const handledAsSubscription = await this.subscription
+        .tryFulfillWebhook({ paygateId, orderRef, rawStatus, payload })
+        .catch((err) => {
+          this.logger.error(
+            `Subscription webhook fulfillment failed (paygateId=${paygateId}): ${String(err)}`,
+          );
+          return false;
+        });
+      if (handledAsSubscription) return;
+
       const webhookId = firstHeader(headers, 'x-clinpays-webhook-id');
       this.logger.warn(
         `Paygate webhook for unknown order (paygateId=${paygateId}${orderRef ? `, orderReference=${orderRef}` : ''}${webhookId ? `, webhookId=${webhookId}` : ''})`,
@@ -198,6 +213,34 @@ export class PaygateWebhookController {
       source: 'webhook',
       paygatePaymentId: paygateId,
     });
+
+    if (nextStatus === 'paid') {
+      this.posthog.capture({
+        distinctId: order.userId,
+        event: 'payment completed',
+        properties: {
+          order_id: order.id,
+          event_id: order.eventId,
+          amount_cents: order.amountCents,
+          currency: order.currency,
+          quantity: order.quantity,
+          source: 'webhook',
+        },
+      });
+    } else {
+      this.posthog.capture({
+        distinctId: order.userId,
+        event: 'payment failed',
+        properties: {
+          order_id: order.id,
+          event_id: order.eventId,
+          amount_cents: order.amountCents,
+          currency: order.currency,
+          status: nextStatus,
+          source: 'webhook',
+        },
+      });
+    }
 
     if (nextStatus !== 'paid') return;
 

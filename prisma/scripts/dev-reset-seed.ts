@@ -1,5 +1,6 @@
 /**
- * Dev-only: wipes Allons application data (+ auth identities), preserves waitlist*.
+ * Dev-only: wipes Allons application data (+ auth identities).
+ * Does NOT truncate: waitlist*, waitlist_qr_sources, admin_audit_logs.
  *
  * Env (all required to run):
  *   DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
@@ -40,6 +41,25 @@ async function ensureRuntimeProviderTables(): Promise<void> {
   `;
   await prisma.$executeRaw`
     ALTER TABLE events ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'draft'
+  `;
+  await prisma.$executeRaw`
+    ALTER TABLE events
+    ADD COLUMN IF NOT EXISTS refund_policy text NOT NULL DEFAULT 'none'
+  `;
+  await prisma.$executeRaw`
+    ALTER TABLE events ADD COLUMN IF NOT EXISTS refund_partial_pct integer
+  `;
+  await prisma.$executeRaw`
+    ALTER TABLE events ADD COLUMN IF NOT EXISTS refund_deadline_days integer
+  `;
+  await prisma.$executeRaw`
+    CREATE TABLE IF NOT EXISTS event_media (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      event_id uuid NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      url text NOT NULL,
+      sort_order integer NOT NULL DEFAULT 0,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )
   `;
   await prisma.$executeRaw`
     CREATE TABLE IF NOT EXISTS provider_members (
@@ -89,8 +109,13 @@ const DELETE_ORDER_EXACT = [
   'messages',
   'conversation_members',
   'conversations',
+  'refunds',
   'ticket_holders',
   'tickets',
+  'payment_orders',
+  'provider_subscription_orders',
+  'push_outbox',
+  'push_tokens',
   'event_attendees',
   'event_interests',
   'event_media',
@@ -199,13 +224,22 @@ async function upsertTicketType(
 async function main() {
   if (process.env.ALLOW_DEV_DATABASE_RESET !== 'yes') {
     throw new Error(
-      'Set ALLOW_DEV_DATABASE_RESET=yes to confirm destructive reset.',
+      [
+        'Destructive dev reset blocked.',
+        'Run:',
+        "  ALLOW_DEV_DATABASE_RESET=yes DEV_SEED_PASSWORD='your-local-password' pnpm db:seed:dev-reset",
+        'Optional: DEV_SEED_EMAIL_PREFIX=dev (default).',
+      ].join('\n'),
     );
   }
   const password = process.env.DEV_SEED_PASSWORD?.trim();
   if (!password || password.length < 8) {
     throw new Error(
-      'Define DEV_SEED_PASSWORD (mín. 8 caracteres) para las cuentas locales.',
+      [
+        'DEV_SEED_PASSWORD is required (mín. 8 caracteres) for seeded local accounts.',
+        'Run:',
+        "  ALLOW_DEV_DATABASE_RESET=yes DEV_SEED_PASSWORD='your-local-password' pnpm db:seed:dev-reset",
+      ].join('\n'),
     );
   }
   if (!process.env.DATABASE_URL) {

@@ -11,12 +11,14 @@ import {
 import type { Request } from 'express';
 import { FriendsService } from './friends.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
+import { PostHogService } from '../../shared/posthog/posthog.service';
 
 @Controller('me/friends')
 export class FriendsController {
   constructor(
     private readonly friendsService: FriendsService,
     private readonly supabaseAdmin: SupabaseAdminService,
+    private readonly posthog: PostHogService,
   ) {}
 
   @Get()
@@ -50,7 +52,13 @@ export class FriendsController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
-    return this.friendsService.addFriend(user.id, friendUserId);
+    const result = await this.friendsService.addFriend(user.id, friendUserId);
+    this.posthog.capture({
+      distinctId: user.id,
+      event: 'friend added',
+      properties: { friend_user_id: friendUserId },
+    });
+    return result;
   }
 
   @Delete(':friendUserId')
@@ -61,6 +69,15 @@ export class FriendsController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
-    return this.friendsService.removeFriend(user.id, friendUserId);
+    const result = await this.friendsService.removeFriend(
+      user.id,
+      friendUserId,
+    );
+    this.posthog.capture({
+      distinctId: user.id,
+      event: 'friend removed',
+      properties: { friend_user_id: friendUserId },
+    });
+    return result;
   }
 }

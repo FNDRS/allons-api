@@ -25,6 +25,7 @@ import {
   PaymentOrderListResponseDto,
 } from './me-payments.dto';
 import { MePaymentsService } from './me-payments.service';
+import { PostHogService } from '../../shared/posthog/posthog.service';
 
 @ApiTags('me — payments')
 @ApiBearerAuth('bearer')
@@ -33,6 +34,7 @@ export class MePaymentsController {
   constructor(
     private readonly payments: MePaymentsService,
     private readonly supabaseAdmin: SupabaseAdminService,
+    private readonly posthog: PostHogService,
   ) {}
 
   @Post('initiate')
@@ -67,7 +69,7 @@ export class MePaymentsController {
       typeof body.quantity === 'number' && Number.isFinite(body.quantity)
         ? Math.floor(body.quantity)
         : 1;
-    return this.payments.initiatePayment(user.id, {
+    const result = await this.payments.initiatePayment(user.id, {
       eventId: body.eventId,
       entryTypeId:
         typeof body.entryTypeId === 'string' ? body.entryTypeId : null,
@@ -75,6 +77,20 @@ export class MePaymentsController {
       referralCode:
         typeof body.referralCode === 'string' ? body.referralCode : null,
     });
+    this.posthog.capture({
+      distinctId: user.id,
+      event: 'payment initiated',
+      properties: {
+        event_id: body.eventId,
+        quantity,
+        order_id: result.orderId,
+        amount_cents: result.amountCents,
+        currency: result.currency,
+        has_discount: Boolean(result.discount),
+        has_referral_code: typeof body.referralCode === 'string',
+      },
+    });
+    return result;
   }
 
   @Get('orders/:orderId')

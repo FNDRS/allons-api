@@ -7,6 +7,7 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
+import { seconds, Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { ConversationsService } from './conversations.service';
 import type { MessagePayload } from './conversations.service';
@@ -50,6 +51,7 @@ export class ConversationsController {
   }
 
   @Post(':conversationId/messages')
+  @Throttle({ default: { ttl: seconds(60), limit: 30 } })
   async sendMessage(
     @Req() req: Request,
     @Param('conversationId') conversationId: string,

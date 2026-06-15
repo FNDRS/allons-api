@@ -6,15 +6,58 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { parseTicketQrPayload } from './ticket-qr.utils';
+import { NotificationsService } from '../notifications/notifications.service';
+import { SubscriptionService } from '../subscription/subscription.service';
 
 type ProviderRole = 'owner' | 'admin' | 'staff_scanner';
 
 interface ProviderMembership {
   providerId: string;
   role: ProviderRole;
+}
+
+function parseCoordinate(
+  value: unknown,
+  kind: 'latitude' | 'longitude',
+): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const n = typeof value === 'string' ? Number(value) : (value as number);
+  if (!Number.isFinite(n)) {
+    throw new BadRequestException(`${kind} invÃ¡lida`);
+  }
+  if (kind === 'latitude' && (n < -90 || n > 90)) {
+    throw new BadRequestException('latitude fuera de rango');
+  }
+  if (kind === 'longitude' && (n < -180 || n > 180)) {
+    throw new BadRequestException('longitude fuera de rango');
+  }
+  return n;
+}
+
+type EventRefundPolicyValue = 'none' | 'partial' | 'full';
+
+function parseEventRefundFields(body: Record<string, unknown>): {
+  policy: EventRefundPolicyValue;
+  partialPct: number | null;
+  deadlineDays: number | null;
+} {
+  const raw = String(body.refundPolicy ?? 'none').trim();
+  const policy: EventRefundPolicyValue =
+    raw === 'partial' || raw === 'full' ? raw : 'none';
+  if (policy === 'none') {
+    return { policy, partialPct: null, deadlineDays: null };
+  }
+  const partialPct =
+    policy === 'partial'
+      ? Math.max(1, Math.min(99, Number(body.refundPartialPct ?? 50) || 50))
+      : null;
+  const deadlineDays = Math.max(0, Number(body.refundDeadlineDays ?? 2) || 2);
+  return { policy, partialPct, deadlineDays };
 }
 
 interface EventAggregateRow {
@@ -34,6 +77,8 @@ export class ProvidersService {
     private readonly prisma: PrismaService,
     private readonly supabaseAdmin: SupabaseAdminService,
     private readonly config: ConfigService,
+    private readonly notifications: NotificationsService,
+    private readonly subscriptions: SubscriptionService,
   ) {}
 
   private async ensureInfrastructure() {
@@ -370,7 +415,9 @@ export class ProvidersService {
               : ''
             : '';
       const url = candidate.trim();
-      if (url) unique.add(url);
+      if (url.startsWith('https://') || url.startsWith('http://')) {
+        unique.add(url);
+      }
     }
     return Array.from(unique);
   }
@@ -394,13 +441,80 @@ export class ProvidersService {
   private mapRoleToMemberRole(raw: unknown): ProviderRole {
     const role = this.safeString(raw).toLowerCase();
     if (role === 'owner') return 'owner';
-    if (role === 'admin' || role === 'finance') return 'admin';
+    if (role === 'admin' || role === 'finance' || role === 'comercio') {
+      return 'admin';
+    }
     return 'staff_scanner';
+  }
+
+  /**
+   * Authorization guard for staff role changes. A non-owner caller (e.g. an
+   * `admin`) may neither grant the `owner` role nor modify an existing owner's
+   * membership â€” this closes an intra-tenant privilege-escalation path where an
+   * admin could promote itself (or anyone) to owner, or demote the real owner.
+   */
+  private async assertStaffRoleChangeAllowed(
+    member: ProviderMembership,
+    targetUserId: string,
+    desiredRole: ProviderRole | null,
+  ): Promise<void> {
+    if (member.role === 'owner') return;
+    if (desiredRole === 'owner') {
+      throw new ForbiddenException('Solo el owner puede asignar el rol owner');
+    }
+    const existing = await this.prisma.$queryRaw<Array<{ role: string }>>`
+      SELECT role
+      FROM provider_members
+      WHERE provider_id = ${member.providerId}::uuid
+        AND user_id = ${targetUserId}::uuid
+      LIMIT 1
+    `;
+    if (existing[0]?.role === 'owner') {
+      throw new ForbiddenException('No puedes modificar al owner del comercio');
+    }
   }
 
   private mapMemberRoleToClientRole(raw: unknown): 'scanner' | 'admin' {
     const role = this.safeString(raw).toLowerCase();
     return role === 'staff_scanner' ? 'scanner' : 'admin';
+  }
+
+  private parseComercioRoleFromMetadata(
+    metadata: Record<string, unknown> | undefined,
+  ): 'admin' | 'comercio' | 'staff' | undefined {
+    const raw = this.safeString(metadata?.comercio_role).toLowerCase();
+    if (raw === 'admin' || raw === 'comercio' || raw === 'staff') return raw;
+    if (metadata?.role === 'provider') return 'admin';
+    return undefined;
+  }
+
+  private resolveStaffMemberName(
+    row: { full_name: string | null; profile_name: string | null },
+    metadata: Record<string, unknown> | undefined,
+  ): string {
+    const fromMember = row.full_name?.trim();
+    if (fromMember) return fromMember;
+    const fromProfile = row.profile_name?.trim();
+    if (fromProfile) return fromProfile;
+    const fromAuth = this.safeString(metadata?.full_name).trim();
+    if (fromAuth) return fromAuth;
+    return 'Miembro';
+  }
+
+  private async fetchAuthMetadataByUserIds(
+    userIds: string[],
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const unique = [...new Set(userIds)];
+    const entries = await Promise.all(
+      unique.map(async (id) => {
+        const { data } = await this.supabaseAdmin.db.auth.admin.getUserById(id);
+        return [
+          id,
+          (data?.user?.user_metadata ?? {}) as Record<string, unknown>,
+        ] as const;
+      }),
+    );
+    return new Map(entries);
   }
 
   private async getEventAggregates(providerId: string) {
@@ -597,17 +711,33 @@ export class ProvidersService {
         END ASC,
         pm.created_at ASC
     `;
-    return rows.map((row) => ({
-      userId: row.user_id,
-      name: row.full_name ?? row.profile_name ?? 'Miembro',
-      email: row.email,
-      phone: row.phone,
-      role: this.mapMemberRoleToClientRole(row.role),
-      avatarColor: row.avatar_color ?? row.profile_avatar_color ?? '#F67010',
-      active: row.active,
-      invitedAt: row.created_at,
-      updatedAt: row.updated_at,
-    }));
+    const metadataByUser = await this.fetchAuthMetadataByUserIds(
+      rows.map((row) => row.user_id),
+    );
+    return rows.map((row) => {
+      const metadata = metadataByUser.get(row.user_id);
+      const comercioRole = this.parseComercioRoleFromMetadata(metadata);
+      const comercioPermissionsRaw = metadata?.comercio_permissions;
+      const comercioPermissions =
+        comercioPermissionsRaw &&
+        typeof comercioPermissionsRaw === 'object' &&
+        !Array.isArray(comercioPermissionsRaw)
+          ? (comercioPermissionsRaw as Record<string, unknown>)
+          : undefined;
+      return {
+        userId: row.user_id,
+        name: this.resolveStaffMemberName(row, metadata),
+        email: row.email,
+        phone: row.phone,
+        role: this.mapMemberRoleToClientRole(row.role),
+        ...(comercioRole ? { comercioRole } : {}),
+        ...(comercioPermissions ? { comercioPermissions } : {}),
+        avatarColor: row.avatar_color ?? row.profile_avatar_color ?? '#F67010',
+        active: row.active,
+        invitedAt: row.created_at,
+        updatedAt: row.updated_at,
+      };
+    });
   }
 
   async upsertProviderStaff(userId: string, body: Record<string, unknown>) {
@@ -617,6 +747,7 @@ export class ProvidersService {
       throw new BadRequestException('userId es requerido');
     }
     const role = this.mapRoleToMemberRole(body.role);
+    await this.assertStaffRoleChangeAllowed(member, targetUserId, role);
     await this.prisma.$executeRaw`
       INSERT INTO provider_members (
         provider_id, user_id, role, active, full_name, email, phone, avatar_color, updated_at
@@ -675,15 +806,37 @@ export class ProvidersService {
     if (!email || !name) {
       throw new BadRequestException('email y name son requeridos');
     }
-    if (!['scanner', 'admin', 'finance'].includes(role)) {
+    if (!['scanner', 'admin', 'finance', 'comercio'].includes(role)) {
       throw new BadRequestException('role invÃ¡lido');
     }
+
+    const comercioRoleRaw = this.safeString(body.comercio_role).toLowerCase();
+    const comercioRole =
+      comercioRoleRaw === 'admin' ||
+      comercioRoleRaw === 'comercio' ||
+      comercioRoleRaw === 'staff'
+        ? comercioRoleRaw
+        : role === 'comercio'
+          ? 'comercio'
+          : role === 'scanner'
+            ? 'staff'
+            : undefined;
+
+    const permsRaw = body.comercio_permissions;
+    const comercioPermissions =
+      permsRaw && typeof permsRaw === 'object' && !Array.isArray(permsRaw)
+        ? (permsRaw as Record<string, unknown>)
+        : undefined;
 
     const metadata = {
       role: 'staff',
       full_name: name,
       phone,
       staff_role: role,
+      ...(comercioRole ? { comercio_role: comercioRole } : {}),
+      ...(comercioPermissions
+        ? { comercio_permissions: comercioPermissions }
+        : {}),
       avatar_color: avatarColor,
       brand_name: brandName,
       brand_handle: brandHandle,
@@ -718,7 +871,6 @@ export class ProvidersService {
             ...(match.user_metadata ?? {}),
             ...metadata,
             login_email: email,
-            temporary_password: temporaryPassword,
           },
         },
       );
@@ -734,7 +886,6 @@ export class ProvidersService {
           data: {
             ...metadata,
             login_email: email,
-            temporary_password: temporaryPassword,
           },
           redirectTo,
         },
@@ -766,7 +917,7 @@ export class ProvidersService {
       name,
       email: invitedEmail,
       phone,
-      role: role === 'admin' ? 'admin' : 'scanner',
+      role,
       avatarColor,
     });
 
@@ -779,7 +930,11 @@ export class ProvidersService {
   }
 
   private generateTemporaryPassword() {
-    const random = Math.random().toString(36).slice(2, 10);
+    // Cryptographically secure (~96 bits). The `Allons#` prefix and `9` suffix
+    // guarantee upper/lower/digit/symbol complexity regardless of the random
+    // segment. This value is returned once to the inviting owner/admin and is
+    // never persisted (see invite flow): the user must change it on first login.
+    const random = randomBytes(12).toString('base64url');
     return `Allons#${random}9`;
   }
 
@@ -799,6 +954,7 @@ export class ProvidersService {
       LIMIT 1
     `;
     if (!existing[0]) throw new NotFoundException('Miembro no encontrado');
+    await this.assertStaffRoleChangeAllowed(member, targetUserId, role);
     await this.prisma.$executeRaw`
       UPDATE provider_members
       SET
@@ -827,6 +983,26 @@ export class ProvidersService {
       WHERE provider_id = ${member.providerId}::uuid
         AND user_id = ${targetUserId}::uuid
     `;
+    const permsRaw = body.comercio_permissions;
+    if (permsRaw && typeof permsRaw === 'object' && !Array.isArray(permsRaw)) {
+      const authUser =
+        await this.supabaseAdmin.db.auth.admin.getUserById(targetUserId);
+      if (authUser.data?.user) {
+        const updated = await this.supabaseAdmin.db.auth.admin.updateUserById(
+          targetUserId,
+          {
+            user_metadata: {
+              ...(authUser.data.user.user_metadata ?? {}),
+              comercio_permissions: permsRaw,
+            },
+          },
+        );
+        if (updated.error) {
+          throw new BadRequestException(updated.error.message);
+        }
+      }
+    }
+
     await this.appendActivity(
       member.providerId,
       'staff',
@@ -945,6 +1121,15 @@ export class ProvidersService {
       `Descuento creado: ${code}`,
       eventId,
     );
+
+    // Notify followers (marketing toggle).
+    void this.notifications.maybeNotifyProviderUpdate({
+      providerId: member.providerId,
+      kind: 'discount_created',
+      title: 'Nuevo descuento',
+      description: `CupÃ³n ${code} disponible.`,
+      dedupeKey: `discount:${member.providerId}:${code}`,
+    });
     return this.listProviderDiscounts(userId);
   }
 
@@ -1014,6 +1199,9 @@ export class ProvidersService {
       recurrenceCustom: (event as any).recurrenceCustom ?? null,
       ticketMode: (event as any).ticketMode ?? 'paid',
       capacity: Number((event as any).capacity ?? 0),
+      refundPolicy: (event as any).refundPolicy ?? 'none',
+      refundPartialPct: (event as any).refundPartialPct ?? null,
+      refundDeadlineDays: (event as any).refundDeadlineDays ?? null,
       ticketsSold: sold,
       revenue: ticketTypes.reduce((sum, row) => sum + row.sold * row.price, 0),
       attendees: sold,
@@ -1033,6 +1221,20 @@ export class ProvidersService {
     try {
       const member = await this.requireMembership(userId, ['owner', 'admin']);
       if (!title) throw new BadRequestException('title es requerido');
+
+      // Plan limit: entering an active event status must fit the comercio plan.
+      const requestedStatus = this.safeString(body.status) || 'draft';
+      if (requestedStatus === 'published' || requestedStatus === 'sold_out') {
+        await this.subscriptions.assertCanPublishEvent(member.providerId);
+      }
+
+      const latitude = parseCoordinate(body.latitude, 'latitude');
+      const longitude = parseCoordinate(body.longitude, 'longitude');
+      if ((latitude == null) !== (longitude == null)) {
+        throw new BadRequestException(
+          'Debes enviar latitude y longitude juntas (o ambas null).',
+        );
+      }
       const creatorProfile = await this.prisma.profile.findUnique({
         where: { userId },
         select: { userId: true },
@@ -1062,6 +1264,8 @@ export class ProvidersService {
           city: body.city ? this.safeString(body.city) : null,
           venue: body.venue ? this.safeString(body.venue) : null,
           address: body.address ? this.safeString(body.address) : null,
+          latitude: latitude ?? null,
+          longitude: longitude ?? null,
           coverImageUrl: body.coverImageUrl
             ? this.safeString(body.coverImageUrl)
             : null,
@@ -1074,6 +1278,7 @@ export class ProvidersService {
       });
       this.logger.log(`createProviderEvent:created eventId=${created.id}`);
 
+      const refund = parseEventRefundFields(body);
       await this.prisma.$executeRaw`
         UPDATE events
         SET
@@ -1084,7 +1289,10 @@ export class ProvidersService {
           }::jsonb,
           ticket_mode = ${this.safeString(body.ticketMode) || 'paid'},
           capacity = ${Number(body.capacity ?? 0)},
-          status = ${this.safeString(body.status) || 'draft'}
+          status = ${this.safeString(body.status) || 'draft'},
+          refund_policy = ${refund.policy},
+          refund_partial_pct = ${refund.partialPct},
+          refund_deadline_days = ${refund.deadlineDays}
         WHERE id = ${created.id}::uuid
       `;
       this.logger.debug(
@@ -1123,6 +1331,30 @@ export class ProvidersService {
     });
     if (!event) throw new NotFoundException('Evento no encontrado');
 
+    const latitude = parseCoordinate(body.latitude, 'latitude');
+    const longitude = parseCoordinate(body.longitude, 'longitude');
+    if ((latitude == null) !== (longitude == null)) {
+      throw new BadRequestException(
+        'Debes enviar latitude y longitude juntas (o ambas null).',
+      );
+    }
+
+    const prevStatus = (event as any).status as string | undefined;
+
+    // Plan limit: enforce when transitioning into any active event status.
+    const nextStatusRaw = body.status
+      ? this.safeString(body.status)
+      : undefined;
+    const isActiveStatus = (s: string | undefined) =>
+      s === 'published' || s === 'sold_out';
+    if (
+      nextStatusRaw &&
+      isActiveStatus(nextStatusRaw) &&
+      !isActiveStatus(prevStatus)
+    ) {
+      await this.subscriptions.assertCanPublishEvent(member.providerId);
+    }
+
     await this.prisma.event.update({
       where: { id: eventId },
       data: {
@@ -1159,6 +1391,8 @@ export class ProvidersService {
             : body.address
               ? this.safeString(body.address)
               : undefined,
+        latitude: latitude,
+        longitude: longitude,
         coverImageUrl:
           body.coverImageUrl === null
             ? null
@@ -1190,6 +1424,8 @@ export class ProvidersService {
       },
     });
 
+    const refund =
+      body.refundPolicy !== undefined ? parseEventRefundFields(body) : null;
     await this.prisma.$executeRaw`
       UPDATE events
       SET
@@ -1207,6 +1443,21 @@ export class ProvidersService {
           ELSE capacity
         END,
         status = COALESCE(${body.status ? this.safeString(body.status) : null}, status),
+        refund_policy = CASE
+          WHEN ${refund !== null}
+          THEN ${refund?.policy ?? 'none'}
+          ELSE refund_policy
+        END,
+        refund_partial_pct = CASE
+          WHEN ${refund !== null}
+          THEN ${refund?.partialPct ?? null}::integer
+          ELSE refund_partial_pct
+        END,
+        refund_deadline_days = CASE
+          WHEN ${refund !== null}
+          THEN ${refund?.deadlineDays ?? null}::integer
+          ELSE refund_deadline_days
+        END,
         updated_at = now()
       WHERE id = ${eventId}::uuid
     `;
@@ -1218,6 +1469,20 @@ export class ProvidersService {
       `Evento actualizado: ${event.title}`,
       eventId,
     );
+
+    // If it was just published, notify followers (marketing toggle).
+    const nextStatus = body.status ? this.safeString(body.status) : undefined;
+    const publishedNow =
+      prevStatus !== 'published' && nextStatus === 'published';
+    if (publishedNow) {
+      void this.notifications.maybeNotifyProviderUpdate({
+        providerId: member.providerId,
+        kind: 'event_published',
+        title: 'Nuevo evento publicado',
+        description: event.title,
+        dedupeKey: `event_published:${eventId}`,
+      });
+    }
     return this.getProviderEvent(userId, eventId);
   }
 
@@ -1305,6 +1570,12 @@ export class ProvidersService {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
     const name = this.safeString(body.name).trim();
     if (!name) throw new BadRequestException('name es requerido');
+    // Plan limit: total tickets per event must fit the comercio plan.
+    await this.subscriptions.assertWithinTicketCap(
+      member.providerId,
+      eventId,
+      Number(body.total ?? 0),
+    );
     await this.prisma.$executeRaw`
       INSERT INTO provider_event_ticket_types (
         provider_id, event_id, name, kind, price, total, sold_count, active
@@ -1335,6 +1606,30 @@ export class ProvidersService {
     body: Record<string, unknown>,
   ) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
+    if (body.total !== undefined) {
+      const rows = await this.prisma.$queryRaw<
+        { eventId: string; total: number }[]
+      >`
+        SELECT event_id AS "eventId", total
+        FROM provider_event_ticket_types
+        WHERE id = ${ticketTypeId}::uuid
+          AND provider_id = ${member.providerId}::uuid
+          AND active = true
+        LIMIT 1
+      `;
+      const row = rows[0];
+      if (row) {
+        const newTotal = Number(body.total ?? 0);
+        const delta = newTotal - Number(row.total ?? 0);
+        if (delta > 0) {
+          await this.subscriptions.assertWithinTicketCap(
+            member.providerId,
+            row.eventId,
+            delta,
+          );
+        }
+      }
+    }
     await this.prisma.$executeRaw`
       UPDATE provider_event_ticket_types
       SET
@@ -1400,7 +1695,7 @@ export class ProvidersService {
 
     if (ticketId && !eventMismatch) {
       // Atomic block: lock the ticket row, recheck duplicates, insert
-      // the scan record âÿÿ all in one transaction. Two scans of the
+      // the scan record ï¿½ï¿½ï¿½ all in one transaction. Two scans of the
       // same ticket racing in different staff sessions now serialize:
       // the second one sees the first scan's row and lands as
       // `duplicate`.
@@ -1426,7 +1721,7 @@ export class ProvidersService {
         const resolvedName = holderRows[0]?.holder_name ?? 'Invitado';
 
         // Soft-deleted tickets are still queryable on purpose: scanning
-        // one should report "cancelado", not "invalid" âÿÿ otherwise the
+        // one should report "cancelado", not "invalid" ï¿½ï¿½ï¿½ otherwise the
         // doorperson can't tell a fraudulent code apart from a real
         // ticket the buyer cancelled this morning.
         if (ticketRows[0].cancelled_at) {
@@ -1610,8 +1905,28 @@ export class ProvidersService {
     const events = await this.listProviderEvents(userId);
 
     const gross = events.reduce((sum, row) => sum + row.revenue, 0);
-    const platformFee = 10;
+    // Effective fee withheld from the merchant: Allons commission + ISV on it +
+    // the per-comercio Paygate (bank) fee. Rates come from env; the Paygate %
+    // is read from the comercio owner's metadata (set in allons-admin).
+    const platformFee = await this.readEffectiveFeePercent(member.providerId);
     const feeAmount = (gross * platformFee) / 100;
+
+    // Hold against refunds: a sale only becomes withdrawable once its event's
+    // refund window has closed (or the provider allows no refunds). Revenue
+    // from events still inside the window is reported as `heldBalance` and is
+    // excluded from `availableBalance`, so we never pay out money that could
+    // still be refunded/charged back.
+    const refund = await this.readProviderRefundPolicy(member.providerId);
+    const now = Date.now();
+    const releasedGross = events.reduce(
+      (sum, row) =>
+        isRevenueReleasedForPayout(row, refund, now) ? sum + row.revenue : sum,
+      0,
+    );
+    const netFactor = 1 - platformFee / 100;
+    const releasedNet = releasedGross * netFactor;
+    const heldNet = Math.max((gross - releasedGross) * netFactor, 0);
+
     const pendingRows = await this.prisma.$queryRaw<Array<{ total: number }>>`
       SELECT COALESCE(SUM(amount), 0)::float8 AS total
       FROM provider_payout_requests
@@ -1627,7 +1942,7 @@ export class ProvidersService {
     const pendingBalance = Number(pendingRows[0]?.total ?? 0);
     const paidOut = Number(completedRows[0]?.total ?? 0);
     const availableBalance = Math.max(
-      gross - feeAmount - pendingBalance - paidOut,
+      releasedNet - pendingBalance - paidOut,
       0,
     );
 
@@ -1637,6 +1952,7 @@ export class ProvidersService {
     return {
       availableBalance,
       pendingBalance,
+      heldBalance: heldNet,
       platformFee,
       totals: {
         gross,
@@ -1649,6 +1965,73 @@ export class ProvidersService {
       payouts,
       activity,
     };
+  }
+
+  /**
+   * Reads the provider's refund policy for payout-hold decisions. Defaults to
+   * "no refunds" when the table/row is absent (the table is created lazily by
+   * the refund flow) â€” i.e. funds are treated as safe to release, matching the
+   * pre-hold behavior for providers that never configured refunds.
+   */
+  private async readProviderRefundPolicy(
+    providerId: string,
+  ): Promise<{ refundEnabled: boolean; deadlineHours: number }> {
+    try {
+      const rows = await this.prisma.$queryRaw<
+        Array<{ refund_enabled: boolean; refund_deadline_hours: number }>
+      >`
+        SELECT refund_enabled, refund_deadline_hours
+        FROM provider_refund_policies
+        WHERE provider_id = ${providerId}::uuid
+        LIMIT 1
+      `;
+      const row = rows[0];
+      return {
+        refundEnabled: Boolean(row?.refund_enabled),
+        deadlineHours: Number(row?.refund_deadline_hours ?? 24),
+      };
+    } catch {
+      return { refundEnabled: false, deadlineHours: 24 };
+    }
+  }
+
+  /**
+   * Effective fee % withheld from the merchant on a sale:
+   *   Allons commission + ISV (on that commission) + Paygate (bank) fee.
+   * Allons/ISV rates and the Paygate fallback are env-configurable; the actual
+   * Paygate % is per-comercio, read from the owner's auth metadata (set in
+   * allons-admin at creation). Falls back to env defaults on any failure.
+   */
+  private async readEffectiveFeePercent(providerId: string): Promise<number> {
+    const allonsPct = envNumber('PLATFORM_ALLONS_FEE_PCT', 12);
+    const isvPct = envNumber('PLATFORM_ISV_PCT', 15);
+    const paygateDefault = envNumber('PLATFORM_PAYGATE_FEE_PCT_DEFAULT', 5);
+
+    let paygatePct = paygateDefault;
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ user_id: string }>>`
+        SELECT user_id
+        FROM provider_members
+        WHERE provider_id = ${providerId}::uuid
+        ORDER BY CASE role
+          WHEN 'owner' THEN 0
+          WHEN 'admin' THEN 1
+          ELSE 2
+        END
+        LIMIT 1
+      `;
+      const ownerId = rows[0]?.user_id;
+      if (ownerId) {
+        const owner = await this.supabaseAdmin.getUserById(ownerId);
+        const raw = Number(owner?.user_metadata?.paygate_fee_pct);
+        if (Number.isFinite(raw) && raw >= 0) paygatePct = raw;
+      }
+    } catch {
+      // Keep the env default Paygate %.
+    }
+
+    // ISV applies to the Allons commission, not the whole ticket.
+    return allonsPct + (allonsPct * isvPct) / 100 + paygatePct;
   }
 
   async listPayouts(userId: string) {
@@ -1682,36 +2065,98 @@ export class ProvidersService {
     }));
   }
 
+  /**
+   * Admin-wide payout list (across all providers) for the ops dashboard,
+   * joined with the provider name. Read-only; guarded at the controller.
+   */
+  async listAllPayouts(limit: number) {
+    await this.ensureInfrastructure();
+    const safeLimit = Math.min(Math.max(Math.trunc(limit) || 20, 1), 100);
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        provider_id: string;
+        provider_name: string | null;
+        amount: number;
+        method: string;
+        status: string;
+        created_at: Date;
+      }>
+    >`
+      SELECT
+        pr.id,
+        pr.provider_id,
+        p.name AS provider_name,
+        pr.amount::float8 AS amount,
+        pr.method,
+        pr.status,
+        pr.created_at
+      FROM provider_payout_requests pr
+      LEFT JOIN providers p ON p.id = pr.provider_id
+      ORDER BY pr.created_at DESC
+      LIMIT ${safeLimit}
+    `;
+    return {
+      items: rows.map((row) => ({
+        id: row.id,
+        providerId: row.provider_id,
+        providerName: row.provider_name ?? 'â€”',
+        amount: Number(row.amount),
+        method: row.method,
+        status: row.status,
+        createdAt: row.created_at.toISOString(),
+      })),
+    };
+  }
+
   async requestPayout(userId: string, body: Record<string, unknown>) {
     const member = await this.requireMembership(userId, ['owner', 'admin']);
     const amount = Number(body.amount ?? 0);
+    // Deposit destination is the comercio's bank account registered out-of-band
+    // with Allons (we do not store cards or accounts in-app). The neutral label
+    // here is only shown in the payout history; the actual bank transfer is
+    // made manually by the operator after `completePayout`.
     const method =
-      this.safeString(body.method).trim() || 'BAC Honduras Â· ****4521';
+      this.safeString(body.method).trim() || 'Transferencia bancaria';
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException('amount invÃ¡lido');
     }
 
-    const dashboard = await this.getDashboard(userId);
-    if (amount > dashboard.availableBalance) {
-      throw new BadRequestException('Saldo insuficiente');
-    }
+    await this.prisma.$transaction(
+      async (tx) => {
+        // Serialize concurrent payout requests for this provider. The
+        // transaction-scoped advisory lock is held until commit, so a competing
+        // request blocks here until the first one's `pending` row is committed
+        // and visible. This closes the check-then-insert (TOCTOU) race in which
+        // N simultaneous requests all read the same pre-insert balance, all pass
+        // the check, and all insert â€” withdrawing more than the available
+        // balance. `availableBalance` already subtracts pending payout rows.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${member.providerId}))`;
 
-    await this.prisma.$executeRaw`
-      INSERT INTO provider_payout_requests (
-        provider_id,
-        amount,
-        method,
-        status,
-        created_by
-      )
-      VALUES (
-        ${member.providerId}::uuid,
-        ${amount},
-        ${method},
-        'pending',
-        ${userId}::uuid
-      )
-    `;
+        const dashboard = await this.getDashboard(userId);
+        if (amount > dashboard.availableBalance) {
+          throw new BadRequestException('Saldo insuficiente');
+        }
+
+        await tx.$executeRaw`
+          INSERT INTO provider_payout_requests (
+            provider_id,
+            amount,
+            method,
+            status,
+            created_by
+          )
+          VALUES (
+            ${member.providerId}::uuid,
+            ${amount},
+            ${method},
+            'pending',
+            ${userId}::uuid
+          )
+        `;
+      },
+      { timeout: 15000 },
+    );
     await this.appendActivity(
       member.providerId,
       'payout',
@@ -1720,4 +2165,75 @@ export class ProvidersService {
     );
     return { requested: true };
   }
+
+  /**
+   * Admin action: marks a pending payout request as completed after the
+   * operator made the bank transfer (settlement stays manual/out-of-band).
+   * Only `pending` â†’ `completed`; rejects any other current state.
+   */
+  async completePayout(payoutId: string) {
+    await this.ensureInfrastructure();
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        provider_id: string;
+        amount: number;
+        status: string;
+      }>
+    >`
+      SELECT id, provider_id, amount::float8 AS amount, status
+      FROM provider_payout_requests
+      WHERE id = ${payoutId}::uuid
+      LIMIT 1
+    `;
+    const row = rows[0];
+    if (!row) {
+      throw new NotFoundException('Retiro no encontrado');
+    }
+    if (row.status !== 'pending') {
+      throw new BadRequestException(
+        `El retiro ya estÃ¡ en estado "${row.status}"`,
+      );
+    }
+    await this.prisma.$executeRaw`
+      UPDATE provider_payout_requests
+      SET status = 'completed'
+      WHERE id = ${payoutId}::uuid
+        AND status = 'pending'
+    `;
+    await this.appendActivity(
+      row.provider_id,
+      'payout',
+      `Retiro completado por L. ${Number(row.amount).toFixed(2)}`,
+      'admin',
+    );
+    return { id: row.id, status: 'completed' as const };
+  }
+}
+
+/**
+ * A sale's revenue is safe to pay out once it can no longer be refunded:
+ * the provider allows no refunds, or the event's refund window has closed
+ * (`now` past `startsAt - deadlineHours`). Refund-enabled events without a
+ * start date stay held (refundable indefinitely).
+ */
+function isRevenueReleasedForPayout(
+  event: { startsAt?: Date | string | null },
+  refund: { refundEnabled: boolean; deadlineHours: number },
+  now: number,
+): boolean {
+  if (!refund.refundEnabled) return true;
+  if (!event.startsAt) return false;
+  const startsAtMs = new Date(event.startsAt).getTime();
+  if (!Number.isFinite(startsAtMs)) return false;
+  const cutoff = startsAtMs - refund.deadlineHours * 60 * 60 * 1000;
+  return now > cutoff;
+}
+
+/** Reads a non-negative number from env, falling back when unset/invalid. */
+function envNumber(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
 }

@@ -1,4 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 const PAYMENT_ORDER_STATUSES = [
   'pending_payment',
@@ -13,6 +22,7 @@ export class InitiatePaymentBodyDto {
     format: 'uuid',
     description: 'Event id tickets are purchased for.',
   })
+  @IsUUID()
   eventId!: string;
 
   @ApiPropertyOptional({
@@ -20,6 +30,8 @@ export class InitiatePaymentBodyDto {
     description:
       'Ticket tier (`provider_event_ticket_types`). Optional when the event has a single price.',
   })
+  @IsOptional()
+  @IsUUID()
   entryTypeId?: string;
 
   @ApiPropertyOptional({
@@ -28,6 +40,10 @@ export class InitiatePaymentBodyDto {
     default: 1,
     description: 'Number of tickets (1–20).',
   })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(20)
   quantity?: number;
 
   @ApiPropertyOptional({
@@ -35,6 +51,9 @@ export class InitiatePaymentBodyDto {
       'Optional referral code; when valid it may discount the total.',
     example: 'ABC123',
   })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
   referralCode?: string;
 }
 

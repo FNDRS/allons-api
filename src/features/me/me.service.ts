@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseList } from '../events/events.types';
+import { attachMinPriceCents } from '../events/events-pricing.util';
 import {
   ConversationsService,
   parseMessageBody,
@@ -23,6 +24,52 @@ interface UpdateProfileInput {
   location?: string | null;
   avatarUrl?: string | null;
   avatarColor?: string | null;
+  notificationSettings?: unknown;
+}
+
+type NotificationSettings = {
+  push: {
+    eventReminders: boolean;
+    friendActivity: boolean;
+    marketing: boolean;
+  };
+  inApp: {
+    eventReminders: boolean;
+    friendActivity: boolean;
+    marketing: boolean;
+  };
+};
+
+const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettings = {
+  push: { eventReminders: true, friendActivity: true, marketing: false },
+  inApp: { eventReminders: true, friendActivity: true, marketing: false },
+};
+
+function coerceNotificationSettings(input: unknown): NotificationSettings {
+  if (!input || typeof input !== 'object') return DEFAULT_NOTIFICATION_SETTINGS;
+  const obj = input as any;
+
+  function readSection(section: any) {
+    return {
+      eventReminders:
+        typeof section?.eventReminders === 'boolean'
+          ? section.eventReminders
+          : DEFAULT_NOTIFICATION_SETTINGS.push.eventReminders,
+      friendActivity:
+        typeof section?.friendActivity === 'boolean'
+          ? section.friendActivity
+          : DEFAULT_NOTIFICATION_SETTINGS.push.friendActivity,
+      marketing:
+        typeof section?.marketing === 'boolean'
+          ? section.marketing
+          : DEFAULT_NOTIFICATION_SETTINGS.push.marketing,
+    };
+  }
+
+  return {
+    push: readSection(obj.push),
+    inApp: readSection(obj.inApp),
+  };
 }
 
 export interface NotificationItemDto {
@@ -190,6 +237,10 @@ export class MeService {
     const profileAvatarColor = nonEmptyOrUndefined(profile?.avatarColor);
     const profileLocation = nonEmptyOrUndefined(profile?.location);
 
+    const notificationSettings = coerceNotificationSettings(
+      (profile as any)?.notificationSettings,
+    );
+
     return {
       userId,
       email: email ?? null,
@@ -199,6 +250,7 @@ export class MeService {
       avatarColor: profileAvatarColor ?? fallbackAvatarColor,
       location: profileLocation ?? fallbackLocation ?? null,
       interests: (profile?.interests ?? []).map((row) => row.interest.name),
+      notificationSettings,
     };
   }
 
@@ -213,6 +265,11 @@ export class MeService {
     if (input.location !== undefined) data.location = input.location;
     if (input.avatarUrl !== undefined) data.avatarUrl = input.avatarUrl;
     if (input.avatarColor !== undefined) data.avatarColor = input.avatarColor;
+    if (input.notificationSettings !== undefined) {
+      data.notificationSettings = coerceNotificationSettings(
+        input.notificationSettings,
+      );
+    }
 
     const fallbackName =
       typeof metadata.name === 'string' ? metadata.name : undefined;
@@ -833,6 +890,51 @@ export class MeService {
               ${selectedTicketType ? `L. ${Number(selectedTicketType.price).toFixed(2)}` : null}
             )
           `;
+
+            const soldOutRows = await tx.$queryRaw<Array<{ id: string }>>`
+            UPDATE events e
+            SET status = 'sold_out', updated_at = now()
+            WHERE e.id = ${event.id}::uuid
+              AND e.status = 'published'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM provider_event_ticket_types t
+                WHERE t.event_id = e.id
+                  AND t.active = true
+                  AND t.total > 0
+                  AND t.sold_count < t.total
+              )
+              AND (
+                EXISTS (
+                  SELECT 1
+                  FROM provider_event_ticket_types t
+                  WHERE t.event_id = e.id
+                    AND t.active = true
+                    AND t.total > 0
+                )
+                OR (
+                  COALESCE(e.capacity, 0) > 0
+                  AND (
+                    SELECT COUNT(*)::int
+                    FROM tickets tk
+                    WHERE tk.event_id = e.id
+                      AND tk.cancelled_at IS NULL
+                  ) >= e.capacity
+                )
+              )
+            RETURNING e.id
+          `;
+            if (soldOutRows.length > 0) {
+              await tx.$executeRaw`
+              INSERT INTO provider_activity_log (provider_id, type, message, meta)
+              VALUES (
+                ${event.providerId}::uuid,
+                'event',
+                ${`¡Sold out! ${event.title} se agotó`},
+                'sold_out'
+              )
+            `;
+            }
           }
 
           return { inserted, selectedTicketType };
@@ -1484,7 +1586,6 @@ export class MeService {
   }
 
   async listConversations(userId: string) {
-    await this.conversationsService.ensureConversationReadsTable();
     const memberships = await this.prisma.conversationMember.findMany({
       where: { userId },
       include: {
@@ -1548,25 +1649,11 @@ export class MeService {
         (a, b) =>
           new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
       )
-      .map(async ({ updatedAt, lastSenderId, ...rest }) => {
-        const readRows = await this.prisma.$queryRaw<
-          Array<{ last_read_at: Date }>
-        >`
-          SELECT last_read_at
-          FROM conversation_reads
-          WHERE conversation_id = ${rest.id}::uuid
-            AND user_id = ${userId}::uuid
-          LIMIT 1
-        `;
-        const lastReadAt = readRows[0]?.last_read_at ?? null;
-        const unread =
-          Boolean(lastSenderId) &&
-          lastSenderId !== userId &&
-          (!lastReadAt ||
-            new Date(updatedAt).getTime() > new Date(lastReadAt).getTime());
+      .map(async ({ updatedAt: _updatedAt, lastSenderId: _lastSenderId, ...rest }) => {
+        // Read receipts are intentionally disabled (no "mark as read").
         return {
           ...rest,
-          unread,
+          unread: false,
         };
       });
     return Promise.all(visibleRows);
@@ -1647,10 +1734,11 @@ export class MeService {
       orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
       take: 8,
     });
-    return events.map((event) => ({
+    const mapped = events.map((event) => ({
       ...event,
       types: (event.interests ?? []).map((x) => x.interest.slug),
     }));
+    return attachMinPriceCents(this.prisma, mapped);
   }
 
   async shareTicketWithUser(

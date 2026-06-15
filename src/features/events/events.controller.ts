@@ -6,8 +6,12 @@ import {
   Param,
   Query,
 } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { attachMinPriceCents } from './events-pricing.util';
 import { parseDate, parseList } from './events.types';
+
+const PUBLIC_EVENT_STATUSES = ['published', 'sold_out'] as const;
 
 @Controller('events')
 export class EventsController {
@@ -48,6 +52,7 @@ export class EventsController {
 
     return {
       ...cityClause,
+      status: { in: [...PUBLIC_EVENT_STATUSES] },
       ...(types.length > 0
         ? {
             interests: {
@@ -88,18 +93,16 @@ export class EventsController {
       to,
     });
 
-    return this.prisma.event
-      .findMany({
-        where,
-        include: { provider: true, interests: { include: { interest: true } } },
-        orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
-      })
-      .then((rows) =>
-        rows.map((e) => ({
-          ...e,
-          types: (e.interests ?? []).map((x) => x.interest.slug),
-        })),
-      );
+    const rows = await this.prisma.event.findMany({
+      where,
+      include: { provider: true, interests: { include: { interest: true } } },
+      orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
+    });
+    const mapped = rows.map((e) => ({
+      ...e,
+      types: (e.interests ?? []).map((x) => x.interest.slug),
+    }));
+    return attachMinPriceCents(this.prisma, mapped);
   }
 
   @Get('top')
@@ -114,22 +117,20 @@ export class EventsController {
       types,
     });
 
-    return this.prisma.event
-      .findMany({
-        where: {
-          OR: [{ startsAt: { gte: new Date() } }, { startsAt: null }],
-          ...where,
-        },
-        include: { provider: true, interests: { include: { interest: true } } },
-        orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
-        take: 5,
-      })
-      .then((rows) =>
-        rows.map((e) => ({
-          ...e,
-          types: (e.interests ?? []).map((x) => x.interest.slug),
-        })),
-      );
+    const rows = await this.prisma.event.findMany({
+      where: {
+        OR: [{ startsAt: { gte: new Date() } }, { startsAt: null }],
+        ...where,
+      },
+      include: { provider: true, interests: { include: { interest: true } } },
+      orderBy: [{ startsAt: 'asc' }, { createdAt: 'desc' }],
+      take: 5,
+    });
+    const mapped = rows.map((e) => ({
+      ...e,
+      types: (e.interests ?? []).map((x) => x.interest.slug),
+    }));
+    return attachMinPriceCents(this.prisma, mapped);
   }
 
   @Get('friends')
@@ -144,19 +145,17 @@ export class EventsController {
       types,
     });
 
-    return this.prisma.event
-      .findMany({
-        where,
-        include: { provider: true, interests: { include: { interest: true } } },
-        orderBy: { createdAt: 'desc' },
-        take: 6,
-      })
-      .then((rows) =>
-        rows.map((e) => ({
-          ...e,
-          types: (e.interests ?? []).map((x) => x.interest.slug),
-        })),
-      );
+    const rows = await this.prisma.event.findMany({
+      where,
+      include: { provider: true, interests: { include: { interest: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 6,
+    });
+    const mapped = rows.map((e) => ({
+      ...e,
+      types: (e.interests ?? []).map((x) => x.interest.slug),
+    }));
+    return attachMinPriceCents(this.prisma, mapped);
   }
 
   @Get(':id')
@@ -177,6 +176,15 @@ export class EventsController {
 
     if (!event) throw new NotFoundException('Evento no encontrado');
 
+    const status = String((event as { status?: string }).status ?? 'draft');
+    if (
+      !PUBLIC_EVENT_STATUSES.includes(
+        status as (typeof PUBLIC_EVENT_STATUSES)[number],
+      )
+    ) {
+      throw new NotFoundException('Evento no encontrado');
+    }
+
     const ticketTypeRows = await this.prisma.$queryRaw<
       Array<{ id: string; name: string; price: number }>
     >`
@@ -192,6 +200,14 @@ export class EventsController {
       name: row.name,
       priceCents: Math.round(Number(row.price) * 100),
     }));
+
+    const refundPolicyRaw = String(
+      (event as { refundPolicy?: string }).refundPolicy ?? 'none',
+    );
+    const refundPolicy =
+      refundPolicyRaw === 'partial' || refundPolicyRaw === 'full'
+        ? refundPolicyRaw
+        : 'none';
 
     const attendeeRows = await this.prisma.$queryRaw<
       Array<{
@@ -221,7 +237,16 @@ export class EventsController {
     const seen = new Set<string>();
     const attendees = attendeeRows
       .map((row) => ({
-        id: row.user_id ?? row.holder_email.toLowerCase(),
+        // This endpoint is public (unauthenticated). Never expose holder_email
+        // here. For attendees without a linked profile, derive a stable opaque
+        // id from the email so de-duplication and client keys still work
+        // without leaking the address itself.
+        id:
+          row.user_id ??
+          `anon:${createHash('sha256')
+            .update(row.holder_email.toLowerCase())
+            .digest('hex')
+            .slice(0, 16)}`,
         name: row.full_name ?? row.username ?? row.holder_name,
         avatarUrl: row.avatar_url,
         avatarColor: row.avatar_color ?? '#5a4a4a',
@@ -232,12 +257,22 @@ export class EventsController {
         return true;
       });
 
+    const coverUrl = event.coverImageUrl?.trim() ?? '';
+    const mediaGallery = (event.media ?? []).map((m) => ({
+      id: m.id,
+      url: m.url,
+    }));
+    const gallery =
+      coverUrl && !mediaGallery.some((m) => m.url === coverUrl)
+        ? [{ id: 'cover', url: coverUrl }, ...mediaGallery]
+        : mediaGallery;
+
     return {
       ...event,
       attendeeCount: attendees.length,
       attendees,
       types: (event.interests ?? []).map((x) => x.interest.slug),
-      gallery: (event.media ?? []).map((m) => ({ id: m.id, url: m.url })),
+      gallery,
       providerReviews: (event.provider?.reviews ?? []).map((r) => ({
         id: r.id,
         authorName: r.authorName,
@@ -245,7 +280,14 @@ export class EventsController {
         rating: r.rating,
         createdAt: r.createdAt,
       })),
-      ...(entryTypes.length > 0 ? { entryTypes } : {}),
+      entryTypes,
+      refundPolicy,
+      refundPartialPct:
+        (event as { refundPartialPct?: number | null }).refundPartialPct ??
+        null,
+      refundDeadlineDays:
+        (event as { refundDeadlineDays?: number | null }).refundDeadlineDays ??
+        null,
     };
   }
 }

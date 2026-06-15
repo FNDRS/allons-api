@@ -21,6 +21,18 @@ export interface AdminEventListItem {
   } | null;
 }
 
+export interface AdminEventDetailItem extends AdminEventListItem {
+  providerId: string | null;
+  address: string | null;
+  coverImageUrl: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  smokingAllowed: boolean;
+  petFriendly: boolean;
+  parkingAvailable: boolean;
+  minAge: number | null;
+}
+
 export interface AdminEventListResponse {
   total: number;
   items: AdminEventListItem[];
@@ -34,7 +46,26 @@ export interface AdminEventActionResponse {
 
 export interface AdminOverviewMetricsResponse {
   activeEvents: number;
+  totalEvents: number;
   tickets30d: number;
-  scans30d: number;
+  posthogErrors30d: number | null;
   gmv30d: number | null;
+}
+
+export interface AdminPlatformStatusResponse {
+  adminAuditLogsReady: boolean;
+  paygate: {
+    configured: boolean;
+    connectivityStatus: string;
+  };
+  massSignupAlerts: {
+    mode: 'cron';
+    enabled: boolean;
+    windowMinutes: number;
+    threshold: number;
+    cooldownMinutes: number;
+    cron: string;
+    recipientsConfigured: boolean;
+    resendConfigured: boolean;
+  };
 }

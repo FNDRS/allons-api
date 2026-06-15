@@ -3,7 +3,9 @@ import { MeModule } from '../me/me.module';
 import { PaygateModule } from '../paygate/paygate.module';
 import { PaygateWebhookController } from '../paygate/paygate.webhook.controller';
 import { ProvidersModule } from '../providers/providers.module';
+import { SubscriptionModule } from '../subscription/subscription.module';
 import { AdminPaymentsController } from './admin-payments.controller';
+import { AdminRefundsController } from './admin-refunds.controller';
 import { MePaymentsController } from './me-payments.controller';
 import { MePaymentsService } from './me-payments.service';
 import { PaymentOrdersRepository } from './payment-orders.repository';
@@ -13,12 +15,13 @@ import { ProviderPaymentsService } from './provider-payments.service';
 import { RefundsRepository } from './refunds.repository';
 
 @Module({
-  imports: [PaygateModule, MeModule, ProvidersModule],
+  imports: [PaygateModule, MeModule, ProvidersModule, SubscriptionModule],
   controllers: [
     MePaymentsController,
     PaygateWebhookController,
     ProviderPaymentsController,
     AdminPaymentsController,
+    AdminRefundsController,
   ],
   providers: [
     PaymentOrdersRepository,
