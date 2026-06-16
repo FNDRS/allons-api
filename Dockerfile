@@ -40,9 +40,11 @@ COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/generated ./generated
 
 EXPOSE 3000
-# Run migrations on startup, but never let them block the server from coming
-# up: App Runner rolls back the whole deploy if the container doesn't start
-# listening, so a migrate hang/failure against the DB would otherwise wedge
-# every deploy. Time-box migrate and start the server regardless; the schema
-# is reconciled by `prisma migrate deploy` whenever it can connect.
-CMD ["sh", "-c", "timeout 90 pnpm -s prisma:migrate:deploy || echo '[startup] prisma migrate deploy skipped/failed; starting server anyway'; node dist/main"]
+# App Runner uses a TCP health check on port 3000 with a short tolerance
+# (~25s). Anything that delays the server from listening fails the deploy and
+# triggers a rollback. `prisma migrate deploy` runs over directUrl (DIRECT_URL),
+# which App Runner cannot reach, so running it before the server wedged every
+# deploy. Start the server immediately so the port opens at once, and run
+# migrate in the background as best-effort (the runtime pooler connection that
+# the server uses is reachable; schema is reconciled when migrate can connect).
+CMD ["sh", "-c", "(pnpm -s prisma:migrate:deploy || echo '[startup] prisma migrate deploy failed (best-effort, ignored)') & exec node dist/main"]
