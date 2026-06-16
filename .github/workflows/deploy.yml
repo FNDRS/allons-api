@@ -135,7 +135,33 @@ jobs:
             exit 1
           fi
 
-          SOURCE_CONFIGURATION="{\"ImageRepository\":{\"ImageIdentifier\":\"$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG\",\"ImageRepositoryType\":\"ECR\",\"ImageConfiguration\":{\"Port\":\"3000\",\"RuntimeEnvironmentVariables\":{\"ADMIN_API_SECRET\":\"$ADMIN_API_SECRET\"}}},\"AuthenticationConfiguration\":{\"AccessRoleArn\":\"arn:aws:iam::851725556357:role/AppRunnerECRAccessRole-allons-api\"},\"AutoDeploymentsEnabled\":true}"
+          # Preserve the service's existing runtime env vars. update-service
+          # REPLACES the whole RuntimeEnvironmentVariables map, so passing only
+          # ADMIN_API_SECRET (as before) silently dropped DATABASE_URL/SUPABASE_*
+          # and crashed every container at boot -> rollback. Read the current
+          # env, ensure ADMIN_API_SECRET, and send the full set back.
+          CURRENT_ENV=$(aws apprunner describe-service \
+            --service-arn "$SERVICE_ARN" \
+            --query "Service.SourceConfiguration.ImageRepository.ImageConfiguration.RuntimeEnvironmentVariables" \
+            --output json)
+          if ! echo "$CURRENT_ENV" | jq -e 'has("DATABASE_URL")' >/dev/null; then
+            echo "Refusing to deploy: current service env is missing DATABASE_URL." >&2
+            echo "Set the runtime env vars on the App Runner service before deploying." >&2
+            exit 1
+          fi
+          ENV_JSON=$(echo "$CURRENT_ENV" | jq -c --arg s "$ADMIN_API_SECRET" '. + {ADMIN_API_SECRET: $s}')
+          SOURCE_CONFIGURATION=$(jq -cn \
+            --arg img "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            --argjson env "$ENV_JSON" \
+            '{
+              ImageRepository: {
+                ImageIdentifier: $img,
+                ImageRepositoryType: "ECR",
+                ImageConfiguration: { Port: "3000", RuntimeEnvironmentVariables: $env }
+              },
+              AuthenticationConfiguration: { AccessRoleArn: "arn:aws:iam::851725556357:role/AppRunnerECRAccessRole-allons-api" },
+              AutoDeploymentsEnabled: true
+            }')
 
           for i in $(seq 1 8); do
             set +e
