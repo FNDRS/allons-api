@@ -44,3 +44,23 @@ jobs:
               --query "OperationSummaryList[].{Type:Type, Status:Status, Started:StartedAt, Ended:EndedAt}" \
               --output table
           done
+
+      - name: Tail App Runner application logs (container stdout/stderr)
+        run: |
+          SVC_ID=b4aeee13583a47d48f2506476bc2f185
+          for SUFFIX in application service; do
+            GROUP="/aws/apprunner/allons-api/${SVC_ID}/${SUFFIX}"
+            echo "===================================================="
+            echo "LOG GROUP: $GROUP"
+            STREAMS=$(aws logs describe-log-streams --region "$AWS_REGION" \
+              --log-group-name "$GROUP" --order-by LastEventTime --descending \
+              --max-items 3 --query "logStreams[].logStreamName" --output text 2>&1) || {
+                echo "  (could not list streams: $STREAMS)"; continue; }
+            for S in $STREAMS; do
+              echo "--- stream: $S ---"
+              aws logs get-log-events --region "$AWS_REGION" \
+                --log-group-name "$GROUP" --log-stream-name "$S" \
+                --limit 80 --no-start-from-head \
+                --query "events[].message" --output text 2>&1 | tail -80
+            done
+          done
