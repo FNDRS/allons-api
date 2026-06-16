@@ -1,0 +1,46 @@
+name: Diag (App Runner)
+
+# Temporary read-only diagnostic: dumps App Runner services, the running
+# image, and recent operations using the existing deploy OIDC role.
+# Safe to delete once the deploy/service mismatch is understood.
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AWS_REGION: us-east-2
+    steps:
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::851725556357:role/GitHubActionsAllonsApiDeploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: List services (name, URL, ARN, status)
+        run: |
+          aws apprunner list-services --region "$AWS_REGION" \
+            --query "ServiceSummaryList[].{Name:ServiceName, URL:ServiceUrl, Status:Status, ARN:ServiceArn}" \
+            --output table
+
+      - name: Describe each service (running image + status)
+        run: |
+          ARNS=$(aws apprunner list-services --region "$AWS_REGION" \
+            --query "ServiceSummaryList[].ServiceArn" --output text)
+          for ARN in $ARNS; do
+            echo "===================================================="
+            echo "SERVICE ARN: $ARN"
+            aws apprunner describe-service --region "$AWS_REGION" --service-arn "$ARN" \
+              --query "Service.{Name:ServiceName, URL:ServiceUrl, Status:Status, Image:SourceConfiguration.ImageRepository.ImageIdentifier, Updated:UpdatedAt}" \
+              --output table
+            echo "--- last 5 operations ---"
+            aws apprunner list-operations --region "$AWS_REGION" --service-arn "$ARN" --max-results 5 \
+              --query "OperationSummaryList[].{Type:Type, Status:Status, Started:StartedAt, Ended:EndedAt}" \
+              --output table
+          done
