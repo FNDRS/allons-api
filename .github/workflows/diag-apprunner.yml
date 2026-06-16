@@ -39,6 +39,13 @@ jobs:
             aws apprunner describe-service --region "$AWS_REGION" --service-arn "$ARN" \
               --query "Service.{Name:ServiceName, URL:ServiceUrl, Status:Status, Image:SourceConfiguration.ImageRepository.ImageIdentifier, Updated:UpdatedAt}" \
               --output table
+            echo "--- health check config ---"
+            aws apprunner describe-service --region "$AWS_REGION" --service-arn "$ARN" \
+              --query "Service.HealthCheckConfiguration" --output json
+            echo "--- instance (cpu/mem) + port + env keys ---"
+            aws apprunner describe-service --region "$AWS_REGION" --service-arn "$ARN" \
+              --query "Service.{Port:SourceConfiguration.ImageRepository.ImageConfiguration.Port, EnvKeys:keys(SourceConfiguration.ImageRepository.ImageConfiguration.RuntimeEnvironmentVariables), Instance:InstanceConfiguration}" \
+              --output json
             echo "--- last 5 operations ---"
             aws apprunner list-operations --region "$AWS_REGION" --service-arn "$ARN" --max-results 5 \
               --query "OperationSummaryList[].{Type:Type, Status:Status, Started:StartedAt, Ended:EndedAt}" \
