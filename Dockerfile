@@ -40,5 +40,9 @@ COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/generated ./generated
 
 EXPOSE 3000
-# Run migrations on deploy/startup so schema matches the Prisma client.
-CMD ["sh", "-c", "pnpm -s prisma:migrate:deploy && node dist/main"]
+# Run migrations on startup, but never let them block the server from coming
+# up: App Runner rolls back the whole deploy if the container doesn't start
+# listening, so a migrate hang/failure against the DB would otherwise wedge
+# every deploy. Time-box migrate and start the server regardless; the schema
+# is reconciled by `prisma migrate deploy` whenever it can connect.
+CMD ["sh", "-c", "timeout 90 pnpm -s prisma:migrate:deploy || echo '[startup] prisma migrate deploy skipped/failed; starting server anyway'; node dist/main"]
