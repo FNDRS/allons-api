@@ -154,11 +154,16 @@ async function main() {
     status: string;
     recurrence?: string | null;
     recurrenceCustom?: Record<string, unknown> | null;
+    refundPolicy?: 'none' | 'partial' | 'full';
+    refundPartialPct?: number | null;
+    refundDeadlineDays?: number | null;
     ticketTypes: SeedTicketType[];
   }> = [
     {
       providerHandle: 'allons',
       title: 'After Office: terrace sunset',
+      refundPolicy: 'full',
+      refundDeadlineDays: 7,
       description: 'Música en vivo, cerveza artesanal y atardecer en la terraza.',
       startsAt: addDays(2),
       endsAt: new Date(addDays(2).getTime() + 3 * 60 * 60 * 1000),
@@ -184,6 +189,9 @@ async function main() {
     {
       providerHandle: 'cdmx-nightlife',
       title: 'Noche electrónica — sala industrial',
+      refundPolicy: 'partial',
+      refundPartialPct: 50,
+      refundDeadlineDays: 3,
       description: 'Lineup local + invitado regional. Cupo limitado.',
       startsAt: atHour(5, 22),
       endsAt: atHour(6, 4),
@@ -230,6 +238,9 @@ async function main() {
     {
       providerHandle: 'arte-abierto',
       title: 'Recorrido de galerías nocturno',
+      refundPolicy: 'partial',
+      refundPartialPct: 75,
+      refundDeadlineDays: 5,
       description: 'Cuatro sedes con guía; última parada con vino de honor.',
       startsAt: atHour(10, 18),
       endsAt: atHour(10, 23),
@@ -278,6 +289,8 @@ async function main() {
     {
       providerHandle: 'allons-sports',
       title: 'Torneo relámpago de pádel — dobles',
+      refundPolicy: 'full',
+      refundDeadlineDays: 2,
       description: 'Partidos de 12 min; premios patrocinados. Nivel intermedio.',
       startsAt: atHour(4, 19),
       endsAt: atHour(4, 23),
@@ -371,6 +384,9 @@ async function main() {
     {
       providerHandle: 'fndrs',
       title: 'Yoga matutino — paquete mensual',
+      refundPolicy: 'partial',
+      refundPartialPct: 50,
+      refundDeadlineDays: 1,
       description: 'Lunes y miércoles 6:15. Compra el paquete de 8 sesiones.',
       startsAt: atHour(1, 6),
       endsAt: atHour(1, 7),
@@ -431,6 +447,9 @@ async function main() {
         petFriendly: e.petFriendly ?? false,
         parkingAvailable: e.parkingAvailable ?? false,
         minAge: e.minAge ?? null,
+        refundPolicy: e.refundPolicy ?? 'none',
+        refundPartialPct: e.refundPartialPct ?? null,
+        refundDeadlineDays: e.refundDeadlineDays ?? null,
       },
     });
 
