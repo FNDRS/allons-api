@@ -73,6 +73,16 @@ describe('parseTicketQrPayload', () => {
     expect(parseTicketQrPayload(tampered, SECRET)).toBeNull();
   });
 
+  it('parses an event-less signed ticket (deleted event -> empty `e`)', () => {
+    const raw = buildTicketQrPayload(TICKET, '', SECRET);
+    const result = parseTicketQrPayload(raw, SECRET);
+    expect(result).toEqual({
+      ticketId: TICKET,
+      eventId: null,
+      verified: true,
+    });
+  });
+
   it('accepts an unsigned compact form as unverified', () => {
     const raw = JSON.stringify({ t: TICKET, e: EVENT, ts: 12345 });
     const result = parseTicketQrPayload(raw, SECRET);

@@ -1683,6 +1683,21 @@ export class ProvidersService {
       parsed?.eventId !== undefined &&
       parsed.eventId !== eventId;
 
+    this.logger.debug(
+      `validateScan: provider=${member.providerId} scannedEvent=${eventId} ` +
+        `parsedTicketId=${ticketId ?? 'null'} qrEvent=${parsed?.eventId ?? 'null'} ` +
+        `verified=${parsed?.verified ?? false} codeLen=${rawCode.length}`,
+    );
+    if (!parsed) {
+      this.logger.warn(
+        `validateScan: unrecognized code (parse failed) for event=${eventId} codeLen=${rawCode.length}`,
+      );
+    } else if (eventMismatch) {
+      this.logger.warn(
+        `validateScan: event mismatch ticketId=${ticketId} qrEvent=${parsed.eventId} scannedEvent=${eventId}`,
+      );
+    }
+
     // The stored `ticket_code` should be the canonical id, not the raw
     // QR JSON. Falls back to the raw input only if we couldn't parse a
     // ticket id (e.g. manual entry of a non-UUID code).
@@ -1707,6 +1722,10 @@ export class ProvidersService {
           FOR UPDATE
         `;
         if (ticketRows.length === 0) {
+          this.logger.warn(
+            `validateScan: ticket row not found ticketId=${ticketId} event=${eventId} ` +
+              `(ticket exists but not for this event, or id unknown)`,
+          );
           return { status: 'invalid' as const, attendeeName };
         }
 
@@ -1822,6 +1841,11 @@ export class ProvidersService {
         attendeeName,
       );
     }
+
+    this.logger.log(
+      `validateScan: result=${status} ticketId=${ticketId ?? 'null'} ` +
+        `event=${eventId} verified=${parsed?.verified ?? false}`,
+    );
 
     return {
       status,

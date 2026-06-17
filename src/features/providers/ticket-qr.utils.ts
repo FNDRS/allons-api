@@ -85,15 +85,22 @@ export function parseTicketQrPayload(
   if (!parsed || typeof parsed !== 'object') return null;
   const obj = parsed as Record<string, unknown>;
 
-  // Signed compact format.
+  // Signed compact format. `e` (eventId) is intentionally optional: a
+  // ticket whose event was deleted is signed with an empty string (the
+  // DB column is nullable, `onDelete: SetNull`). Such a QR must still
+  // resolve to its `ticketId` instead of being silently rejected — the
+  // caller decides whether an event-less ticket is admissible. The HMAC
+  // is recomputed over the exact `{t,e,ts}` shape that was signed, so an
+  // empty `e` still verifies.
   const t = typeof obj.t === 'string' ? obj.t : null;
   const e = typeof obj.e === 'string' ? obj.e : null;
   const ts = typeof obj.ts === 'number' ? obj.ts : null;
   const s = typeof obj.s === 'string' ? obj.s : null;
-  if (t && UUID_REGEX.test(t) && e && UUID_REGEX.test(e) && ts !== null) {
+  if (t && UUID_REGEX.test(t) && e !== null && ts !== null) {
+    const encodedEventId = UUID_REGEX.test(e) ? e : null;
     if (!s) {
       // Unsigned compact form (dev / pre-secret bootstrap).
-      return { ticketId: t, eventId: e, verified: false };
+      return { ticketId: t, eventId: encodedEventId, verified: false };
     }
     if (!secret) {
       // We received a signed QR but the server has no secret to verify
@@ -101,13 +108,13 @@ export function parseTicketQrPayload(
       logger.warn(
         'parseTicketQrPayload: signed QR received but TICKET_QR_SECRET is not set',
       );
-      return { ticketId: t, eventId: e, verified: false };
+      return { ticketId: t, eventId: encodedEventId, verified: false };
     }
     const expected = createHmac(ALGO, secret)
       .update(JSON.stringify({ t, e, ts }))
       .digest('hex');
     if (safeHexEqual(expected, s)) {
-      return { ticketId: t, eventId: e, verified: true };
+      return { ticketId: t, eventId: encodedEventId, verified: true };
     }
     logger.warn(`parseTicketQrPayload: signature mismatch for ticketId=${t}`);
     return null;
