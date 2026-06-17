@@ -227,13 +227,19 @@ export class ProviderPrivateController {
   ) {
     const user = await this.getUser(req);
     const result = await this.providersService.validateScan(user.id, body);
+    // Capture the actual outcome (not just the request) so PostHog can alert
+    // on scan rejections — e.g. a spike in `wrong_event` (operator on the
+    // wrong event) or `invalid` (fake/garbled codes). Filter on `rejected`
+    // or `status` to build the alert.
     this.posthog.capture({
       distinctId: user.id,
       event: 'ticket scan validated',
       properties: {
-        event_id: typeof body.eventId === 'string' ? body.eventId : undefined,
-        ticket_id:
-          typeof body.ticketId === 'string' ? body.ticketId : undefined,
+        event_id: result.eventId,
+        ticket_code: result.ticketCode,
+        status: result.status,
+        verified: result.verified,
+        rejected: result.status !== 'valid',
       },
     });
     return result;

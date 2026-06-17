@@ -1703,7 +1703,12 @@ export class ProvidersService {
     // ticket id (e.g. manual entry of a non-UUID code).
     const persistedCode = ticketId ?? rawCode;
 
-    let status: 'valid' | 'duplicate' | 'invalid' | 'cancelled' = 'invalid';
+    let status:
+      | 'valid'
+      | 'duplicate'
+      | 'invalid'
+      | 'cancelled'
+      | 'wrong_event' = 'invalid';
     let attendeeName = 'Invitado';
     const ticketType = 'General';
 
@@ -1805,10 +1810,38 @@ export class ProvidersService {
       });
       status = txResult.status;
       attendeeName = txResult.attendeeName;
+    } else if (ticketId && eventMismatch) {
+      // The ticket is real but encodes a different event than the one being
+      // scanned. Surface this as its own outcome so the operator knows to
+      // switch the active event instead of treating it like a fake code.
+      // The audit row keeps the real ticket id for traceability.
+      status = 'wrong_event';
+      await this.prisma.$executeRaw`
+        INSERT INTO provider_scan_records (
+          provider_id,
+          event_id,
+          ticket_id,
+          ticket_code,
+          attendee_name,
+          ticket_type,
+          scanned_by,
+          status
+        )
+        VALUES (
+          ${member.providerId}::uuid,
+          ${eventId}::uuid,
+          ${ticketId}::uuid,
+          ${persistedCode},
+          ${attendeeName},
+          ${ticketType},
+          ${userId}::uuid,
+          'wrong_event'
+        )
+      `;
     } else {
-      // Couldn't resolve a ticket id (bad signature, unknown format,
-      // event mismatch). Persist an `invalid` audit row outside the
-      // transaction since there's no ticket to lock against.
+      // Couldn't resolve a ticket id (bad signature, unknown format).
+      // Persist an `invalid` audit row outside the transaction since
+      // there's no ticket to lock against.
       await this.prisma.$executeRaw`
         INSERT INTO provider_scan_records (
           provider_id,
