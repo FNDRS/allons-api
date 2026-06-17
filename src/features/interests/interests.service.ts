@@ -104,36 +104,67 @@ export class InterestsService {
       if (!slugToDisplayName.has(slug)) slugToDisplayName.set(slug, name);
     }
     const slugs = [...slugToDisplayName.keys()];
-    const interestUpsertRows = slugs.map((slug) => ({
-      name: slugToDisplayName.get(slug)!,
-      slug,
-    }));
+    const displayNames = [...slugToDisplayName.values()];
 
-    const { error: upsertInterestsError } = await db
-      .from('interests')
-      .upsert(interestUpsertRows, {
-        onConflict: 'slug',
-        ignoreDuplicates: true,
-      });
-    if (upsertInterestsError)
-      throw new InternalServerErrorException(upsertInterestsError.message);
+    // Reuse interests that already exist by slug OR name. Legacy rows can carry
+    // the same display name under a different slug, so inserting the computed
+    // slug would trip `interests_name_key`; matching by name avoids that.
+    const [bySlugResult, byNameResult] = await Promise.all([
+      db.from('interests').select('id,name,slug').in('slug', slugs),
+      db.from('interests').select('id,name,slug').in('name', displayNames),
+    ]);
+    if (bySlugResult.error)
+      throw new InternalServerErrorException(bySlugResult.error.message);
+    if (byNameResult.error)
+      throw new InternalServerErrorException(byNameResult.error.message);
 
-    const { data: interests, error: interestsError } = await db
-      .from('interests')
-      .select('id,name,slug')
-      .in('slug', slugs);
-    if (interestsError)
-      throw new InternalServerErrorException(interestsError.message);
+    const interestIdBySlug = new Map<string, string>();
+    const interestIdByName = new Map<string, string>();
+    for (const row of bySlugResult.data ?? []) {
+      if (row?.id && row?.slug) interestIdBySlug.set(row.slug, row.id);
+    }
+    for (const row of byNameResult.data ?? []) {
+      if (row?.id && row?.name) interestIdByName.set(row.name, row.id);
+    }
 
+    // Create only the interests that exist under neither slug nor name.
+    const missingRows = slugs
+      .map((slug) => ({ slug, name: slugToDisplayName.get(slug)! }))
+      .filter(
+        ({ slug, name }) =>
+          !interestIdBySlug.has(slug) && !interestIdByName.has(name),
+      );
+    if (missingRows.length > 0) {
+      const { error: createInterestsError } = await db
+        .from('interests')
+        .upsert(missingRows, { onConflict: 'slug', ignoreDuplicates: true });
+      if (createInterestsError)
+        throw new InternalServerErrorException(createInterestsError.message);
+
+      const { data: createdInterests, error: createdError } = await db
+        .from('interests')
+        .select('id,slug')
+        .in(
+          'slug',
+          missingRows.map((row) => row.slug),
+        );
+      if (createdError)
+        throw new InternalServerErrorException(createdError.message);
+      for (const row of createdInterests ?? []) {
+        if (row?.id && row?.slug) interestIdBySlug.set(row.slug, row.id);
+      }
+    }
+
+    // Resolve each slug to an interest id, preferring slug then name match.
     const seenInterestIds = new Set<string>();
     const rowsToInsert: { user_id: string; interest_id: string }[] = [];
-    for (const interest of interests ?? []) {
-      if (!interest?.id || seenInterestIds.has(interest.id)) continue;
-      seenInterestIds.add(interest.id);
-      rowsToInsert.push({
-        user_id: userId,
-        interest_id: interest.id,
-      });
+    for (const slug of slugs) {
+      const name = slugToDisplayName.get(slug)!;
+      const interestId =
+        interestIdBySlug.get(slug) ?? interestIdByName.get(name);
+      if (!interestId || seenInterestIds.has(interestId)) continue;
+      seenInterestIds.add(interestId);
+      rowsToInsert.push({ user_id: userId, interest_id: interestId });
     }
 
     if (rowsToInsert.length !== slugs.length) {
@@ -145,7 +176,10 @@ export class InterestsService {
     if (rowsToInsert.length > 0) {
       const { error: insertError } = await db
         .from('profile_interests')
-        .insert(rowsToInsert);
+        .upsert(rowsToInsert, {
+          onConflict: 'user_id,interest_id',
+          ignoreDuplicates: true,
+        });
       if (insertError)
         throw new InternalServerErrorException(insertError.message);
     }
