@@ -9,6 +9,12 @@ export class PostHogService implements OnApplicationShutdown {
     this.client = new PostHog(process.env.POSTHOG_API_KEY ?? '', {
       host: process.env.POSTHOG_HOST,
       enableExceptionAutocapture: true,
+      // Low-volume backend: flush each event immediately instead of waiting
+      // for the default batch (20 events / interval). Without this, sporadic
+      // server-side events sit in the in-memory queue and are dropped when
+      // the container recycles before a flush — which is why scan and other
+      // server-side telemetry were not reaching PostHog.
+      flushAt: 1,
     });
   }
 
