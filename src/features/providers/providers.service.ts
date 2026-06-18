@@ -1655,6 +1655,330 @@ export class ProvidersService {
     return { deleted: true };
   }
 
+  private async loadTicketScanDetails(ticketId: string) {
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        title: string;
+        attendee_count: number;
+        cancelled_at: Date | null;
+        event_id: string | null;
+        event_title: string | null;
+        holder_name: string | null;
+        ticket_type: string | null;
+      }>
+    >`
+      SELECT
+        t.id,
+        t.title,
+        t.attendee_count,
+        t.cancelled_at,
+        t.event_id,
+        e.title AS event_title,
+        th.holder_name,
+        COALESCE(ett.name, 'General') AS ticket_type
+      FROM tickets t
+      LEFT JOIN ticket_holders th ON th.ticket_id = t.id
+      LEFT JOIN payment_orders po ON po.id = t.payment_order_id
+      LEFT JOIN provider_event_ticket_types ett ON ett.id = po.entry_type_id
+      LEFT JOIN events e ON e.id = t.event_id
+      WHERE t.id = ${ticketId}::uuid
+      LIMIT 1
+    `;
+    return rows[0] ?? null;
+  }
+
+  private async loadPreviousValidScan(ticketId: string) {
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        scanned_at: Date;
+        status: string;
+        scanned_by_name: string | null;
+      }>
+    >`
+      SELECT
+        sr.scanned_at,
+        sr.status,
+        COALESCE(p.full_name, p.username, 'Staff') AS scanned_by_name
+      FROM provider_scan_records sr
+      LEFT JOIN profiles p ON p.user_id = sr.scanned_by
+      WHERE sr.ticket_id = ${ticketId}::uuid
+        AND sr.status = 'valid'
+      ORDER BY sr.scanned_at DESC
+      LIMIT 1
+    `;
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      scannedAt: row.scanned_at.toISOString(),
+      scannedByName: row.scanned_by_name ?? 'Staff',
+      status: row.status as
+        | 'valid'
+        | 'duplicate'
+        | 'invalid'
+        | 'wrong_event'
+        | 'cancelled',
+    };
+  }
+
+  async previewScan(userId: string, body: Record<string, unknown>) {
+    const member = await this.requireMembership(userId, [
+      'owner',
+      'admin',
+      'staff_scanner',
+    ]);
+    const eventId = this.safeString(body.eventId).trim();
+    const rawCode = this.safeString(body.ticketCode).trim();
+    if (!eventId || !rawCode) {
+      throw new BadRequestException('eventId y ticketCode son requeridos');
+    }
+    const event = await this.prisma.event.findFirst({
+      where: { id: eventId, providerId: member.providerId },
+      select: { id: true, title: true },
+    });
+    if (!event) throw new NotFoundException('Evento no encontrado');
+
+    const qrSecret = this.config.get<string>('TICKET_QR_SECRET') ?? null;
+    const parsed = parseTicketQrPayload(rawCode, qrSecret);
+    const ticketId = parsed?.ticketId ?? null;
+    const eventMismatch =
+      parsed?.eventId !== null &&
+      parsed?.eventId !== undefined &&
+      parsed.eventId !== eventId;
+    const persistedCode = ticketId ?? rawCode;
+
+    this.logger.debug(
+      `previewScan: provider=${member.providerId} scannedEvent=${eventId} ` +
+        `parsedTicketId=${ticketId ?? 'null'} qrEvent=${parsed?.eventId ?? 'null'} ` +
+        `verified=${parsed?.verified ?? false}`,
+    );
+
+    if (!ticketId) {
+      return {
+        status: 'invalid' as const,
+        attendeeName: 'No identificado',
+        ticketCode: persistedCode,
+        ticketTitle: '',
+        ticketType: 'General',
+        attendeeCount: 0,
+        eventId,
+        eventTitle: event.title,
+        verified: false,
+      };
+    }
+
+    if (eventMismatch) {
+      const ticket = await this.loadTicketScanDetails(ticketId);
+      return {
+        status: 'wrong_event' as const,
+        ticketId,
+        attendeeName: ticket?.holder_name ?? 'Invitado',
+        ticketCode: persistedCode,
+        ticketTitle: ticket?.title ?? '',
+        ticketType: ticket?.ticket_type ?? 'General',
+        attendeeCount: ticket?.attendee_count ?? 0,
+        eventId: ticket?.event_id ?? eventId,
+        eventTitle: ticket?.event_title ?? event.title,
+        verified: parsed?.verified ?? false,
+      };
+    }
+
+    const ticket = await this.loadTicketScanDetails(ticketId);
+    if (!ticket || ticket.event_id !== eventId) {
+      return {
+        status: 'invalid' as const,
+        ticketId,
+        attendeeName: 'No identificado',
+        ticketCode: persistedCode,
+        ticketTitle: '',
+        ticketType: 'General',
+        attendeeCount: 0,
+        eventId,
+        eventTitle: event.title,
+        verified: parsed?.verified ?? false,
+      };
+    }
+
+    const attendeeName = ticket.holder_name ?? 'Invitado';
+    const base = {
+      ticketId,
+      attendeeName,
+      ticketCode: persistedCode,
+      ticketTitle: ticket.title,
+      ticketType: ticket.ticket_type ?? 'General',
+      attendeeCount: ticket.attendee_count,
+      eventId,
+      eventTitle: event.title,
+      verified: parsed?.verified ?? false,
+    };
+
+    if (ticket.cancelled_at) {
+      return { status: 'cancelled' as const, ...base };
+    }
+
+    const previousScan = await this.loadPreviousValidScan(ticketId);
+    if (previousScan) {
+      return {
+        status: 'duplicate' as const,
+        ...base,
+        previousScan,
+      };
+    }
+
+    return { status: 'ready' as const, ...base };
+  }
+
+  async confirmScan(userId: string, body: Record<string, unknown>) {
+    const member = await this.requireMembership(userId, [
+      'owner',
+      'admin',
+      'staff_scanner',
+    ]);
+    const eventId = this.safeString(body.eventId).trim();
+    const ticketId = this.safeString(body.ticketId).trim();
+    if (!eventId || !ticketId) {
+      throw new BadRequestException('eventId y ticketId son requeridos');
+    }
+    const event = await this.prisma.event.findFirst({
+      where: { id: eventId, providerId: member.providerId },
+      select: { id: true, title: true },
+    });
+    if (!event) throw new NotFoundException('Evento no encontrado');
+
+    const ticket = await this.loadTicketScanDetails(ticketId);
+    if (!ticket || ticket.event_id !== eventId) {
+      return {
+        status: 'invalid' as const,
+        attendeeName: 'No identificado',
+        ticketCode: ticketId,
+        ticketId,
+        eventId,
+        ticketTitle: ticket?.title ?? '',
+        ticketType: ticket?.ticket_type ?? 'General',
+        attendeeCount: ticket?.attendee_count ?? 0,
+      };
+    }
+
+    const attendeeName = ticket.holder_name ?? 'Invitado';
+    const ticketType = ticket.ticket_type ?? 'General';
+    const persistedCode = ticketId;
+
+    if (ticket.cancelled_at) {
+      return {
+        status: 'cancelled' as const,
+        attendeeName,
+        ticketCode: persistedCode,
+        ticketId,
+        eventId,
+        ticketTitle: ticket.title,
+        ticketType,
+        attendeeCount: ticket.attendee_count,
+      };
+    }
+
+    const txResult = await this.prisma.$transaction(async (tx) => {
+      const ticketRows = await tx.$queryRaw<
+        Array<{ id: string; cancelled_at: Date | null }>
+      >`
+        SELECT id, cancelled_at FROM tickets
+        WHERE id = ${ticketId}::uuid AND event_id = ${eventId}::uuid
+        FOR UPDATE
+      `;
+      if (ticketRows.length === 0) {
+        return { status: 'invalid' as const, attendeeName };
+      }
+      if (ticketRows[0].cancelled_at) {
+        return { status: 'cancelled' as const, attendeeName };
+      }
+
+      const duplicateRows = await tx.$queryRaw<Array<{ total: number }>>`
+        SELECT COUNT(*)::int AS total
+        FROM provider_scan_records
+        WHERE ticket_id = ${ticketId}::uuid AND status = 'valid'
+      `;
+      const isDuplicate = (duplicateRows[0]?.total ?? 0) > 0;
+      if (isDuplicate) {
+        await tx.$executeRaw`
+          INSERT INTO provider_scan_records (
+            provider_id,
+            event_id,
+            ticket_id,
+            ticket_code,
+            attendee_name,
+            ticket_type,
+            scanned_by,
+            status
+          )
+          VALUES (
+            ${member.providerId}::uuid,
+            ${eventId}::uuid,
+            ${ticketId}::uuid,
+            ${persistedCode},
+            ${attendeeName},
+            ${ticketType},
+            ${userId}::uuid,
+            'duplicate'
+          )
+        `;
+        return { status: 'duplicate' as const, attendeeName };
+      }
+
+      await tx.$executeRaw`
+        INSERT INTO provider_scan_records (
+          provider_id,
+          event_id,
+          ticket_id,
+          ticket_code,
+          attendee_name,
+          ticket_type,
+          scanned_by,
+          status
+        )
+        VALUES (
+          ${member.providerId}::uuid,
+          ${eventId}::uuid,
+          ${ticketId}::uuid,
+          ${persistedCode},
+          ${attendeeName},
+          ${ticketType},
+          ${userId}::uuid,
+          'valid'
+        )
+      `;
+      return { status: 'valid' as const, attendeeName };
+    });
+
+    if (txResult.status === 'valid') {
+      await this.appendActivity(
+        member.providerId,
+        'scan',
+        `Acceso validado en ${event.title}`,
+        attendeeName,
+      );
+    }
+
+    const previousScan =
+      txResult.status === 'duplicate'
+        ? await this.loadPreviousValidScan(ticketId)
+        : undefined;
+
+    this.logger.log(
+      `confirmScan: result=${txResult.status} ticketId=${ticketId} event=${eventId}`,
+    );
+
+    return {
+      status: txResult.status,
+      attendeeName: txResult.attendeeName,
+      ticketCode: persistedCode,
+      ticketId,
+      eventId,
+      ticketTitle: ticket.title,
+      ticketType,
+      attendeeCount: ticket.attendee_count,
+      previousScan: previousScan ?? undefined,
+    };
+  }
+
   async validateScan(userId: string, body: Record<string, unknown>) {
     const member = await this.requireMembership(userId, [
       'owner',

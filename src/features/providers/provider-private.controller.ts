@@ -220,6 +220,35 @@ export class ProviderPrivateController {
     return this.providersService.deleteTicketType(user.id, id);
   }
 
+  @Post('scans/preview')
+  async previewScan(
+    @Req() req: Request,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const user = await this.getUser(req);
+    return this.providersService.previewScan(user.id, body);
+  }
+
+  @Post('scans/confirm')
+  async confirmScan(
+    @Req() req: Request,
+    @Body() body: Record<string, unknown>,
+  ) {
+    const user = await this.getUser(req);
+    const result = await this.providersService.confirmScan(user.id, body);
+    this.posthog.capture({
+      distinctId: user.id,
+      event: 'ticket scan confirmed',
+      properties: {
+        event_id: result.eventId,
+        ticket_id: result.ticketId,
+        status: result.status,
+        rejected: result.status !== 'valid',
+      },
+    });
+    return result;
+  }
+
   @Post('scans/validate')
   async validateScan(
     @Req() req: Request,
