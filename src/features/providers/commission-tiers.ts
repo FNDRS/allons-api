@@ -41,7 +41,9 @@ export const TRIAL_BASE_FEE = 12;
 
 /** Base app commission % for a subscription plan. Trial/unknown → trial rate. */
 export function getBaseFeeByPlan(plan: string | null | undefined): number {
-  return PLAN_COMMISSIONS.find((p) => p.plan === plan)?.baseFee ?? TRIAL_BASE_FEE;
+  return (
+    PLAN_COMMISSIONS.find((p) => p.plan === plan)?.baseFee ?? TRIAL_BASE_FEE
+  );
 }
 
 /** Human label for a plan id (trial/unknown → "Prueba"). */
