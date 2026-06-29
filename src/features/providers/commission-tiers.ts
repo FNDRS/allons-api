@@ -1,20 +1,19 @@
 // ---------------------------------------------------------------------
-// Commission tiers
+// Commission by plan
 //
-// Allons charges providers a volume-based commission per ticket sold.
-// The base app commission shrinks as a provider runs more events per
-// month. On top of it sits a per-comercio payment-gateway ("pasarela")
-// fee negotiated with Clinpays + the bank by business type (e.g. an NGO
-// gets a lower rate than a tech company); it is set in allons-admin and
-// stored on the comercio owner's metadata. Percentages are whole numbers
-// (e.g. 8 = 8%).
+// Allons charges providers a base app commission per ticket sold, tied to
+// their subscription plan: the higher-volume plans pay a lower base
+// (Pro 8% < Básico 12% < Evento Único 15%). On top of it sits a
+// per-comercio payment-gateway ("pasarela") fee negotiated with Clinpays +
+// the bank by business type, set in allons-admin. Percentages are whole
+// numbers (e.g. 8 = 8%).
 //
-// Mirrors `lib/commissionTiers.ts` in allons-mobile and the tier table in
+// Mirrors `lib/commissionTiers.ts` in allons-mobile and the plan table in
 // allons-admin. The effective fee withheld from a sale is
-// `getTierByEvents(eventsThisMonth).baseFee + pasarelaFee`.
+// `getBaseFeeByPlan(plan) + pasarelaFee`.
 // ---------------------------------------------------------------------
 
-export type CommissionLevel = 'platino' | 'oro' | 'plata' | 'base';
+export type ProviderPlanId = 'single_event' | 'basico' | 'pro';
 
 /**
  * Fallback pasarela fee (%) used when a comercio has no negotiated rate set
@@ -22,36 +21,38 @@ export type CommissionLevel = 'platino' | 'oro' | 'plata' | 'base';
  */
 export const DEFAULT_PASARELA_FEE = 5;
 
-export interface CommissionTier {
-  level: CommissionLevel;
+export interface PlanCommission {
+  plan: ProviderPlanId;
   /** Display name, es-HN. */
   name: string;
-  /** Human description of the monthly-event volume that earns this tier. */
-  eventsLabel: string;
-  /** Base app commission for this tier (whole-number percent). */
+  /** Base app commission for this plan (whole-number percent). */
   baseFee: number;
 }
 
-/** Ordered best → worst (lowest → highest commission). */
-export const COMMISSION_TIERS: readonly CommissionTier[] = [
-  { level: 'platino', name: 'Platino', eventsLabel: 'Más de 8 eventos / mes', baseFee: 8 },
-  { level: 'oro', name: 'Oro', eventsLabel: '4 a 8 eventos / mes', baseFee: 10 },
-  { level: 'plata', name: 'Plata', eventsLabel: '2 a 3 eventos / mes', baseFee: 12 },
-  { level: 'base', name: 'Base / Esporádico', eventsLabel: '1 evento o menos / mes', baseFee: 15 },
+/** Ordered cheapest → most expensive base commission. */
+export const PLAN_COMMISSIONS: readonly PlanCommission[] = [
+  { plan: 'pro', name: 'Pro', baseFee: 8 },
+  { plan: 'basico', name: 'Básico', baseFee: 12 },
+  { plan: 'single_event', name: 'Evento Único', baseFee: 15 },
 ];
 
+/** Base app commission (%) during the free trial (no plan chosen yet). */
+export const TRIAL_BASE_FEE = 12;
+
+/** Base app commission % for a subscription plan. Trial/unknown → trial rate. */
+export function getBaseFeeByPlan(plan: string | null | undefined): number {
+  return PLAN_COMMISSIONS.find((p) => p.plan === plan)?.baseFee ?? TRIAL_BASE_FEE;
+}
+
+/** Human label for a plan id (trial/unknown → "Prueba"). */
+export function planLabel(plan: string | null | undefined): string {
+  return PLAN_COMMISSIONS.find((p) => p.plan === plan)?.name ?? 'Prueba';
+}
+
 /**
- * Total commission withheld from a sale = base app commission (volume tier)
- * + the comercio's pasarela fee.
+ * Total commission withheld from a sale = base app commission (by plan) + the
+ * comercio's pasarela fee.
  */
 export function totalFee(baseFee: number, pasarelaFee: number): number {
   return +(baseFee + pasarelaFee).toFixed(2);
-}
-
-/** Tier earned by a given monthly event volume. */
-export function getTierByEvents(eventsPerMonth: number): CommissionTier {
-  if (eventsPerMonth > 8) return COMMISSION_TIERS[0];
-  if (eventsPerMonth >= 4) return COMMISSION_TIERS[1];
-  if (eventsPerMonth >= 2) return COMMISSION_TIERS[2];
-  return COMMISSION_TIERS[3];
 }

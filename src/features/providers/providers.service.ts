@@ -12,7 +12,8 @@ import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.servi
 import { parseTicketQrPayload } from './ticket-qr.utils';
 import {
   DEFAULT_PASARELA_FEE,
-  getTierByEvents,
+  getBaseFeeByPlan,
+  planLabel,
   totalFee,
 } from './commission-tiers';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -2290,34 +2291,16 @@ export class ProvidersService {
     const events = await this.listProviderEvents(userId);
 
     const gross = events.reduce((sum, row) => sum + row.revenue, 0);
-    // Volume-based commission withheld from the merchant: the Allons base
-    // commission depends on how many events the provider runs in the current
-    // calendar month (more events → lower base), plus the comercio's own
-    // pasarela fee (negotiated with Clinpays + the bank by business type, set
-    // in allons-admin). See `commission-tiers.ts` (mirrored in mobile/admin).
-    const monthRef = new Date();
-    const monthStartMs = new Date(
-      monthRef.getFullYear(),
-      monthRef.getMonth(),
-      1,
-    ).getTime();
-    const monthEndMs = new Date(
-      monthRef.getFullYear(),
-      monthRef.getMonth() + 1,
-      1,
-    ).getTime();
-    const eventsThisMonth = events.reduce((count, row) => {
-      if (!row.startsAt) return count;
-      const t = new Date(row.startsAt).getTime();
-      return Number.isFinite(t) && t >= monthStartMs && t < monthEndMs
-        ? count + 1
-        : count;
-    }, 0);
-    const tier = getTierByEvents(eventsThisMonth);
-    const pasarelaFee = await this.readProviderPasarelaFeePercent(
+    // Commission withheld from the merchant: the Allons base commission is
+    // tied to the comercio's subscription plan (Pro 8% < Básico 12% < Evento
+    // Único 15%; trial 12%), plus the comercio's own pasarela fee (negotiated
+    // with Clinpays + the bank by business type, set in allons-admin). See
+    // `commission-tiers.ts` (mirrored in mobile/admin).
+    const { plan, pasarelaFee } = await this.readProviderCommissionInputs(
       member.providerId,
     );
-    const platformFee = totalFee(tier.baseFee, pasarelaFee);
+    const baseFee = getBaseFeeByPlan(plan);
+    const platformFee = totalFee(baseFee, pasarelaFee);
     const feeAmount = (gross * platformFee) / 100;
 
     // Hold against refunds: a sale only becomes withdrawable once its event's
@@ -2364,9 +2347,9 @@ export class ProvidersService {
       heldBalance: heldNet,
       platformFee,
       commission: {
-        level: tier.level,
-        levelName: tier.name,
-        baseFee: tier.baseFee,
+        plan,
+        planName: planLabel(plan),
+        baseFee,
         pasarelaFee,
         totalFee: platformFee,
       },
@@ -2412,21 +2395,22 @@ export class ProvidersService {
   }
 
   /**
-   * The comercio's pasarela (Clinpays + bank) fee % withheld on a sale. This
-   * is negotiated per business type and set in allons-admin, stored on the
-   * comercio owner's auth metadata (`paygate_fee_pct`). Falls back to the env
-   * default (or {@link DEFAULT_PASARELA_FEE}) when not configured yet.
+   * Commission inputs read from the comercio owner's auth metadata in a single
+   * lookup: the subscription `plan` (drives the Allons base commission) and the
+   * `pasarela` fee % (negotiated per business type, set in allons-admin via
+   * `paygate_fee_pct`). Pasarela falls back to the env default (or
+   * {@link DEFAULT_PASARELA_FEE}); plan falls back to trial.
    */
-  private async readProviderPasarelaFeePercent(
+  private async readProviderCommissionInputs(
     providerId: string,
-  ): Promise<number> {
-    const fallbackRaw = Number(
-      process.env.PLATFORM_PASARELA_FEE_PCT_DEFAULT,
-    );
-    const fallback =
+  ): Promise<{ plan: string | null; pasarelaFee: number }> {
+    const fallbackRaw = Number(process.env.PLATFORM_PASARELA_FEE_PCT_DEFAULT);
+    const fallbackPasarela =
       Number.isFinite(fallbackRaw) && fallbackRaw >= 0
         ? fallbackRaw
         : DEFAULT_PASARELA_FEE;
+    let plan: string | null = null;
+    let pasarelaFee = fallbackPasarela;
     try {
       const rows = await this.prisma.$queryRaw<Array<{ user_id: string }>>`
         SELECT user_id
@@ -2442,13 +2426,17 @@ export class ProvidersService {
       const ownerId = rows[0]?.user_id;
       if (ownerId) {
         const owner = await this.supabaseAdmin.getUserById(ownerId);
-        const raw = Number(owner?.user_metadata?.paygate_fee_pct);
-        if (Number.isFinite(raw) && raw >= 0) return raw;
+        const meta = owner?.user_metadata;
+        if (typeof meta?.subscription_plan === 'string') {
+          plan = meta.subscription_plan;
+        }
+        const raw = Number(meta?.paygate_fee_pct);
+        if (Number.isFinite(raw) && raw >= 0) pasarelaFee = raw;
       }
     } catch {
-      // Fall through to the default on any lookup failure.
+      // Fall through to the defaults on any lookup failure.
     }
-    return fallback;
+    return { plan, pasarelaFee };
   }
 
   async listPayouts(userId: string) {
