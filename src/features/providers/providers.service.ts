@@ -10,7 +10,11 @@ import { randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { parseTicketQrPayload } from './ticket-qr.utils';
-import { getTierByEvents, totalFee } from './commission-tiers';
+import {
+  DEFAULT_PASARELA_FEE,
+  getTierByEvents,
+  totalFee,
+} from './commission-tiers';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SubscriptionService } from '../subscription/subscription.service';
 
@@ -2288,8 +2292,9 @@ export class ProvidersService {
     const gross = events.reduce((sum, row) => sum + row.revenue, 0);
     // Volume-based commission withheld from the merchant: the Allons base
     // commission depends on how many events the provider runs in the current
-    // calendar month (more events → lower base), plus a fixed payment-gateway
-    // fee. See `commission-tiers.ts` (mirrored in allons-mobile/admin).
+    // calendar month (more events → lower base), plus the comercio's own
+    // pasarela fee (negotiated with Clinpays + the bank by business type, set
+    // in allons-admin). See `commission-tiers.ts` (mirrored in mobile/admin).
     const monthRef = new Date();
     const monthStartMs = new Date(
       monthRef.getFullYear(),
@@ -2308,7 +2313,11 @@ export class ProvidersService {
         ? count + 1
         : count;
     }, 0);
-    const platformFee = totalFee(getTierByEvents(eventsThisMonth).baseFee);
+    const tier = getTierByEvents(eventsThisMonth);
+    const pasarelaFee = await this.readProviderPasarelaFeePercent(
+      member.providerId,
+    );
+    const platformFee = totalFee(tier.baseFee, pasarelaFee);
     const feeAmount = (gross * platformFee) / 100;
 
     // Hold against refunds: a sale only becomes withdrawable once its event's
@@ -2354,6 +2363,13 @@ export class ProvidersService {
       pendingBalance,
       heldBalance: heldNet,
       platformFee,
+      commission: {
+        level: tier.level,
+        levelName: tier.name,
+        baseFee: tier.baseFee,
+        pasarelaFee,
+        totalFee: platformFee,
+      },
       totals: {
         gross,
         fees: feeAmount,
@@ -2393,6 +2409,46 @@ export class ProvidersService {
     } catch {
       return { refundEnabled: false, deadlineHours: 24 };
     }
+  }
+
+  /**
+   * The comercio's pasarela (Clinpays + bank) fee % withheld on a sale. This
+   * is negotiated per business type and set in allons-admin, stored on the
+   * comercio owner's auth metadata (`paygate_fee_pct`). Falls back to the env
+   * default (or {@link DEFAULT_PASARELA_FEE}) when not configured yet.
+   */
+  private async readProviderPasarelaFeePercent(
+    providerId: string,
+  ): Promise<number> {
+    const fallbackRaw = Number(
+      process.env.PLATFORM_PASARELA_FEE_PCT_DEFAULT,
+    );
+    const fallback =
+      Number.isFinite(fallbackRaw) && fallbackRaw >= 0
+        ? fallbackRaw
+        : DEFAULT_PASARELA_FEE;
+    try {
+      const rows = await this.prisma.$queryRaw<Array<{ user_id: string }>>`
+        SELECT user_id
+        FROM provider_members
+        WHERE provider_id = ${providerId}::uuid
+        ORDER BY CASE role
+          WHEN 'owner' THEN 0
+          WHEN 'admin' THEN 1
+          ELSE 2
+        END
+        LIMIT 1
+      `;
+      const ownerId = rows[0]?.user_id;
+      if (ownerId) {
+        const owner = await this.supabaseAdmin.getUserById(ownerId);
+        const raw = Number(owner?.user_metadata?.paygate_fee_pct);
+        if (Number.isFinite(raw) && raw >= 0) return raw;
+      }
+    } catch {
+      // Fall through to the default on any lookup failure.
+    }
+    return fallback;
   }
 
   async listPayouts(userId: string) {

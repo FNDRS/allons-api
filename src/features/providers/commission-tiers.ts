@@ -3,18 +3,24 @@
 //
 // Allons charges providers a volume-based commission per ticket sold.
 // The base app commission shrinks as a provider runs more events per
-// month; on top of it there is a fixed payment-gateway fee. Percentages
-// are whole numbers (e.g. 8 = 8%).
+// month. On top of it sits a per-comercio payment-gateway ("pasarela")
+// fee negotiated with Clinpays + the bank by business type (e.g. an NGO
+// gets a lower rate than a tech company); it is set in allons-admin and
+// stored on the comercio owner's metadata. Percentages are whole numbers
+// (e.g. 8 = 8%).
 //
-// This mirrors `lib/commissionTiers.ts` in allons-mobile and the tier
-// table shown in allons-admin. The effective fee withheld from a sale is
-// `getTierByEvents(eventsThisMonth).baseFee + GATEWAY_FEE`.
+// Mirrors `lib/commissionTiers.ts` in allons-mobile and the tier table in
+// allons-admin. The effective fee withheld from a sale is
+// `getTierByEvents(eventsThisMonth).baseFee + pasarelaFee`.
 // ---------------------------------------------------------------------
 
 export type CommissionLevel = 'platino' | 'oro' | 'plata' | 'base';
 
-/** Fixed payment-gateway fee added on top of every tier's base commission. */
-export const GATEWAY_FEE = 2.5;
+/**
+ * Fallback pasarela fee (%) used when a comercio has no negotiated rate set
+ * in admin yet. Overridable via `PLATFORM_PASARELA_FEE_PCT_DEFAULT`.
+ */
+export const DEFAULT_PASARELA_FEE = 5;
 
 export interface CommissionTier {
   level: CommissionLevel;
@@ -34,9 +40,12 @@ export const COMMISSION_TIERS: readonly CommissionTier[] = [
   { level: 'base', name: 'Base / Esporádico', eventsLabel: '1 evento o menos / mes', baseFee: 15 },
 ];
 
-/** Total commission a provider pays = base app commission + gateway fee. */
-export function totalFee(baseFee: number): number {
-  return +(baseFee + GATEWAY_FEE).toFixed(2);
+/**
+ * Total commission withheld from a sale = base app commission (volume tier)
+ * + the comercio's pasarela fee.
+ */
+export function totalFee(baseFee: number, pasarelaFee: number): number {
+  return +(baseFee + pasarelaFee).toFixed(2);
 }
 
 /** Tier earned by a given monthly event volume. */
