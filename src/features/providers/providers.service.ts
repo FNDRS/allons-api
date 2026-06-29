@@ -10,6 +10,12 @@ import { randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { parseTicketQrPayload } from './ticket-qr.utils';
+import {
+  DEFAULT_PASARELA_FEE,
+  getBaseFeeByPlan,
+  planLabel,
+  totalFee,
+} from './commission-tiers';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SubscriptionService } from '../subscription/subscription.service';
 
@@ -2285,10 +2291,16 @@ export class ProvidersService {
     const events = await this.listProviderEvents(userId);
 
     const gross = events.reduce((sum, row) => sum + row.revenue, 0);
-    // Effective fee withheld from the merchant: Allons commission + ISV on it +
-    // the per-comercio Paygate (bank) fee. Rates come from env; the Paygate %
-    // is read from the comercio owner's metadata (set in allons-admin).
-    const platformFee = await this.readEffectiveFeePercent(member.providerId);
+    // Commission withheld from the merchant: the Allons base commission is
+    // tied to the comercio's subscription plan (Pro 8% < Básico 12% < Evento
+    // Único 15%; trial 12%), plus the comercio's own pasarela fee (negotiated
+    // with Clinpays + the bank by business type, set in allons-admin). See
+    // `commission-tiers.ts` (mirrored in mobile/admin).
+    const { plan, pasarelaFee } = await this.readProviderCommissionInputs(
+      member.providerId,
+    );
+    const baseFee = getBaseFeeByPlan(plan);
+    const platformFee = totalFee(baseFee, pasarelaFee);
     const feeAmount = (gross * platformFee) / 100;
 
     // Hold against refunds: a sale only becomes withdrawable once its event's
@@ -2334,6 +2346,13 @@ export class ProvidersService {
       pendingBalance,
       heldBalance: heldNet,
       platformFee,
+      commission: {
+        plan,
+        planName: planLabel(plan),
+        baseFee,
+        pasarelaFee,
+        totalFee: platformFee,
+      },
       totals: {
         gross,
         fees: feeAmount,
@@ -2376,18 +2395,22 @@ export class ProvidersService {
   }
 
   /**
-   * Effective fee % withheld from the merchant on a sale:
-   *   Allons commission + ISV (on that commission) + Paygate (bank) fee.
-   * Allons/ISV rates and the Paygate fallback are env-configurable; the actual
-   * Paygate % is per-comercio, read from the owner's auth metadata (set in
-   * allons-admin at creation). Falls back to env defaults on any failure.
+   * Commission inputs read from the comercio owner's auth metadata in a single
+   * lookup: the subscription `plan` (drives the Allons base commission) and the
+   * `pasarela` fee % (negotiated per business type, set in allons-admin via
+   * `paygate_fee_pct`). Pasarela falls back to the env default (or
+   * {@link DEFAULT_PASARELA_FEE}); plan falls back to trial.
    */
-  private async readEffectiveFeePercent(providerId: string): Promise<number> {
-    const allonsPct = envNumber('PLATFORM_ALLONS_FEE_PCT', 12);
-    const isvPct = envNumber('PLATFORM_ISV_PCT', 15);
-    const paygateDefault = envNumber('PLATFORM_PAYGATE_FEE_PCT_DEFAULT', 5);
-
-    let paygatePct = paygateDefault;
+  private async readProviderCommissionInputs(
+    providerId: string,
+  ): Promise<{ plan: string | null; pasarelaFee: number }> {
+    const fallbackRaw = Number(process.env.PLATFORM_PASARELA_FEE_PCT_DEFAULT);
+    const fallbackPasarela =
+      Number.isFinite(fallbackRaw) && fallbackRaw >= 0
+        ? fallbackRaw
+        : DEFAULT_PASARELA_FEE;
+    let plan: string | null = null;
+    let pasarelaFee = fallbackPasarela;
     try {
       const rows = await this.prisma.$queryRaw<Array<{ user_id: string }>>`
         SELECT user_id
@@ -2403,15 +2426,17 @@ export class ProvidersService {
       const ownerId = rows[0]?.user_id;
       if (ownerId) {
         const owner = await this.supabaseAdmin.getUserById(ownerId);
-        const raw = Number(owner?.user_metadata?.paygate_fee_pct);
-        if (Number.isFinite(raw) && raw >= 0) paygatePct = raw;
+        const meta = owner?.user_metadata;
+        if (typeof meta?.subscription_plan === 'string') {
+          plan = meta.subscription_plan;
+        }
+        const raw = Number(meta?.paygate_fee_pct);
+        if (Number.isFinite(raw) && raw >= 0) pasarelaFee = raw;
       }
     } catch {
-      // Keep the env default Paygate %.
+      // Fall through to the defaults on any lookup failure.
     }
-
-    // ISV applies to the Allons commission, not the whole ticket.
-    return allonsPct + (allonsPct * isvPct) / 100 + paygatePct;
+    return { plan, pasarelaFee };
   }
 
   async listPayouts(userId: string) {
@@ -2608,12 +2633,4 @@ function isRevenueReleasedForPayout(
   if (!Number.isFinite(startsAtMs)) return false;
   const cutoff = startsAtMs - refund.deadlineHours * 60 * 60 * 1000;
   return now > cutoff;
-}
-
-/** Reads a non-negative number from env, falling back when unset/invalid. */
-function envNumber(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw.trim() === '') return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
 }

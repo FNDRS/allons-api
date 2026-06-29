@@ -36,4 +36,12 @@ export default tseslint.config(
       "prettier/prettier": ["error", { endOfLine: "auto" }],
     },
   },
+  {
+    // Jest mocks reference object methods unbound (e.g. `prisma.x.findFirst`),
+    // which trips `unbound-method` with no real risk in test files.
+    files: ['**/*.spec.ts', 'test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/unbound-method': 'off',
+    },
+  },
 );

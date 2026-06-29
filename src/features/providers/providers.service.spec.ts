@@ -90,15 +90,13 @@ describe('ProvidersService scan preview/confirm', () => {
       title: 'Fiesta X',
     });
     const scannedAt = new Date('2026-06-17T20:00:00.000Z');
-    prisma.$queryRaw
-      .mockResolvedValueOnce([ticketRow])
-      .mockResolvedValueOnce([
-        {
-          scanned_at: scannedAt,
-          status: 'valid',
-          scanned_by_name: 'Juan',
-        },
-      ]);
+    prisma.$queryRaw.mockResolvedValueOnce([ticketRow]).mockResolvedValueOnce([
+      {
+        scanned_at: scannedAt,
+        status: 'valid',
+        scanned_by_name: 'Juan',
+      },
+    ]);
 
     const service = makeService(prisma);
     const result = await service.previewScan(USER_ID, {
