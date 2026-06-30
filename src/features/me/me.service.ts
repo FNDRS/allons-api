@@ -17,7 +17,10 @@ import {
 } from '../conversations/conversations.service';
 import { MailService } from '../../shared/mail/mail.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
-import { buildTicketQrPayload } from '../providers/ticket-qr.utils';
+import {
+  buildTicketQrPayload,
+  generateTicketCode,
+} from '../providers/ticket-qr.utils';
 
 interface UpdateProfileInput {
   fullName?: string | null;
@@ -804,6 +807,23 @@ export class MeService {
     const txResult = await this.timed(correlationId, 'tx.write_bundle', () =>
       this.prisma.$transaction(
         async (tx) => {
+          // One human-friendly access code per ticket. A VALUES list (one
+          // tuple per code) keeps the row count == quantity; collisions with
+          // existing codes are caught by the unique index.
+          const ticketValues = Prisma.join(
+            Array.from(
+              { length: quantity },
+              () => Prisma.sql`(
+              ${userId}::uuid,
+              ${event.id}::uuid,
+              ${options?.paymentOrderId ?? null}::uuid,
+              ${event.title},
+              ${event.themeColor},
+              1,
+              ${generateTicketCode()}
+            )`,
+            ),
+          );
           const inserted = await tx.$queryRaw<Array<{ id: string }>>`
           INSERT INTO tickets (
             owner_id,
@@ -811,16 +831,10 @@ export class MeService {
             payment_order_id,
             title,
             theme_color,
-            attendee_count
+            attendee_count,
+            code
           )
-          SELECT
-            ${userId}::uuid,
-            ${event.id}::uuid,
-            ${options?.paymentOrderId ?? null}::uuid,
-            ${event.title},
-            ${event.themeColor},
-            1
-          FROM generate_series(1, ${quantity}::int)
+          VALUES ${ticketValues}
           RETURNING id
         `;
           if (inserted.length === 0) {
@@ -1038,6 +1052,9 @@ export class MeService {
           ? { holderName: holder.holder_name, holderEmail: holder.holder_email }
           : undefined,
       ),
+      // Human-friendly access code: shown next to the QR so a holder
+      // without the QR can dictate it for manual entry by staff.
+      code: ticket.code,
       // Minimal signed payload — no PII. The scanner looks up holder
       // info server-side after verifying the signature.
       qrPayload: buildTicketQrPayload(
