@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomInt, timingSafeEqual } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 
 const ALGO = 'sha256';
@@ -6,7 +6,35 @@ const HMAC_LEN_HEX = 64;
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+// Human-friendly access code shown to ticket holders and accepted by the
+// scanner's manual-entry fallback. Shape: `ALL-XXXXXX`. New codes draw from
+// an unambiguous alphabet (no 0/O, 1/I) to cut read/dictation errors;
+// backfilled codes use hex, so lookups stay exact rather than fuzzy.
+const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+const CODE_BODY_LEN = 6;
+const TICKET_CODE_BODY_REGEX = /^ALL([0-9A-Z]{6})$/;
+
 const logger = new Logger('TicketQr');
+
+/** Builds a fresh `ALL-XXXXXX` access code. */
+export function generateTicketCode(): string {
+  let body = '';
+  for (let i = 0; i < CODE_BODY_LEN; i += 1) {
+    body += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)];
+  }
+  return `ALL-${body}`;
+}
+
+/**
+ * Normalizes an operator-typed access code to the canonical `ALL-XXXXXX`
+ * shape, so manual entry tolerates lowercase, stray spaces, and a
+ * missing/extra dash. Returns null when the input isn't an access code.
+ */
+export function normalizeTicketCode(raw: string): string | null {
+  const compact = raw.trim().toUpperCase().replace(/[\s-]/g, '');
+  const match = TICKET_CODE_BODY_REGEX.exec(compact);
+  return match ? `ALL-${match[1]}` : null;
+}
 
 export interface ParsedTicketQr {
   ticketId: string;

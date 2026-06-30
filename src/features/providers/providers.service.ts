@@ -9,7 +9,11 @@ import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
-import { parseTicketQrPayload } from './ticket-qr.utils';
+import {
+  parseTicketQrPayload,
+  normalizeTicketCode,
+  type ParsedTicketQr,
+} from './ticket-qr.utils';
 import {
   DEFAULT_PASARELA_FEE,
   getBaseFeeByPlan,
@@ -1661,6 +1665,29 @@ export class ProvidersService {
     return { deleted: true };
   }
 
+  /**
+   * Resolves a scanned/typed code to a ticket. Tries the QR payload first
+   * (raw UUID or signed JSON); failing that, treats the input as a manual
+   * `ALL-XXXXXX` access code and looks the ticket up by its `code` column.
+   * Manual codes resolve `verified: false`, like plain-UUID entry.
+   */
+  private async resolveScanTarget(
+    rawCode: string,
+    qrSecret: string | null,
+  ): Promise<ParsedTicketQr | null> {
+    const parsed = parseTicketQrPayload(rawCode, qrSecret);
+    if (parsed) return parsed;
+
+    const code = normalizeTicketCode(rawCode);
+    if (!code) return null;
+    const ticket = await this.prisma.ticket.findFirst({
+      where: { code },
+      select: { id: true, eventId: true },
+    });
+    if (!ticket) return null;
+    return { ticketId: ticket.id, eventId: ticket.eventId, verified: false };
+  }
+
   private async loadTicketScanDetails(ticketId: string) {
     const rows = await this.prisma.$queryRaw<
       Array<{
@@ -1745,7 +1772,7 @@ export class ProvidersService {
     if (!event) throw new NotFoundException('Evento no encontrado');
 
     const qrSecret = this.config.get<string>('TICKET_QR_SECRET') ?? null;
-    const parsed = parseTicketQrPayload(rawCode, qrSecret);
+    const parsed = await this.resolveScanTarget(rawCode, qrSecret);
     const ticketId = parsed?.ticketId ?? null;
     const eventMismatch =
       parsed?.eventId !== null &&
@@ -2003,7 +2030,7 @@ export class ProvidersService {
     if (!event) throw new NotFoundException('Evento no encontrado');
 
     const qrSecret = this.config.get<string>('TICKET_QR_SECRET') ?? null;
-    const parsed = parseTicketQrPayload(rawCode, qrSecret);
+    const parsed = await this.resolveScanTarget(rawCode, qrSecret);
     const ticketId = parsed?.ticketId ?? null;
     // QRs carry an `eventId` that must match the scanned event. If the
     // QR is signed but the event mismatches, refuse early (otherwise a

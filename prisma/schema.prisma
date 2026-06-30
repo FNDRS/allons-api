@@ -179,6 +179,7 @@ enum TicketTab {
 
 model Ticket {
   id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code           String    @unique
   ownerId        String    @map("owner_id") @db.Uuid
   eventId        String?   @map("event_id") @db.Uuid
   paymentOrderId String?   @map("payment_order_id") @db.Uuid
