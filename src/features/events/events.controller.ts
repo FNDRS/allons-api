@@ -201,6 +201,22 @@ export class EventsController {
       priceCents: Math.round(Number(row.price) * 100),
     }));
 
+    const providerContactRows = event.providerId
+      ? await this.prisma.$queryRaw<Array<{ email: string | null }>>`
+          SELECT email
+          FROM provider_members
+          WHERE provider_id = ${event.providerId}::uuid
+            AND active = true
+            AND email IS NOT NULL
+            AND btrim(email) <> ''
+          ORDER BY
+            CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END ASC,
+            updated_at DESC
+          LIMIT 1
+        `
+      : [];
+    const providerEmail = providerContactRows[0]?.email?.trim() || null;
+
     const refundPolicyRaw = String(
       (event as { refundPolicy?: string }).refundPolicy ?? 'none',
     );
@@ -273,6 +289,17 @@ export class EventsController {
       attendees,
       types: (event.interests ?? []).map((x) => x.interest.slug),
       gallery,
+      provider: event.provider
+        ? {
+            id: event.provider.id,
+            name: event.provider.name,
+            handle: event.provider.handle,
+            description: event.provider.description,
+            websiteUrl: event.provider.websiteUrl,
+            logoUrl: event.provider.logoUrl,
+            email: providerEmail,
+          }
+        : null,
       providerReviews: (event.provider?.reviews ?? []).map((r) => ({
         id: r.id,
         authorName: r.authorName,
