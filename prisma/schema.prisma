@@ -97,8 +97,11 @@ model Event {
   eventType        String    @default("single") @map("event_type")
   recurrence       String?
   recurrenceCustom Json?     @map("recurrence_custom")
+  classDiscipline  String?   @map("class_discipline")
   ticketMode       String    @default("paid") @map("ticket_mode")
   capacity         Int       @default(0)
+  /// Seats per session for recurring classes; `capacity` stays the total for single events.
+  capacityPerOccurrence Int? @map("capacity_per_occurrence")
   status           String    @default("draft")
   refundPolicy     String    @default("none") @map("refund_policy")
   refundPartialPct Int?      @map("refund_partial_pct")
@@ -183,10 +186,18 @@ model Ticket {
   ownerId        String    @map("owner_id") @db.Uuid
   eventId        String?   @map("event_id") @db.Uuid
   paymentOrderId String?   @map("payment_order_id") @db.Uuid
+  /// Row in `provider_event_ticket_types` (raw side table, not modelled here).
+  ticketTypeId   String?   @map("ticket_type_id") @db.Uuid
   title          String
   tab            TicketTab @default(eventos)
   themeColor     String?   @map("theme_color")
   attendeeCount  Int       @default(0) @map("attendee_count")
+  /// Session this ticket grants access to. NULL on a package credit that is not booked yet.
+  occurrenceDate DateTime? @map("occurrence_date") @db.Date
+  /// When an unbooked package credit stops being redeemable.
+  expiresAt      DateTime? @map("expires_at") @db.Timestamptz(6)
+  /// Ties the N ticket rows created by one package purchase together.
+  purchaseGroupId String?  @map("purchase_group_id") @db.Uuid
   cancelledAt    DateTime? @map("cancelled_at") @db.Timestamptz(6)
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -198,6 +209,8 @@ model Ticket {
   @@index([ownerId])
   @@index([eventId])
   @@index([paymentOrderId])
+  @@index([ticketTypeId], map: "tickets_ticket_type_idx")
+  @@index([eventId, occurrenceDate], map: "tickets_event_occurrence_idx")
   @@map("tickets")
 }
 

@@ -219,6 +219,108 @@ describe('MeService', () => {
     expect(prisma.$executeRaw).toHaveBeenCalled();
   });
 
+  it('createTicket rejects a ticketTypeId that does not belong to the event', async () => {
+    const prisma = makePrisma();
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
+    );
+
+    prisma.event.findUnique.mockResolvedValueOnce({
+      id: 'e1',
+      title: 'T',
+      themeColor: '#1',
+      providerId: 'p1',
+      eventType: 'single',
+    });
+    prisma.$queryRaw
+      .mockResolvedValueOnce([]) // assertNoDuplicate
+      .mockResolvedValueOnce([]); // ticket-type lookup: not found for this event
+
+    await expect(
+      service.createTicket('u1', 'e1', 1, {
+        email: 'me@x.com',
+        holders: [{ email: 'me@x.com' }],
+        ticketTypeId: 'tt-from-another-event',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('createTicket records the requested ticket type and counts it as sold', async () => {
+    const prisma = makePrisma();
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
+    );
+
+    prisma.event.findUnique.mockResolvedValueOnce({
+      id: 'e1',
+      title: 'T',
+      themeColor: '#1',
+      providerId: 'p1',
+      eventType: 'single',
+    });
+    prisma.$queryRaw
+      .mockResolvedValueOnce([]) // assertNoDuplicate
+      .mockResolvedValueOnce([{ id: 'tt1', price: 150 }]) // requested type resolves
+      .mockResolvedValueOnce([{ id: 't1' }]) // inserted ticket ids
+      .mockResolvedValueOnce([]); // sold_out sweep
+
+    const res = await service.createTicket('u1', 'e1', 1, {
+      email: 'me@x.com',
+      holders: [{ email: 'me@x.com' }],
+      ticketTypeId: 'tt1',
+    });
+
+    expect(res.createdCount).toBe(1);
+    const queryValues = (
+      prisma.$queryRaw as unknown as jest.Mock
+    ).mock.calls.flat();
+    expect(JSON.stringify(queryValues)).toContain('tt1');
+  });
+
+  it('createTicket never marks a recurring class globally sold out', async () => {
+    const prisma = makePrisma();
+    const service = new MeService(
+      prisma,
+      {} as unknown as ConversationsService,
+      {} as unknown as MailService,
+      {} as unknown as SupabaseAdminService,
+      { get: jest.fn() } as unknown as ConfigService,
+    );
+
+    prisma.event.findUnique.mockResolvedValueOnce({
+      id: 'e1',
+      title: 'Barre',
+      themeColor: '#1',
+      providerId: 'p1',
+      eventType: 'recurring_class',
+    });
+    prisma.$queryRaw
+      .mockResolvedValueOnce([]) // assertNoDuplicate
+      .mockResolvedValueOnce([{ id: 'plan1', price: 150 }]) // plan resolves
+      .mockResolvedValueOnce([{ id: 't1' }]); // inserted ticket ids
+
+    await service.createTicket('u1', 'e1', 1, {
+      email: 'me@x.com',
+      holders: [{ email: 'me@x.com' }],
+      ticketTypeId: 'plan1',
+    });
+
+    // The "UPDATE events SET status = 'sold_out'" sweep never runs for a class:
+    // availability is per session, not per program.
+    const sql = JSON.stringify(
+      (prisma.$queryRaw as unknown as jest.Mock).mock.calls,
+    );
+    expect(sql).not.toContain('sold_out');
+  });
+
   it('getTicketDetails enforces ownership/assignment and returns refundPolicy', async () => {
     const prisma = makePrisma();
     const service = new MeService(

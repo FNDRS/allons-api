@@ -700,6 +700,13 @@ export class MeService {
       holders?: Array<{ name?: string; email?: string }>;
       referralCode?: string;
       paymentOrderId?: string | null;
+      /**
+       * Plan/tier being bought (`provider_event_ticket_types.id`). Recorded on
+       * every ticket row and used for `sold_count`. When omitted we fall back to
+       * the legacy heuristic (first active tier by kind) so older clients and
+       * payment orders created before this field keep working.
+       */
+      ticketTypeId?: string | null;
     },
   ) {
     const correlationId = `tk-${Date.now().toString(36)}-${Math.random()
@@ -799,6 +806,13 @@ export class MeService {
       this.ensureProviderSalesTables(),
     );
 
+    const requestedTicketTypeId = nonEmptyOrUndefined(
+      options?.ticketTypeId ?? undefined,
+    );
+    const isRecurringClass =
+      String((event as { eventType?: string }).eventType ?? 'single') ===
+      'recurring_class';
+
     // Bundle the 4 writes (+ ticket-type lookup when there's a
     // provider) into a single interactive transaction. The holders
     // insert collapses N round-trips into one VALUES(...) statement
@@ -807,6 +821,55 @@ export class MeService {
     const txResult = await this.timed(correlationId, 'tx.write_bundle', () =>
       this.prisma.$transaction(
         async (tx) => {
+          // Resolve the plan/tier BEFORE inserting so every ticket row records
+          // it. Explicit `ticketTypeId` wins; otherwise keep the legacy
+          // "first active tier by kind" pick that `sold_count` has always used.
+          let selectedTicketType: { id: string; price: number } | null = null;
+          if (event.providerId) {
+            if (requestedTicketTypeId) {
+              const rows = await tx.$queryRaw<
+                Array<{ id: string; price: number }>
+              >`
+              SELECT id, price::float8 AS price
+              FROM provider_event_ticket_types
+              WHERE id = ${requestedTicketTypeId}::uuid
+                AND event_id = ${event.id}::uuid
+                AND active = true
+              LIMIT 1
+            `;
+              if (rows.length === 0) {
+                throw new BadRequestException(
+                  'El tipo de entrada no existe para este evento',
+                );
+              }
+              selectedTicketType = rows[0];
+            } else {
+              const ticketTypeRows = await tx.$queryRaw<
+                Array<{ id: string; price: number }>
+              >`
+              SELECT id, price::float8 AS price
+              FROM provider_event_ticket_types
+              WHERE event_id = ${event.id}::uuid
+                AND active = true
+              ORDER BY
+                CASE kind
+                  WHEN 'general' THEN 0
+                  WHEN 'early' THEN 1
+                  WHEN 'vip' THEN 2
+                  ELSE 3
+                END ASC,
+                created_at ASC
+              LIMIT 1
+            `;
+              selectedTicketType = ticketTypeRows[0] ?? null;
+              if (selectedTicketType) {
+                this.logger.warn(
+                  `[${correlationId}] createTicket without ticketTypeId — fell back to tier ${selectedTicketType.id} for event ${event.id}`,
+                );
+              }
+            }
+          }
+
           // One human-friendly access code per ticket. A VALUES list (one
           // tuple per code) keeps the row count == quantity; collisions with
           // existing codes are caught by the unique index.
@@ -817,6 +880,7 @@ export class MeService {
               ${userId}::uuid,
               ${event.id}::uuid,
               ${options?.paymentOrderId ?? null}::uuid,
+              ${selectedTicketType?.id ?? null}::uuid,
               ${event.title},
               ${event.themeColor},
               1,
@@ -829,6 +893,7 @@ export class MeService {
             owner_id,
             event_id,
             payment_order_id,
+            ticket_type_id,
             title,
             theme_color,
             attendee_count,
@@ -866,27 +931,7 @@ export class MeService {
           VALUES ${holderValues}
         `;
 
-          let selectedTicketType: { id: string; price: number } | null = null;
           if (event.providerId) {
-            const ticketTypeRows = await tx.$queryRaw<
-              Array<{ id: string; price: number }>
-            >`
-            SELECT id, price::float8 AS price
-            FROM provider_event_ticket_types
-            WHERE event_id = ${event.id}::uuid
-              AND active = true
-            ORDER BY
-              CASE kind
-                WHEN 'general' THEN 0
-                WHEN 'early' THEN 1
-                WHEN 'vip' THEN 2
-                ELSE 3
-              END ASC,
-              created_at ASC
-            LIMIT 1
-          `;
-            selectedTicketType = ticketTypeRows[0] ?? null;
-
             if (selectedTicketType?.id) {
               await tx.$executeRaw`
               UPDATE provider_event_ticket_types
@@ -905,7 +950,12 @@ export class MeService {
             )
           `;
 
-            const soldOutRows = await tx.$queryRaw<Array<{ id: string }>>`
+            // A recurring class never goes globally sold out: selling every seat
+            // of one package (or one session) says nothing about the program as
+            // a whole. Availability for classes is per session instead.
+            const soldOutRows = isRecurringClass
+              ? []
+              : await tx.$queryRaw<Array<{ id: string }>>`
             UPDATE events e
             SET status = 'sold_out', updated_at = now()
             WHERE e.id = ${event.id}::uuid
@@ -1306,6 +1356,24 @@ export class MeService {
         created_at timestamptz NOT NULL DEFAULT now(),
         updated_at timestamptz NOT NULL DEFAULT now()
       )
+    `;
+    // Package-plan columns (mirrors ProvidersService.ensureInfrastructure so a
+    // cold DB converges whichever service touches the table first).
+    await this.prisma.$executeRaw`
+      ALTER TABLE provider_event_ticket_types
+      ADD COLUMN IF NOT EXISTS plan_kind text
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE provider_event_ticket_types
+      ADD COLUMN IF NOT EXISTS credits integer
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE provider_event_ticket_types
+      ADD COLUMN IF NOT EXISTS validity_days integer
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE provider_event_ticket_types
+      ADD COLUMN IF NOT EXISTS sort_order integer NOT NULL DEFAULT 0
     `;
     await this.prisma.$executeRaw`
       CREATE TABLE IF NOT EXISTS provider_activity_log (

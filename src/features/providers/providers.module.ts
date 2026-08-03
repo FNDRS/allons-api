@@ -3,6 +3,7 @@ import { ProviderPrivateController } from './provider-private.controller';
 import { ProvidersController } from './providers.controller';
 import { AdminPayoutsController } from './admin-payouts.controller';
 import { ProvidersService } from './providers.service';
+import { PublicProvidersService } from './public-providers.service';
 import { AdminSecretGuard } from '../admin/admin-secret.guard';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { SubscriptionModule } from '../subscription/subscription.module';
@@ -14,7 +15,7 @@ import { SubscriptionModule } from '../subscription/subscription.module';
     ProviderPrivateController,
     AdminPayoutsController,
   ],
-  providers: [ProvidersService, AdminSecretGuard],
+  providers: [ProvidersService, PublicProvidersService, AdminSecretGuard],
   exports: [ProvidersService],
 })
 export class ProvidersModule {}

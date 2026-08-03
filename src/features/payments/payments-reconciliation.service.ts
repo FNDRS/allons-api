@@ -272,6 +272,7 @@ export class PaymentsReconciliationService {
         name,
         holders: [],
         paymentOrderId: order.id,
+        ticketTypeId: order.entryTypeId,
       });
       this.logger.log(
         `[reconciliation] ${label}: minted ${order.quantity} ticket(s) for order=${order.id}`,
