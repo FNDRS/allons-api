@@ -186,19 +186,35 @@ export class EventsController {
     }
 
     const ticketTypeRows = await this.prisma.$queryRaw<
-      Array<{ id: string; name: string; price: number }>
+      Array<{
+        id: string;
+        name: string;
+        price: number;
+        total: number;
+        sold_count: number;
+        plan_kind: string | null;
+        credits: number | null;
+        validity_days: number | null;
+      }>
     >`
-      SELECT id, name, price::float8 AS price
+      SELECT id, name, price::float8 AS price, total, sold_count,
+             plan_kind, credits, validity_days
       FROM provider_event_ticket_types
       WHERE event_id = ${id}::uuid
         AND active = true
-      ORDER BY created_at ASC
+      ORDER BY sort_order ASC, created_at ASC
     `;
 
+    // For a recurring class these are the packages (paquetes); for a single
+    // event they are the entry tiers. Same rows, `planKind` tells them apart.
     const entryTypes = (ticketTypeRows ?? []).map((row) => ({
       id: row.id,
       name: row.name,
       priceCents: Math.round(Number(row.price) * 100),
+      planKind: row.plan_kind ?? null,
+      credits: row.credits ?? null,
+      validityDays: row.validity_days ?? null,
+      soldOut: row.total > 0 && row.sold_count >= row.total,
     }));
 
     const providerContactRows = event.providerId

@@ -289,6 +289,7 @@ export class PaygateWebhookController {
         name: buyerName,
         holders,
         paymentOrderId: order.id,
+        ticketTypeId: order.entryTypeId,
       });
     } catch (err) {
       // We keep the order as paid; manual reconciliation can create tickets.

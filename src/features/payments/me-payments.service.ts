@@ -313,6 +313,7 @@ export class MePaymentsService {
         name: userName,
         holders: [],
         paymentOrderId: order.id,
+        ticketTypeId: order.entryTypeId,
       });
       this.logger.log(
         `reconcile: fulfilled order=${order.id} via Paygate polling (paygatePaymentId=${detail.id})`,

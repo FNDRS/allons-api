@@ -135,6 +135,7 @@ export class MeController {
       quantity?: number;
       holders?: Array<{ name?: string; email?: string }>;
       referralCode?: string;
+      ticketTypeId?: string;
     },
   ) {
     const authStartedAt = Date.now();
@@ -171,6 +172,8 @@ export class MeController {
             typeof body.referralCode === 'string'
               ? body.referralCode
               : undefined,
+          ticketTypeId:
+            typeof body.ticketTypeId === 'string' ? body.ticketTypeId : null,
         },
       );
       this.controllerLogger.log(

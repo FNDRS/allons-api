@@ -49,6 +49,71 @@ function parseCoordinate(
   return n;
 }
 
+/**
+ * Optional whole-number field that must be positive when present. Anything
+ * blank, zero or negative collapses to null ("no limit"), so a comercio can
+ * clear it by sending 0 or an empty string.
+ */
+function parseOptionalPositiveInt(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null;
+  const n = typeof value === 'string' ? Number(value) : (value as number);
+  if (!Number.isFinite(n)) return null;
+  const int = Math.floor(n);
+  return int > 0 ? int : null;
+}
+
+type ClassPlanKind = 'drop_in' | 'pack' | 'unlimited';
+
+const CLASS_PLAN_KINDS: readonly ClassPlanKind[] = [
+  'drop_in',
+  'pack',
+  'unlimited',
+];
+
+/**
+ * Package fields for a recurring-class plan. A plan is a ticket type that grants
+ * `credits` sessions; single-event tiers leave all three null.
+ *
+ *   drop_in   -> exactly 1 credit
+ *   pack      -> N credits, optionally expiring after `validityDays`
+ *   unlimited -> no credit count, bounded by `validityDays`
+ */
+function parseClassPlanFields(body: Record<string, unknown>): {
+  planKind: ClassPlanKind | null;
+  credits: number | null;
+  validityDays: number | null;
+} {
+  const raw = typeof body.planKind === 'string' ? body.planKind.trim() : '';
+  if (!raw) return { planKind: null, credits: null, validityDays: null };
+  if (!CLASS_PLAN_KINDS.includes(raw as ClassPlanKind)) {
+    throw new BadRequestException(
+      `planKind inválido: usa ${CLASS_PLAN_KINDS.join(' | ')}`,
+    );
+  }
+  const planKind = raw as ClassPlanKind;
+  const validityDays = parseOptionalPositiveInt(body.validityDays);
+  const credits = parseOptionalPositiveInt(body.credits);
+
+  if (planKind === 'drop_in') {
+    return { planKind, credits: 1, validityDays };
+  }
+  if (planKind === 'pack') {
+    if (credits === null) {
+      throw new BadRequestException(
+        'credits es requerido para un paquete de clases',
+      );
+    }
+    return { planKind, credits, validityDays };
+  }
+  // unlimited: credits are derived from the occurrences inside the window.
+  if (validityDays === null) {
+    throw new BadRequestException(
+      'validityDays es requerido para un pase ilimitado',
+    );
+  }
+  return { planKind, credits: null, validityDays };
+}
+
 type EventRefundPolicyValue = 'none' | 'partial' | 'full';
 
 function parseEventRefundFields(body: Record<string, unknown>): {
@@ -152,6 +217,14 @@ export class ProvidersService {
       ALTER TABLE events
       ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'draft'
     `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE events
+      ADD COLUMN IF NOT EXISTS class_discipline text
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE events
+      ADD COLUMN IF NOT EXISTS capacity_per_occurrence integer
+    `;
 
     await this.prisma.$executeRaw`
       CREATE TABLE IF NOT EXISTS provider_event_ticket_types (
@@ -171,6 +244,28 @@ export class ProvidersService {
     await this.prisma.$executeRaw`
       CREATE INDEX IF NOT EXISTS provider_event_ticket_types_event_idx
       ON provider_event_ticket_types(event_id)
+    `;
+    // Package plans for recurring classes: a plan is a ticket type that grants
+    // `credits` sessions. NULL plan_kind = single-event tier (legacy shape).
+    await this.prisma.$executeRaw`
+      ALTER TABLE provider_event_ticket_types
+      ADD COLUMN IF NOT EXISTS plan_kind text
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE provider_event_ticket_types
+      ADD COLUMN IF NOT EXISTS credits integer
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE provider_event_ticket_types
+      ADD COLUMN IF NOT EXISTS validity_days integer
+    `;
+    await this.prisma.$executeRaw`
+      ALTER TABLE provider_event_ticket_types
+      ADD COLUMN IF NOT EXISTS sort_order integer NOT NULL DEFAULT 0
+    `;
+    await this.prisma.$executeRaw`
+      CREATE INDEX IF NOT EXISTS provider_event_ticket_types_event_sort_idx
+      ON provider_event_ticket_types(event_id, sort_order, created_at)
     `;
 
     await this.prisma.$executeRaw`
@@ -584,8 +679,10 @@ export class ProvidersService {
         eventType: (event as any).eventType ?? 'single',
         recurrence: (event as any).recurrence ?? null,
         recurrenceCustom: (event as any).recurrenceCustom ?? null,
+        classDiscipline: (event as any).classDiscipline ?? null,
         ticketMode: (event as any).ticketMode ?? 'paid',
         capacity: declaredCapacity > 0 ? declaredCapacity : capacityFromTickets,
+        capacityPerOccurrence: (event as any).capacityPerOccurrence ?? null,
         ticketsSold,
         revenue: Number(agg?.revenue ?? 0),
         attendees: ticketsSold,
@@ -1206,8 +1303,10 @@ export class ProvidersService {
       eventType: (event as any).eventType ?? 'single',
       recurrence: (event as any).recurrence ?? null,
       recurrenceCustom: (event as any).recurrenceCustom ?? null,
+      classDiscipline: (event as any).classDiscipline ?? null,
       ticketMode: (event as any).ticketMode ?? 'paid',
       capacity: Number((event as any).capacity ?? 0),
+      capacityPerOccurrence: (event as any).capacityPerOccurrence ?? null,
       refundPolicy: (event as any).refundPolicy ?? 'none',
       refundPartialPct: (event as any).refundPartialPct ?? null,
       refundDeadlineDays: (event as any).refundDeadlineDays ?? null,
@@ -1296,8 +1395,14 @@ export class ProvidersService {
           recurrence_custom = ${
             body.recurrenceCustom ? JSON.stringify(body.recurrenceCustom) : null
           }::jsonb,
+          class_discipline = ${
+            body.classDiscipline ? this.safeString(body.classDiscipline) : null
+          },
           ticket_mode = ${this.safeString(body.ticketMode) || 'paid'},
           capacity = ${Number(body.capacity ?? 0)},
+          capacity_per_occurrence = ${parseOptionalPositiveInt(
+            body.capacityPerOccurrence,
+          )},
           status = ${this.safeString(body.status) || 'draft'},
           refund_policy = ${refund.policy},
           refund_partial_pct = ${refund.partialPct},
@@ -1445,11 +1550,21 @@ export class ProvidersService {
           THEN ${body.recurrenceCustom ? JSON.stringify(body.recurrenceCustom) : null}::jsonb
           ELSE recurrence_custom
         END,
+        class_discipline = CASE
+          WHEN ${body.classDiscipline !== undefined}
+          THEN ${body.classDiscipline ? this.safeString(body.classDiscipline) : null}
+          ELSE class_discipline
+        END,
         ticket_mode = COALESCE(${body.ticketMode ? this.safeString(body.ticketMode) : null}, ticket_mode),
         capacity = CASE
           WHEN ${body.capacity !== undefined}
           THEN ${Number(body.capacity ?? 0)}
           ELSE capacity
+        END,
+        capacity_per_occurrence = CASE
+          WHEN ${body.capacityPerOccurrence !== undefined}
+          THEN ${parseOptionalPositiveInt(body.capacityPerOccurrence)}::integer
+          ELSE capacity_per_occurrence
         END,
         status = COALESCE(${body.status ? this.safeString(body.status) : null}, status),
         refund_policy = CASE
@@ -1551,14 +1666,19 @@ export class ProvidersService {
         price: number;
         total: number;
         sold_count: number;
+        plan_kind: string | null;
+        credits: number | null;
+        validity_days: number | null;
+        sort_order: number;
       }>
     >`
-      SELECT id, event_id, name, kind, price::float8 AS price, total, sold_count
+      SELECT id, event_id, name, kind, price::float8 AS price, total, sold_count,
+             plan_kind, credits, validity_days, sort_order
       FROM provider_event_ticket_types
       WHERE provider_id = ${member.providerId}::uuid
         AND event_id = ${eventId}::uuid
         AND active = true
-      ORDER BY created_at ASC
+      ORDER BY sort_order ASC, created_at ASC
     `;
     return rows.map((row) => ({
       id: row.id,
@@ -1568,6 +1688,10 @@ export class ProvidersService {
       price: Number(row.price),
       total: row.total,
       sold: row.sold_count,
+      planKind: row.plan_kind ?? null,
+      credits: row.credits ?? null,
+      validityDays: row.validity_days ?? null,
+      sortOrder: row.sort_order ?? 0,
     }));
   }
 
@@ -1585,9 +1709,11 @@ export class ProvidersService {
       eventId,
       Number(body.total ?? 0),
     );
+    const plan = parseClassPlanFields(body);
     await this.prisma.$executeRaw`
       INSERT INTO provider_event_ticket_types (
-        provider_id, event_id, name, kind, price, total, sold_count, active
+        provider_id, event_id, name, kind, price, total, sold_count, active,
+        plan_kind, credits, validity_days, sort_order
       )
       VALUES (
         ${member.providerId}::uuid,
@@ -1597,7 +1723,11 @@ export class ProvidersService {
         ${Number(body.price ?? 0)},
         ${Number(body.total ?? 0)},
         0,
-        true
+        true,
+        ${plan.planKind},
+        ${plan.credits}::integer,
+        ${plan.validityDays}::integer,
+        ${parseOptionalPositiveInt(body.sortOrder) ?? 0}
       )
     `;
     await this.appendActivity(
@@ -1639,6 +1769,10 @@ export class ProvidersService {
         }
       }
     }
+    // Package fields move together: `planKind` present means the caller is
+    // (re)defining the plan, so credits/validity are re-derived from it.
+    const plan =
+      body.planKind !== undefined ? parseClassPlanFields(body) : null;
     await this.prisma.$executeRaw`
       UPDATE provider_event_ticket_types
       SET
@@ -1647,6 +1781,14 @@ export class ProvidersService {
         price = CASE WHEN ${body.price !== undefined} THEN ${Number(body.price ?? 0)} ELSE price END,
         total = CASE WHEN ${body.total !== undefined} THEN ${Number(body.total ?? 0)} ELSE total END,
         active = CASE WHEN ${body.active !== undefined} THEN ${Boolean(body.active)} ELSE active END,
+        plan_kind = CASE WHEN ${plan !== null} THEN ${plan?.planKind ?? null} ELSE plan_kind END,
+        credits = CASE WHEN ${plan !== null} THEN ${plan?.credits ?? null}::integer ELSE credits END,
+        validity_days = CASE WHEN ${plan !== null} THEN ${plan?.validityDays ?? null}::integer ELSE validity_days END,
+        sort_order = CASE
+          WHEN ${body.sortOrder !== undefined}
+          THEN ${parseOptionalPositiveInt(body.sortOrder) ?? 0}
+          ELSE sort_order
+        END,
         updated_at = now()
       WHERE id = ${ticketTypeId}::uuid
         AND provider_id = ${member.providerId}::uuid
@@ -1709,9 +1851,13 @@ export class ProvidersService {
         t.event_id,
         e.title AS event_title,
         th.holder_name,
-        COALESCE(ett.name, 'General') AS ticket_type
+        COALESCE(own.name, ett.name, 'General') AS ticket_type
       FROM tickets t
       LEFT JOIN ticket_holders th ON th.ticket_id = t.id
+      -- Prefer the tier recorded on the ticket itself; fall back to the payment
+      -- order for rows created before tickets.ticket_type_id existed (and for
+      -- free tickets, which have no order at all).
+      LEFT JOIN provider_event_ticket_types own ON own.id = t.ticket_type_id
       LEFT JOIN payment_orders po ON po.id = t.payment_order_id
       LEFT JOIN provider_event_ticket_types ett ON ett.id = po.entry_type_id
       LEFT JOIN events e ON e.id = t.event_id
