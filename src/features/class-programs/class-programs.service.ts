@@ -11,7 +11,12 @@ import { ObservabilityService } from '../../shared/observability/observability.s
 import { PaygateService } from '../paygate/paygate.service';
 import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
 import { ProvidersService } from '../providers/providers.service';
-import { mapPackage, mapProgram, mapTemplate } from './class-programs.mappers';
+import {
+  mapClassPass,
+  mapPackage,
+  mapProgram,
+  mapTemplate,
+} from './class-programs.mappers';
 import { ClassProgramsRepository } from './class-programs.repository';
 import type { ProgramRow } from './class-programs.types';
 import {
@@ -234,6 +239,17 @@ export class ClassProgramsService {
       packageId: item.id,
       programId: item.program_id,
     };
+  }
+
+  async listMyClassPasses(
+    userId: string,
+    filters: { providerId?: string; programId?: string },
+  ) {
+    const rows = await this.repository.listUserClassPasses(userId, {
+      providerId: filters.providerId ?? null,
+      programId: filters.programId ?? null,
+    });
+    return rows.map(mapClassPass);
   }
 
   async createReservation(userId: string, body: Record<string, unknown>) {

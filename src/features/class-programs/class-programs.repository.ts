@@ -3,6 +3,8 @@ import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import type {
   ClassPackagePaymentRow,
+  ClassPassFilters,
+  ClassPassRow,
   PackagePayload,
   PackageRow,
   ProgramPayload,
@@ -321,5 +323,53 @@ export class ClassProgramsRepository {
         }
         throw err;
       });
+  }
+
+  /**
+   * A user's usable class passes: active, within their validity window.
+   * Deliberately does NOT require `credits_remaining > 0` — a finite pack the
+   * user already burned through should still show as "0 left" rather than
+   * silently disappear, which is what `createReservation`'s stricter
+   * `pass_not_found` predicate is for.
+   */
+  listUserClassPasses(
+    userId: string,
+    filters: ClassPassFilters,
+  ): Promise<ClassPassRow[]> {
+    const conditions = [
+      Prisma.sql`ucp.user_id = ${userId}::uuid`,
+      Prisma.sql`ucp.status = 'active'`,
+      Prisma.sql`ucp.valid_from <= now()`,
+      Prisma.sql`(ucp.expires_at IS NULL OR ucp.expires_at > now())`,
+    ];
+    if (filters.providerId) {
+      conditions.push(
+        Prisma.sql`ucp.provider_id = ${filters.providerId}::uuid`,
+      );
+    }
+    if (filters.programId) {
+      conditions.push(Prisma.sql`ucp.program_id = ${filters.programId}::uuid`);
+    }
+
+    return this.prisma.$queryRaw<ClassPassRow[]>`
+      SELECT
+        ucp.id,
+        ucp.provider_id,
+        ucp.program_id,
+        cp.title AS program_title,
+        ucp.package_id,
+        pkg.name AS package_name,
+        pkg.kind AS package_kind,
+        ucp.credits_total,
+        ucp.credits_remaining,
+        ucp.valid_from,
+        ucp.expires_at,
+        ucp.status
+      FROM user_class_passes ucp
+      JOIN class_programs cp ON cp.id = ucp.program_id
+      LEFT JOIN class_packages pkg ON pkg.id = ucp.package_id
+      WHERE ${Prisma.join(conditions, ' AND ')}
+      ORDER BY ucp.expires_at ASC NULLS LAST, ucp.created_at ASC
+    `;
   }
 }

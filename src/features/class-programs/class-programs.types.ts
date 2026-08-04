@@ -124,3 +124,23 @@ export type ReservationCreateResult =
         | 'capacity_full'
         | 'duplicate_reservation';
     };
+
+export interface ClassPassFilters {
+  providerId?: string | null;
+  programId?: string | null;
+}
+
+export interface ClassPassRow {
+  id: string;
+  provider_id: string;
+  program_id: string;
+  program_title: string;
+  package_id: string | null;
+  package_name: string | null;
+  package_kind: PackageKind | null;
+  credits_total: number | null;
+  credits_remaining: number | null;
+  valid_from: Date;
+  expires_at: Date | null;
+  status: string;
+}

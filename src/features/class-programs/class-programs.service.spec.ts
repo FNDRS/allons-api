@@ -19,6 +19,7 @@ type RepositoryMock = {
   getReservationCounts: jest.Mock;
   getActivePackageForPayment: jest.Mock;
   createReservation: jest.Mock;
+  listUserClassPasses: jest.Mock;
 };
 
 function makeService() {
@@ -34,6 +35,7 @@ function makeService() {
     getReservationCounts: jest.fn(),
     getActivePackageForPayment: jest.fn(),
     createReservation: jest.fn(),
+    listUserClassPasses: jest.fn().mockResolvedValue([]),
   } satisfies RepositoryMock;
   const providers = {
     requireMembership: jest.fn().mockResolvedValue({
@@ -259,6 +261,61 @@ describe('ClassProgramsService', () => {
       packageId: '44444444-4444-4444-4444-444444444444',
       programId: programRow.id,
     });
+  });
+
+  it('lists the caller class passes mapped to camelCase, including exhausted ones', async () => {
+    const { service, repository } = makeService();
+    repository.listUserClassPasses.mockResolvedValueOnce([
+      {
+        id: 'pass-1',
+        provider_id: programRow.provider_id,
+        program_id: programRow.id,
+        program_title: programRow.title,
+        package_id: 'pkg-1',
+        package_name: 'Pack 8 clases',
+        package_kind: 'pack',
+        credits_total: 8,
+        credits_remaining: 0,
+        valid_from: new Date('2026-07-01T00:00:00.000Z'),
+        expires_at: new Date('2026-09-04T00:00:00.000Z'),
+        status: 'active',
+      },
+    ]);
+
+    const result = await service.listMyClassPasses('user-1', {
+      providerId: programRow.provider_id,
+    });
+
+    expect(repository.listUserClassPasses).toHaveBeenCalledWith('user-1', {
+      providerId: programRow.provider_id,
+      programId: null,
+    });
+    expect(result).toEqual([
+      {
+        id: 'pass-1',
+        providerId: programRow.provider_id,
+        programId: programRow.id,
+        programTitle: programRow.title,
+        packageId: 'pkg-1',
+        packageName: 'Pack 8 clases',
+        packageKind: 'pack',
+        creditsTotal: 8,
+        creditsRemaining: 0,
+        validFrom: '2026-07-01T00:00:00.000Z',
+        expiresAt: '2026-09-04T00:00:00.000Z',
+        status: 'active',
+      },
+    ]);
+  });
+
+  it('returns an empty list when the caller has no usable passes', async () => {
+    const { service, repository } = makeService();
+    const result = await service.listMyClassPasses('user-1', {});
+    expect(repository.listUserClassPasses).toHaveBeenCalledWith('user-1', {
+      providerId: null,
+      programId: null,
+    });
+    expect(result).toEqual([]);
   });
 
   it('creates a reservation from a valid class occurrence', async () => {

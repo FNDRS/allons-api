@@ -10,6 +10,7 @@ function buildRepository() {
     $transaction: jest.fn((callback: (tx: typeof tx) => unknown) =>
       callback(tx),
     ),
+    $queryRaw: jest.fn(),
   };
   const repository = new ClassProgramsRepository(
     prisma as unknown as PrismaService,
@@ -160,5 +161,36 @@ describe('ClassProgramsRepository.createReservation', () => {
     expect(result).toEqual({ ok: false, reason: 'template_ambiguous' });
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
     expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ClassProgramsRepository.listUserClassPasses', () => {
+  it('binds the optional provider/program filters into the query', async () => {
+    const { repository, prisma } = buildRepository();
+    const rows = [{ id: 'pass-1' }];
+    prisma.$queryRaw.mockResolvedValueOnce(rows);
+
+    const result = await repository.listUserClassPasses('user-1', {
+      providerId: 'provider-1',
+      programId: null,
+    });
+
+    expect(result).toBe(rows);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const [, sqlFragment] = prisma.$queryRaw.mock.calls[0];
+    expect(sqlFragment.values).toEqual(['user-1', 'provider-1']);
+  });
+
+  it('omits provider/program filters when neither is given', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await repository.listUserClassPasses('user-1', {
+      providerId: null,
+      programId: null,
+    });
+
+    const [, sqlFragment] = prisma.$queryRaw.mock.calls[0];
+    expect(sqlFragment.values).toEqual(['user-1']);
   });
 });
