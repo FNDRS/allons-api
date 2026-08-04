@@ -1,4 +1,5 @@
 import type {
+  ClassPassRow,
   PackageRow,
   ProgramRow,
   TemplateRow,
@@ -51,5 +52,22 @@ export function mapPackage(row: PackageRow) {
     kind: row.kind,
     active: row.active,
     sortOrder: row.sort_order,
+  };
+}
+
+export function mapClassPass(row: ClassPassRow) {
+  return {
+    id: row.id,
+    providerId: row.provider_id,
+    programId: row.program_id,
+    programTitle: row.program_title,
+    packageId: row.package_id,
+    packageName: row.package_name,
+    packageKind: row.package_kind,
+    creditsTotal: row.credits_total,
+    creditsRemaining: row.credits_remaining,
+    validFrom: row.valid_from.toISOString(),
+    expiresAt: row.expires_at?.toISOString() ?? null,
+    status: row.status,
   };
 }

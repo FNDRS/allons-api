@@ -1,8 +1,9 @@
-import { Body, Controller, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
 import { seconds, Throttle } from '@nestjs/throttler';
@@ -32,6 +33,25 @@ export class MeClassProgramsController {
     );
     (req as any).userId = user.id;
     return this.classPrograms.initiatePackagePayment(user.id, packageId);
+  }
+
+  @Get('class-passes')
+  @ApiOperation({ summary: "List the caller's usable class passes" })
+  @ApiQuery({ name: 'providerId', required: false, format: 'uuid' })
+  @ApiQuery({ name: 'programId', required: false, format: 'uuid' })
+  async listMyClassPasses(
+    @Req() req: Request,
+    @Query('providerId') providerId?: string,
+    @Query('programId') programId?: string,
+  ) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
+    (req as any).userId = user.id;
+    return this.classPrograms.listMyClassPasses(user.id, {
+      providerId,
+      programId,
+    });
   }
 
   @Post('class-reservations')

@@ -3,6 +3,8 @@ import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import type {
   ClassPackagePaymentRow,
+  ClassPassFilters,
+  ClassPassRow,
   PackagePayload,
   PackageRow,
   ProgramPayload,
@@ -321,5 +323,55 @@ export class ClassProgramsRepository {
         }
         throw err;
       });
+  }
+
+  /**
+   * A user's usable class balance by published program: active, within the
+   * validity window, and with credits left to spend (unlimited passes have no
+   * `credits_remaining` to check). A finite pack the user already burned
+   * through is excluded because it grants nothing further.
+   */
+  listUserClassPasses(
+    userId: string,
+    filters: ClassPassFilters,
+  ): Promise<ClassPassRow[]> {
+    const conditions = [
+      Prisma.sql`ucp.user_id = ${userId}::uuid`,
+      Prisma.sql`ucp.status = 'active'`,
+      Prisma.sql`ucp.valid_from <= now()`,
+      Prisma.sql`(ucp.expires_at IS NULL OR ucp.expires_at > now())`,
+      Prisma.sql`(ucp.credits_remaining IS NULL OR ucp.credits_remaining > 0)`,
+    ];
+    if (filters.providerId) {
+      conditions.push(
+        Prisma.sql`ucp.provider_id = ${filters.providerId}::uuid`,
+      );
+    }
+    if (filters.programId) {
+      conditions.push(Prisma.sql`ucp.program_id = ${filters.programId}::uuid`);
+    }
+
+    return this.prisma.$queryRaw<ClassPassRow[]>`
+      SELECT
+        MIN(ucp.id::text) AS id,
+        ucp.provider_id,
+        ucp.program_id,
+        cp.title AS program_title,
+        CASE WHEN count(*) = 1 THEN MIN(ucp.package_id::text)::uuid ELSE NULL END AS package_id,
+        CASE WHEN count(*) = 1 THEN MIN(pkg.name) ELSE NULL END AS package_name,
+        CASE WHEN count(*) = 1 THEN MIN(pkg.kind) ELSE NULL END AS package_kind,
+        CASE WHEN bool_or(ucp.credits_total IS NULL) THEN NULL ELSE sum(ucp.credits_total)::int END AS credits_total,
+        CASE WHEN bool_or(ucp.credits_remaining IS NULL) THEN NULL ELSE sum(ucp.credits_remaining)::int END AS credits_remaining,
+        MIN(ucp.valid_from) AS valid_from,
+        MIN(ucp.expires_at) AS expires_at,
+        'active' AS status
+      FROM user_class_passes ucp
+      JOIN class_programs cp ON cp.id = ucp.program_id
+      LEFT JOIN class_packages pkg ON pkg.id = ucp.package_id
+      WHERE ${Prisma.join(conditions, ' AND ')}
+        AND cp.status = 'published'
+      GROUP BY ucp.provider_id, ucp.program_id, cp.title
+      ORDER BY MIN(ucp.expires_at) ASC NULLS LAST, MIN(ucp.created_at) ASC
+    `;
   }
 }

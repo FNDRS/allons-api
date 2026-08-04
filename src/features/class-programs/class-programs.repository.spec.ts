@@ -10,6 +10,7 @@ function buildRepository() {
     $transaction: jest.fn((callback: (tx: typeof tx) => unknown) =>
       callback(tx),
     ),
+    $queryRaw: jest.fn(),
   };
   const repository = new ClassProgramsRepository(
     prisma as unknown as PrismaService,
@@ -160,5 +161,69 @@ describe('ClassProgramsRepository.createReservation', () => {
     expect(result).toEqual({ ok: false, reason: 'template_ambiguous' });
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
     expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ClassProgramsRepository.listUserClassPasses', () => {
+  it('binds the optional provider/program filters into the query', async () => {
+    const { repository, prisma } = buildRepository();
+    const rows = [{ id: 'pass-1' }];
+    prisma.$queryRaw.mockResolvedValueOnce(rows);
+
+    const result = await repository.listUserClassPasses('user-1', {
+      providerId: 'provider-1',
+      programId: null,
+    });
+
+    expect(result).toBe(rows);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const [, sqlFragment] = prisma.$queryRaw.mock.calls[0];
+    expect(sqlFragment.values).toEqual(['user-1', 'provider-1']);
+  });
+
+  it('omits provider/program filters when neither is given', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await repository.listUserClassPasses('user-1', {
+      providerId: null,
+      programId: null,
+    });
+
+    const [, sqlFragment] = prisma.$queryRaw.mock.calls[0];
+    expect(sqlFragment.values).toEqual(['user-1']);
+  });
+
+  it('excludes passes with no credits left, but keeps unlimited ones', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await repository.listUserClassPasses('user-1', {
+      providerId: null,
+      programId: null,
+    });
+
+    const [, sqlFragment] = prisma.$queryRaw.mock.calls[0];
+    expect(sqlFragment.text).toContain(
+      '(ucp.credits_remaining IS NULL OR ucp.credits_remaining > 0)',
+    );
+  });
+
+  it('returns only published-program balances grouped by program', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await repository.listUserClassPasses('user-1', {
+      providerId: null,
+      programId: null,
+    });
+
+    const [strings, sqlFragment] = prisma.$queryRaw.mock.calls[0];
+    const fullSql = `${strings.join(' ')} ${sqlFragment.text}`;
+    expect(fullSql).toContain("cp.status = 'published'");
+    expect(fullSql).toContain(
+      'GROUP BY ucp.provider_id, ucp.program_id, cp.title',
+    );
+    expect(fullSql).toContain('sum(ucp.credits_remaining)::int');
   });
 });
