@@ -35,6 +35,12 @@ export interface PackagePayload {
   sortOrder: number;
 }
 
+export interface ReservationPayload {
+  programId: string;
+  date: string;
+  startTime: string;
+}
+
 export interface ProgramRow {
   id: string;
   provider_id: string;
@@ -90,3 +96,29 @@ export interface ReservationCountRow {
   start_time: string;
   reserved_count: number;
 }
+
+export interface ReservationRow {
+  id: string;
+  user_id: string;
+  provider_id: string;
+  program_id: string;
+  template_id: string | null;
+  pass_id: string | null;
+  session_date: string;
+  start_time: string;
+  duration_minutes: number;
+  instructor_name: string | null;
+  status: string;
+  created_at: Date;
+}
+
+export type ReservationCreateResult =
+  | { ok: true; reservation: ReservationRow }
+  | {
+      ok: false;
+      reason:
+        | 'template_not_found'
+        | 'pass_not_found'
+        | 'capacity_full'
+        | 'duplicate_reservation';
+    };

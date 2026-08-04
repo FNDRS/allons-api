@@ -4,6 +4,7 @@ import type {
   PackagePayload,
   ProgramPayload,
   ProgramStatus,
+  ReservationPayload,
   TemplatePayload,
 } from './class-programs.types';
 
@@ -72,6 +73,16 @@ export function parsePackagePayload(
     kind,
     sortOrder:
       body.sortOrder == null ? 0 : nonNegativeInt(body.sortOrder, 'sortOrder'),
+  };
+}
+
+export function parseReservationPayload(
+  body: Record<string, unknown>,
+): ReservationPayload {
+  return {
+    programId: requiredString(body.programId, 'programId'),
+    date: formatDate(parseDateParam(requiredString(body.date, 'date'))),
+    startTime: parseTime(body.startTime),
   };
 }
 
@@ -165,7 +176,7 @@ function parseWeekday(value: unknown) {
   return parsed;
 }
 
-function parseTime(value: unknown) {
+export function parseTime(value: unknown) {
   if (typeof value !== 'string' || !/^\d{2}:\d{2}$/.test(value)) {
     throw new BadRequestException('startTime debe usar formato HH:mm');
   }
