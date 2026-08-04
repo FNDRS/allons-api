@@ -4,6 +4,7 @@ import type {
   PackagePayload,
   ProgramPayload,
   ProgramStatus,
+  ReservationPayload,
   TemplatePayload,
 } from './class-programs.types';
 
@@ -75,6 +76,16 @@ export function parsePackagePayload(
   };
 }
 
+export function parseReservationPayload(
+  body: Record<string, unknown>,
+): ReservationPayload {
+  return {
+    programId: requiredString(body.programId, 'programId'),
+    date: formatDate(parseDateField(body.date, 'date')),
+    startTime: parseRequiredTime(body.startTime, 'startTime'),
+  };
+}
+
 export function parseObjectArray(value: unknown): Record<string, unknown>[] {
   if (value == null) return [];
   if (!Array.isArray(value)) {
@@ -90,12 +101,20 @@ export function parseObjectArray(value: unknown): Record<string, unknown>[] {
 
 export function parseDateParam(value?: string) {
   const raw = value ?? formatDate(new Date());
+  return parseDateString(raw, 'from');
+}
+
+function parseDateField(value: unknown, field: string) {
+  return parseDateString(requiredString(value, field), field);
+}
+
+function parseDateString(raw: string, field: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    throw new BadRequestException('from debe usar formato YYYY-MM-DD');
+    throw new BadRequestException(`${field} debe usar formato YYYY-MM-DD`);
   }
   const date = new Date(`${raw}T00:00:00.000Z`);
   if (Number.isNaN(date.getTime()) || formatDate(date) !== raw) {
-    throw new BadRequestException('from inválido');
+    throw new BadRequestException(`${field} inválido`);
   }
   return date;
 }
@@ -165,7 +184,7 @@ function parseWeekday(value: unknown) {
   return parsed;
 }
 
-function parseTime(value: unknown) {
+export function parseTime(value: unknown) {
   if (typeof value !== 'string' || !/^\d{2}:\d{2}$/.test(value)) {
     throw new BadRequestException('startTime debe usar formato HH:mm');
   }
@@ -174,6 +193,13 @@ function parseTime(value: unknown) {
     throw new BadRequestException('startTime inválido');
   }
   return value;
+}
+
+function parseRequiredTime(value: unknown, field: string) {
+  if (value == null || value === '') {
+    throw new BadRequestException(`${field} es requerido`);
+  }
+  return parseTime(value);
 }
 
 function parsePackageKind(value: unknown): PackageKind {

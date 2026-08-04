@@ -8,6 +8,9 @@ import type {
   ProgramPayload,
   ProgramRow,
   ReservationCountRow,
+  ReservationCreateResult,
+  ReservationPayload,
+  ReservationRow,
   TemplatePayload,
   TemplateRow,
 } from './class-programs.types';
@@ -179,5 +182,144 @@ export class ClassProgramsRepository {
       LIMIT 1
     `;
     return rows[0] ?? null;
+  }
+
+  createReservation(
+    userId: string,
+    payload: ReservationPayload,
+  ): Promise<ReservationCreateResult> {
+    return this.prisma
+      .$transaction(async (tx): Promise<ReservationCreateResult> => {
+        await tx.$executeRaw`
+          SELECT pg_advisory_xact_lock(hashtext(
+            (${payload.programId}::uuid)::text || '|' ||
+            (${payload.date}::date)::text || '|' ||
+            to_char(${payload.startTime}::time, 'HH24:MI')
+          ))
+        `;
+
+        const templateRows = await tx.$queryRaw<
+          Array<{
+            template_id: string;
+            provider_id: string;
+            program_id: string;
+            duration_minutes: number;
+            instructor_name: string | null;
+            capacity: number;
+            template_count: number;
+          }>
+        >`
+        SELECT t.id AS template_id, p.provider_id, p.id AS program_id,
+          COALESCE(t.duration_minutes, p.duration_minutes) AS duration_minutes,
+          COALESCE(t.instructor_name, p.instructor_name) AS instructor_name,
+          COALESCE(t.capacity, p.capacity_per_session) AS capacity,
+          count(*) OVER ()::int AS template_count
+        FROM class_session_templates t
+        JOIN class_programs p ON p.id = t.program_id
+        WHERE p.id = ${payload.programId}::uuid
+          AND p.status = 'published'
+          AND t.active = true
+          AND t.weekday = EXTRACT(DOW FROM ${payload.date}::date)::int
+          AND t.start_time = ${payload.startTime}::time
+        ORDER BY t.created_at ASC, t.id ASC
+        LIMIT 1
+      `;
+        const template = templateRows[0];
+        if (!template) return { ok: false, reason: 'template_not_found' };
+        if (template.template_count > 1) {
+          return { ok: false, reason: 'template_ambiguous' };
+        }
+
+        const elapsedRows = await tx.$queryRaw<Array<{ elapsed: boolean }>>`
+          SELECT (
+            ${payload.date}::date + ${payload.startTime}::time
+          ) <= (now() AT TIME ZONE 'America/Tegucigalpa') AS elapsed
+        `;
+        if (elapsedRows[0]?.elapsed) {
+          return { ok: false, reason: 'occurrence_elapsed' };
+        }
+
+        const passRows = await tx.$queryRaw<
+          Array<{
+            id: string;
+            credits_remaining: number | null;
+          }>
+        >`
+        SELECT id, credits_remaining
+        FROM user_class_passes
+        WHERE user_id = ${userId}::uuid
+          AND program_id = ${payload.programId}::uuid
+          AND status = 'active'
+          AND valid_from <= now()
+          AND (expires_at IS NULL OR expires_at > now())
+          AND (credits_remaining IS NULL OR credits_remaining > 0)
+        ORDER BY expires_at ASC NULLS LAST, created_at ASC
+        LIMIT 1
+        FOR UPDATE
+      `;
+        const pass = passRows[0];
+        if (!pass) return { ok: false, reason: 'pass_not_found' };
+
+        const duplicateRows = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id
+        FROM class_session_reservations
+        WHERE user_id = ${userId}::uuid
+          AND program_id = ${payload.programId}::uuid
+          AND session_date = ${payload.date}::date
+          AND start_time = ${payload.startTime}::time
+          AND status = 'reserved'
+        LIMIT 1
+      `;
+        if (duplicateRows[0]) {
+          return { ok: false, reason: 'duplicate_reservation' };
+        }
+
+        const countRows = await tx.$queryRaw<Array<{ reserved_count: number }>>`
+        SELECT count(*)::int AS reserved_count
+        FROM class_session_reservations
+        WHERE program_id = ${payload.programId}::uuid
+          AND session_date = ${payload.date}::date
+          AND start_time = ${payload.startTime}::time
+          AND status = 'reserved'
+      `;
+        if ((countRows[0]?.reserved_count ?? 0) >= template.capacity) {
+          return { ok: false, reason: 'capacity_full' };
+        }
+
+        const reservationRows = await tx.$queryRaw<ReservationRow[]>`
+        INSERT INTO class_session_reservations (
+          user_id, provider_id, program_id, template_id, pass_id, session_date,
+          start_time, duration_minutes, instructor_name, status
+        ) VALUES (
+          ${userId}::uuid, ${template.provider_id}::uuid, ${template.program_id}::uuid,
+          ${template.template_id}::uuid, ${pass.id}::uuid, ${payload.date}::date,
+          ${payload.startTime}::time, ${template.duration_minutes},
+          ${template.instructor_name}, 'reserved'
+        )
+        RETURNING id, user_id, provider_id, program_id, template_id, pass_id,
+          session_date::text AS session_date, to_char(start_time, 'HH24:MI') AS start_time,
+          duration_minutes, instructor_name, status, created_at
+      `;
+
+        if (pass.credits_remaining !== null) {
+          await tx.$executeRaw`
+          UPDATE user_class_passes
+          SET credits_remaining = credits_remaining - 1,
+            updated_at = now()
+          WHERE id = ${pass.id}::uuid
+        `;
+        }
+
+        return { ok: true, reservation: reservationRows[0] };
+      })
+      .catch((err) => {
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002'
+        ) {
+          return { ok: false, reason: 'duplicate_reservation' } as const;
+        }
+        throw err;
+      });
   }
 }

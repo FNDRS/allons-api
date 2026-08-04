@@ -20,6 +20,7 @@ import {
   parseObjectArray,
   parsePackagePayload,
   parseProgramPayload,
+  parseReservationPayload,
   parseTemplatePayload,
 } from './class-programs.validation';
 
@@ -232,6 +233,43 @@ export class ClassProgramsService {
       expiresAt: order.expiresAt?.toISOString() ?? expiresAt.toISOString(),
       packageId: item.id,
       programId: item.program_id,
+    };
+  }
+
+  async createReservation(userId: string, body: Record<string, unknown>) {
+    const payload = parseReservationPayload(body);
+    const result = await this.repository.createReservation(userId, payload);
+    if (!result.ok) {
+      switch (result.reason) {
+        case 'template_not_found':
+          throw new NotFoundException('Horario no encontrado');
+        case 'template_ambiguous':
+          throw new BadRequestException(
+            'Horario duplicado; contacta al comercio',
+          );
+        case 'occurrence_elapsed':
+          throw new BadRequestException('Este horario ya pasó');
+        case 'pass_not_found':
+          throw new BadRequestException('No tienes sesiones disponibles');
+        case 'capacity_full':
+          throw new BadRequestException('No hay cupos disponibles');
+        case 'duplicate_reservation':
+          throw new BadRequestException('Ya reservaste este horario');
+      }
+    }
+
+    const reservation = result.reservation;
+    return {
+      id: reservation.id,
+      programId: reservation.program_id,
+      templateId: reservation.template_id,
+      passId: reservation.pass_id,
+      date: reservation.session_date,
+      startTime: reservation.start_time,
+      durationMinutes: reservation.duration_minutes,
+      instructorName: reservation.instructor_name,
+      status: reservation.status,
+      createdAt: reservation.created_at.toISOString(),
     };
   }
 

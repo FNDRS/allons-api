@@ -18,6 +18,7 @@ type RepositoryMock = {
   getPackages: jest.Mock;
   getReservationCounts: jest.Mock;
   getActivePackageForPayment: jest.Mock;
+  createReservation: jest.Mock;
 };
 
 function makeService() {
@@ -32,6 +33,7 @@ function makeService() {
     getPackages: jest.fn().mockResolvedValue([]),
     getReservationCounts: jest.fn(),
     getActivePackageForPayment: jest.fn(),
+    createReservation: jest.fn(),
   } satisfies RepositoryMock;
   const providers = {
     requireMembership: jest.fn().mockResolvedValue({
@@ -257,5 +259,98 @@ describe('ClassProgramsService', () => {
       packageId: '44444444-4444-4444-4444-444444444444',
       programId: programRow.id,
     });
+  });
+
+  it('creates a reservation from a valid class occurrence', async () => {
+    const { service, repository } = makeService();
+    repository.createReservation.mockResolvedValueOnce({
+      ok: true,
+      reservation: {
+        id: '55555555-5555-5555-5555-555555555555',
+        user_id: 'user-1',
+        provider_id: programRow.provider_id,
+        program_id: programRow.id,
+        template_id: '33333333-3333-3333-3333-333333333333',
+        pass_id: '66666666-6666-6666-6666-666666666666',
+        session_date: '2026-08-04',
+        start_time: '09:00',
+        duration_minutes: 60,
+        instructor_name: 'Francisco Guillen',
+        status: 'reserved',
+        created_at: new Date('2026-08-04T12:00:00.000Z'),
+      },
+    });
+
+    const result = await service.createReservation('user-1', {
+      programId: programRow.id,
+      date: '2026-08-04',
+      startTime: '09:00',
+    });
+
+    expect(repository.createReservation).toHaveBeenCalledWith('user-1', {
+      programId: programRow.id,
+      date: '2026-08-04',
+      startTime: '09:00',
+    });
+    expect(result).toEqual({
+      id: '55555555-5555-5555-5555-555555555555',
+      programId: programRow.id,
+      templateId: '33333333-3333-3333-3333-333333333333',
+      passId: '66666666-6666-6666-6666-666666666666',
+      date: '2026-08-04',
+      startTime: '09:00',
+      durationMinutes: 60,
+      instructorName: 'Francisco Guillen',
+      status: 'reserved',
+      createdAt: '2026-08-04T12:00:00.000Z',
+    });
+  });
+
+  it('rejects reservation when the user has no available pass', async () => {
+    const { service, repository } = makeService();
+    repository.createReservation.mockResolvedValueOnce({
+      ok: false,
+      reason: 'pass_not_found',
+    });
+
+    await expect(
+      service.createReservation('user-1', {
+        programId: programRow.id,
+        date: '2026-08-04',
+        startTime: '09:00',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects reservation payloads with invalid dates before hitting the DB', async () => {
+    const { service, repository } = makeService();
+
+    await expect(
+      service.createReservation('user-1', {
+        programId: programRow.id,
+        date: '2026-02-31',
+        startTime: '09:00',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(repository.createReservation).not.toHaveBeenCalled();
+  });
+
+  it('uses reservation-specific validation messages', async () => {
+    const { service, repository } = makeService();
+
+    await expect(
+      service.createReservation('user-1', {
+        programId: programRow.id,
+        date: '2026-02-31',
+        startTime: '09:00',
+      }),
+    ).rejects.toMatchObject({ message: 'date inválido' });
+    await expect(
+      service.createReservation('user-1', {
+        programId: programRow.id,
+        date: '2026-08-04',
+      }),
+    ).rejects.toMatchObject({ message: 'startTime es requerido' });
+    expect(repository.createReservation).not.toHaveBeenCalled();
   });
 });
