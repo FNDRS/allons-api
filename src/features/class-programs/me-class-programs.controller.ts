@@ -47,6 +47,7 @@ export class MeClassProgramsController {
     const user = await this.supabaseAdmin.getAuthenticatedUser(
       req.headers.authorization,
     );
+    (req as any).userId = user.id;
     return this.classPrograms.listMyClassPasses(user.id, {
       providerId,
       programId,
