@@ -227,3 +227,173 @@ describe('ClassProgramsRepository.listUserClassPasses', () => {
     expect(fullSql).toContain('sum(ucp.credits_remaining)::int');
   });
 });
+
+const reservationId = '55555555-5555-5555-5555-555555555555';
+const userId = '77777777-7777-7777-7777-777777777777';
+const passId = '66666666-6666-6666-6666-666666666666';
+
+describe('ClassProgramsRepository.cancelReservation', () => {
+  it('cancels and refunds a finite pass when cancelled within the refund window', async () => {
+    const { repository, tx } = buildRepository();
+    tx.$queryRaw
+      .mockResolvedValueOnce([
+        {
+          id: reservationId,
+          user_id: userId,
+          pass_id: passId,
+          session_date: '2026-08-10',
+          start_time: '09:00',
+          status: 'reserved',
+        },
+      ])
+      .mockResolvedValueOnce([{ elapsed: false, refund_eligible: true }])
+      .mockResolvedValueOnce([
+        {
+          id: reservationId,
+          status: 'cancelled',
+          cancelled_at: new Date('2026-08-04T12:00:00.000Z'),
+        },
+      ]);
+    tx.$executeRaw.mockResolvedValueOnce(1);
+
+    const result = await repository.cancelReservation(userId, reservationId);
+
+    expect(result).toEqual({
+      ok: true,
+      reservation: {
+        id: reservationId,
+        status: 'cancelled',
+        cancelled_at: new Date('2026-08-04T12:00:00.000Z'),
+      },
+      refunded: true,
+    });
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels without a refund when outside the refund window', async () => {
+    const { repository, tx } = buildRepository();
+    tx.$queryRaw
+      .mockResolvedValueOnce([
+        {
+          id: reservationId,
+          user_id: userId,
+          pass_id: passId,
+          session_date: '2026-08-10',
+          start_time: '09:00',
+          status: 'reserved',
+        },
+      ])
+      .mockResolvedValueOnce([{ elapsed: false, refund_eligible: false }])
+      .mockResolvedValueOnce([
+        {
+          id: reservationId,
+          status: 'cancelled',
+          cancelled_at: new Date('2026-08-04T12:00:00.000Z'),
+        },
+      ]);
+
+    const result = await repository.cancelReservation(userId, reservationId);
+
+    expect(result).toMatchObject({ ok: true, refunded: false });
+    expect(tx.$executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('reports no refund when the guarded credit UPDATE affects no rows (unlimited pass)', async () => {
+    const { repository, tx } = buildRepository();
+    tx.$queryRaw
+      .mockResolvedValueOnce([
+        {
+          id: reservationId,
+          user_id: userId,
+          pass_id: passId,
+          session_date: '2026-08-10',
+          start_time: '09:00',
+          status: 'reserved',
+        },
+      ])
+      .mockResolvedValueOnce([{ elapsed: false, refund_eligible: true }])
+      .mockResolvedValueOnce([
+        {
+          id: reservationId,
+          status: 'cancelled',
+          cancelled_at: new Date('2026-08-04T12:00:00.000Z'),
+        },
+      ]);
+    tx.$executeRaw.mockResolvedValueOnce(0);
+
+    const result = await repository.cancelReservation(userId, reservationId);
+
+    expect(result).toMatchObject({ ok: true, refunded: false });
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns not_found when the reservation does not exist', async () => {
+    const { repository, tx } = buildRepository();
+    tx.$queryRaw.mockResolvedValueOnce([]);
+
+    const result = await repository.cancelReservation(userId, reservationId);
+
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns forbidden when the reservation belongs to another user', async () => {
+    const { repository, tx } = buildRepository();
+    tx.$queryRaw.mockResolvedValueOnce([
+      {
+        id: reservationId,
+        user_id: 'someone-else',
+        pass_id: passId,
+        session_date: '2026-08-10',
+        start_time: '09:00',
+        status: 'reserved',
+      },
+    ]);
+
+    const result = await repository.cancelReservation(userId, reservationId);
+
+    expect(result).toEqual({ ok: false, reason: 'forbidden' });
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns already_cancelled without re-cancelling', async () => {
+    const { repository, tx } = buildRepository();
+    tx.$queryRaw.mockResolvedValueOnce([
+      {
+        id: reservationId,
+        user_id: userId,
+        pass_id: passId,
+        session_date: '2026-08-10',
+        start_time: '09:00',
+        status: 'cancelled',
+      },
+    ]);
+
+    const result = await repository.cancelReservation(userId, reservationId);
+
+    expect(result).toEqual({ ok: false, reason: 'already_cancelled' });
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns occurrence_elapsed for a past session and does not update anything', async () => {
+    const { repository, tx } = buildRepository();
+    tx.$queryRaw
+      .mockResolvedValueOnce([
+        {
+          id: reservationId,
+          user_id: userId,
+          pass_id: passId,
+          session_date: '2020-01-01',
+          start_time: '09:00',
+          status: 'reserved',
+        },
+      ])
+      .mockResolvedValueOnce([{ elapsed: true, refund_eligible: false }]);
+
+    const result = await repository.cancelReservation(userId, reservationId);
+
+    expect(result).toEqual({ ok: false, reason: 'occurrence_elapsed' });
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(tx.$executeRaw).not.toHaveBeenCalled();
+  });
+});

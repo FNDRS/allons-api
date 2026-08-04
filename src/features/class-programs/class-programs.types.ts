@@ -144,3 +144,20 @@ export interface ClassPassRow {
   expires_at: Date | null;
   status: string;
 }
+
+export interface ReservationCancelRow {
+  id: string;
+  status: string;
+  cancelled_at: Date;
+}
+
+export type ReservationCancelResult =
+  | { ok: true; reservation: ReservationCancelRow; refunded: boolean }
+  | {
+      ok: false;
+      reason:
+        | 'not_found'
+        | 'forbidden'
+        | 'already_cancelled'
+        | 'occurrence_elapsed';
+    };

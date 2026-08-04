@@ -9,6 +9,7 @@ import type {
   PackageRow,
   ProgramPayload,
   ProgramRow,
+  ReservationCancelResult,
   ReservationCountRow,
   ReservationCreateResult,
   ReservationPayload,
@@ -16,6 +17,9 @@ import type {
   TemplatePayload,
   TemplateRow,
 } from './class-programs.types';
+
+/** Cancelling this far ahead of the session (or further) returns the credit. */
+const CANCELLATION_REFUND_WINDOW_HOURS = 6;
 
 @Injectable()
 export class ClassProgramsRepository {
@@ -323,6 +327,92 @@ export class ClassProgramsRepository {
         }
         throw err;
       });
+  }
+
+  /**
+   * Cancels a reservation and refunds its credit when cancelled at least
+   * `CANCELLATION_REFUND_WINDOW_HOURS` before the session. `FOR UPDATE` on the
+   * reservation row serializes concurrent cancel attempts for the same id —
+   * no separate advisory lock needed, unlike `createReservation` which locks
+   * a whole occurrence slot shared across many reservations.
+   */
+  cancelReservation(
+    userId: string,
+    reservationId: string,
+  ): Promise<ReservationCancelResult> {
+    return this.prisma.$transaction(
+      async (tx): Promise<ReservationCancelResult> => {
+        const rows = await tx.$queryRaw<
+          Array<{
+            id: string;
+            user_id: string;
+            pass_id: string | null;
+            session_date: string;
+            start_time: string;
+            status: string;
+          }>
+        >`
+        SELECT id, user_id, pass_id, session_date::text AS session_date,
+          to_char(start_time, 'HH24:MI') AS start_time, status
+        FROM class_session_reservations
+        WHERE id = ${reservationId}::uuid
+        FOR UPDATE
+      `;
+        const reservation = rows[0];
+        if (!reservation) return { ok: false, reason: 'not_found' };
+        if (reservation.user_id !== userId) {
+          return { ok: false, reason: 'forbidden' };
+        }
+        if (reservation.status === 'cancelled') {
+          return { ok: false, reason: 'already_cancelled' };
+        }
+
+        const checkRows = await tx.$queryRaw<
+          Array<{ elapsed: boolean; refund_eligible: boolean }>
+        >`
+        SELECT
+          (${reservation.session_date}::date + ${reservation.start_time}::time)
+            <= (now() AT TIME ZONE 'America/Tegucigalpa') AS elapsed,
+          (${reservation.session_date}::date + ${reservation.start_time}::time)
+            - (now() AT TIME ZONE 'America/Tegucigalpa')
+            >= make_interval(hours => ${CANCELLATION_REFUND_WINDOW_HOURS}) AS refund_eligible
+      `;
+        if (checkRows[0]?.elapsed) {
+          return { ok: false, reason: 'occurrence_elapsed' };
+        }
+        const withinRefundWindow = Boolean(checkRows[0]?.refund_eligible);
+
+        const updatedRows = await tx.$queryRaw<
+          Array<{ id: string; status: string; cancelled_at: Date }>
+        >`
+        UPDATE class_session_reservations
+        SET status = 'cancelled', cancelled_at = now(), updated_at = now()
+        WHERE id = ${reservationId}::uuid
+        RETURNING id, status, cancelled_at
+      `;
+
+        // `refunded` reflects whether a credit was actually handed back, not
+        // just whether the cancellation window allowed it. An unlimited pass
+        // (`credits_remaining IS NULL`) never had a credit taken in the first
+        // place, so the guarded UPDATE below affects 0 rows for it — the
+        // affected-row count is the one signal that covers every case (no
+        // pass_id, unlimited pass, finite pass) without duplicating the
+        // "is this pass finite" check here.
+        let refunded = false;
+        if (withinRefundWindow && reservation.pass_id) {
+          const affected = await tx.$executeRaw`
+          UPDATE user_class_passes
+          SET credits_remaining = credits_remaining + 1,
+            updated_at = now()
+          WHERE id = ${reservation.pass_id}::uuid
+            AND credits_remaining IS NOT NULL
+        `;
+          refunded = affected > 0;
+        }
+
+        return { ok: true, reservation: updatedRows[0], refunded };
+      },
+    );
   }
 
   /**
