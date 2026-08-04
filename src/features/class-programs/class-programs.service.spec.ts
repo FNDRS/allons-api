@@ -25,6 +25,8 @@ type RepositoryMock = {
   createReservation: jest.Mock;
   listUserClassPasses: jest.Mock;
   cancelReservation: jest.Mock;
+  getCivilToday: jest.Mock;
+  getUserReservedOccurrences: jest.Mock;
 };
 
 function makeService() {
@@ -42,6 +44,10 @@ function makeService() {
     createReservation: jest.fn(),
     listUserClassPasses: jest.fn().mockResolvedValue([]),
     cancelReservation: jest.fn(),
+    // Fixed far from any test's `from` date, so labels default to the
+    // weekday name unless a test deliberately aligns them for "Hoy"/"Mañana".
+    getCivilToday: jest.fn().mockResolvedValue('2020-01-01'),
+    getUserReservedOccurrences: jest.fn().mockResolvedValue([]),
   } satisfies RepositoryMock;
   const providers = {
     requireMembership: jest.fn().mockResolvedValue({
@@ -215,6 +221,7 @@ describe('ClassProgramsService', () => {
     expect(result).toEqual([
       {
         date: '2026-08-04',
+        label: 'Martes',
         startTime: '09:00',
         durationMinutes: 60,
         instructorName: 'Francisco Guillen',
@@ -222,8 +229,97 @@ describe('ClassProgramsService', () => {
         reservedCount: 4,
         availableSpots: 2,
         canReserve: true,
+        alreadyReserved: false,
       },
     ]);
+  });
+
+  it('labels today and tomorrow relative to Honduras civil time, not the weekday', async () => {
+    const { service, repository } = makeService();
+    repository.getProgram.mockResolvedValue(programRow);
+    // 2026-08-04 is a Tuesday (weekday 2), 2026-08-05 a Wednesday (weekday 3);
+    // one template per day so the 2-day window returns both occurrences.
+    repository.getTemplates.mockResolvedValue([
+      {
+        id: '33333333-3333-3333-3333-333333333333',
+        program_id: programRow.id,
+        weekday: 2,
+        start_time: '09:00',
+        duration_minutes: null,
+        capacity: 6,
+        instructor_name: null,
+        active: true,
+      },
+      {
+        id: '44444444-4444-4444-4444-444444444444',
+        program_id: programRow.id,
+        weekday: 3,
+        start_time: '09:00',
+        duration_minutes: null,
+        capacity: 6,
+        instructor_name: null,
+        active: true,
+      },
+    ]);
+    repository.getReservationCounts.mockResolvedValue([]);
+    repository.getCivilToday.mockResolvedValue('2026-08-04');
+
+    const result = await service.getAvailability(programRow.id, {
+      from: '2026-08-04',
+      days: 2,
+    });
+
+    expect(result.map((r: any) => r.label)).toEqual(['Hoy', 'Mañana']);
+  });
+
+  it('marks alreadyReserved only for occurrences the caller has booked', async () => {
+    const { service, repository } = makeService();
+    repository.getProgram.mockResolvedValue(programRow);
+    repository.getTemplates.mockResolvedValue([
+      {
+        id: '33333333-3333-3333-3333-333333333333',
+        program_id: programRow.id,
+        weekday: 2,
+        start_time: '09:00',
+        duration_minutes: null,
+        capacity: 6,
+        instructor_name: null,
+        active: true,
+      },
+    ]);
+    repository.getReservationCounts.mockResolvedValue([]);
+    repository.getUserReservedOccurrences.mockResolvedValue([
+      { session_date: '2026-08-04', start_time: '09:00' },
+    ]);
+
+    const result = await service.getAvailability(programRow.id, {
+      from: '2026-08-04',
+      days: 1,
+      userId: 'user-1',
+    });
+
+    expect(result[0]).toMatchObject({ alreadyReserved: true });
+    expect(repository.getUserReservedOccurrences).toHaveBeenCalledWith(
+      programRow.id,
+      'user-1',
+      '2026-08-04',
+      '2026-08-04',
+    );
+  });
+
+  it('skips the reserved-occurrences lookup entirely for a guest', async () => {
+    const { service, repository } = makeService();
+    repository.getProgram.mockResolvedValue(programRow);
+    repository.getTemplates.mockResolvedValue([]);
+    repository.getReservationCounts.mockResolvedValue([]);
+
+    await service.getAvailability(programRow.id, {
+      from: '2026-08-04',
+      days: 1,
+      userId: null,
+    });
+
+    expect(repository.getUserReservedOccurrences).not.toHaveBeenCalled();
   });
 
   it('creates a Paygate order for an active published class package', async () => {

@@ -97,6 +97,11 @@ export interface ReservationCountRow {
   reserved_count: number;
 }
 
+export interface UserReservedOccurrenceRow {
+  session_date: string;
+  start_time: string;
+}
+
 export interface ReservationRow {
   id: string;
   user_id: string;

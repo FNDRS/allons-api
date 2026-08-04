@@ -401,3 +401,38 @@ describe('ClassProgramsRepository.cancelReservation', () => {
     expect(tx.$executeRaw).not.toHaveBeenCalled();
   });
 });
+
+describe('ClassProgramsRepository.getCivilToday', () => {
+  it("returns the DB's Honduras civil date", async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([{ today: '2026-08-04' }]);
+
+    await expect(repository.getCivilToday()).resolves.toBe('2026-08-04');
+  });
+});
+
+describe('ClassProgramsRepository.getUserReservedOccurrences', () => {
+  it("scopes the lookup to the caller's own reserved occurrences", async () => {
+    const { repository, prisma } = buildRepository();
+    const rows = [{ session_date: '2026-08-04', start_time: '09:00' }];
+    prisma.$queryRaw.mockResolvedValueOnce(rows);
+
+    const result = await repository.getUserReservedOccurrences(
+      payload.programId,
+      userId,
+      '2026-08-04',
+      '2026-08-10',
+    );
+
+    expect(result).toBe(rows);
+    const [, ...values] = prisma.$queryRaw.mock.calls[0];
+    expect(values).toEqual(
+      expect.arrayContaining([
+        payload.programId,
+        userId,
+        '2026-08-04',
+        '2026-08-10',
+      ]),
+    );
+  });
+});
