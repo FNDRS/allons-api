@@ -221,7 +221,7 @@ describe('ClassProgramsService', () => {
         sold_sessions: 12,
         upcoming_reservations: 3,
         avg_occupancy: 0.75,
-        revenue_cents: 280000,
+        revenue_cents: 280000n,
       },
       // otherProgram deliberately omitted — must default to zeroed metrics,
       // not be dropped from the result or throw.

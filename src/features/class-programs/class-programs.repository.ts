@@ -294,7 +294,7 @@ export class ClassProgramsRepository {
           count(*) FILTER (WHERE status = 'reserved') AS sold_sessions,
           count(*) FILTER (
             WHERE status = 'reserved'
-              AND session_date >= (now() AT TIME ZONE 'America/Tegucigalpa')::date
+              AND (session_date + start_time) > (now() AT TIME ZONE 'America/Tegucigalpa')
           ) AS upcoming_reservations
         FROM class_session_reservations
         WHERE program_id IN (SELECT program_id FROM ids)
@@ -303,7 +303,7 @@ export class ClassProgramsRepository {
       occupancy_stats AS (
         SELECT program_id, avg(reserved_count::float8 / NULLIF(capacity, 0)) AS avg_occupancy
         FROM (
-          SELECT r.program_id, r.session_date, r.start_time,
+          SELECT r.program_id, r.session_date, r.start_time, r.template_id,
             count(*) AS reserved_count,
             COALESCE(t.capacity, p.capacity_per_session) AS capacity
           FROM class_session_reservations r
@@ -311,7 +311,7 @@ export class ClassProgramsRepository {
           LEFT JOIN class_session_templates t ON t.id = r.template_id
           WHERE r.status = 'reserved'
             AND r.program_id IN (SELECT program_id FROM ids)
-          GROUP BY r.program_id, r.session_date, r.start_time, t.capacity, p.capacity_per_session
+          GROUP BY r.program_id, r.session_date, r.start_time, r.template_id, t.capacity, p.capacity_per_session
         ) occ
         GROUP BY program_id
       ),

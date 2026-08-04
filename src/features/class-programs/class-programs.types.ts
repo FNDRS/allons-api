@@ -128,7 +128,8 @@ export interface ProgramMetricsRow {
   upcoming_reservations: number;
   /** Average reserved/capacity across occurrences that have >=1 reservation; null when there are none yet. */
   avg_occupancy: number | null;
-  revenue_cents: number;
+  /** Postgres `bigint` comes back as a JS `bigint` from `$queryRaw` — not JSON-serializable, so the mapper converts it. */
+  revenue_cents: bigint;
 }
 
 export interface ReservationRow {

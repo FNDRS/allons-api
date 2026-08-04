@@ -61,7 +61,7 @@ export function mapProgramMetrics(row: ProgramMetricsRow) {
     soldSessions: row.sold_sessions,
     upcomingReservations: row.upcoming_reservations,
     avgOccupancy: row.avg_occupancy,
-    revenueCents: row.revenue_cents,
+    revenueCents: Number(row.revenue_cents),
   };
 }
 
