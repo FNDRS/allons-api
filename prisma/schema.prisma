@@ -15,24 +15,26 @@ datasource db {
 }
 
 model Profile {
-  userId      String   @id @map("user_id") @db.Uuid
-  username    String?  @unique
-  fullName    String?  @map("full_name")
-  avatarUrl   String?  @map("avatar_url")
-  avatarColor String?  @map("avatar_color")
-  location    String?
-  notificationSettings Json?   @map("notification_settings")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  userId               String   @id @map("user_id") @db.Uuid
+  username             String?  @unique
+  fullName             String?  @map("full_name")
+  avatarUrl            String?  @map("avatar_url")
+  avatarColor          String?  @map("avatar_color")
+  location             String?
+  notificationSettings Json?    @map("notification_settings")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  interests     ProfileInterest[]
-  events        Event[]              @relation("events_created_by")
-  attendees     EventAttendee[]
-  tickets       Ticket[]
-  conversations ConversationMember[]
-  sentMessages  Message[]
-  notifications Notification[]
-  paymentOrders PaymentOrder[]
+  interests         ProfileInterest[]
+  events            Event[]                   @relation("events_created_by")
+  attendees         EventAttendee[]
+  tickets           Ticket[]
+  conversations     ConversationMember[]
+  sentMessages      Message[]
+  notifications     Notification[]
+  paymentOrders     PaymentOrder[]
+  classPasses       UserClassPass[]
+  classReservations ClassSessionReservation[]
 
   @@map("profiles")
 }
@@ -70,45 +72,169 @@ model Provider {
   logoUrl     String?  @map("logo_url")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  events   Event[]
-  reviews  ProviderReview[]
+  events            Event[]
+  reviews           ProviderReview[]
+  classPrograms     ClassProgram[]
+  classPasses       UserClassPass[]
+  classReservations ClassSessionReservation[]
 
   @@map("providers")
 }
 
-model Event {
+model ClassProgram {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  providerId         String   @map("provider_id") @db.Uuid
+  title              String
+  description        String?
+  discipline         String?
+  instructorName     String?  @map("instructor_name")
+  durationMinutes    Int      @map("duration_minutes")
+  capacityPerSession Int      @map("capacity_per_session")
+  locationName       String?  @map("location_name")
+  address            String?
+  city               String?
+  latitude           Float?   @db.DoublePrecision
+  longitude          Float?   @db.DoublePrecision
+  coverImageUrl      String?  @map("cover_image_url")
+  themeColor         String?  @map("theme_color")
+  status             String   @default("draft")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  provider     Provider                  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  templates    ClassSessionTemplate[]
+  packages     ClassPackage[]
+  passes       UserClassPass[]
+  reservations ClassSessionReservation[]
+
+  @@index([providerId, status, createdAt(sort: Desc)])
+  @@map("class_programs")
+}
+
+model ClassSessionTemplate {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  programId       String   @map("program_id") @db.Uuid
+  weekday         Int
+  startTime       DateTime @map("start_time") @db.Time(6)
+  durationMinutes Int?     @map("duration_minutes")
+  capacity        Int?
+  instructorName  String?  @map("instructor_name")
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  program      ClassProgram              @relation(fields: [programId], references: [id], onDelete: Cascade)
+  reservations ClassSessionReservation[]
+
+  @@index([programId, active, weekday, startTime])
+  @@map("class_session_templates")
+}
+
+model ClassPackage {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  programId    String   @map("program_id") @db.Uuid
+  name         String
+  price        Decimal  @default(0) @db.Decimal(12, 2)
+  credits      Int?
+  validityDays Int?     @map("validity_days")
+  kind         String
+  active       Boolean  @default(true)
+  sortOrder    Int      @default(0) @map("sort_order")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  program ClassProgram    @relation(fields: [programId], references: [id], onDelete: Cascade)
+  passes  UserClassPass[]
+
+  @@index([programId, active, sortOrder, createdAt])
+  @@map("class_packages")
+}
+
+model UserClassPass {
   id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  providerId       String?   @map("provider_id") @db.Uuid
-  title            String
-  description      String?
-  startsAt         DateTime? @map("starts_at") @db.Timestamptz(6)
-  endsAt           DateTime? @map("ends_at") @db.Timestamptz(6)
-  city             String?
-  venue            String?
-  address          String?
-  latitude         Float?   @map("latitude") @db.DoublePrecision
-  longitude        Float?   @map("longitude") @db.DoublePrecision
-  coverImageUrl    String?   @map("cover_image_url")
-  themeColor       String?   @map("theme_color")
-  smokingAllowed   Boolean   @default(false) @map("smoking_allowed")
-  petFriendly      Boolean   @default(false) @map("pet_friendly")
-  parkingAvailable Boolean   @default(false) @map("parking_available")
-  minAge           Int?      @map("min_age")
-  eventType        String    @default("single") @map("event_type")
-  recurrence       String?
-  recurrenceCustom Json?     @map("recurrence_custom")
-  classDiscipline  String?   @map("class_discipline")
-  ticketMode       String    @default("paid") @map("ticket_mode")
-  capacity         Int       @default(0)
-  /// Seats per session for recurring classes; `capacity` stays the total for single events.
-  capacityPerOccurrence Int? @map("capacity_per_occurrence")
-  status           String    @default("draft")
-  refundPolicy     String    @default("none") @map("refund_policy")
-  refundPartialPct Int?      @map("refund_partial_pct")
-  refundDeadlineDays Int?    @map("refund_deadline_days")
-  createdBy        String?   @map("created_by") @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  providerId       String    @map("provider_id") @db.Uuid
+  programId        String    @map("program_id") @db.Uuid
+  packageId        String?   @map("package_id") @db.Uuid
+  paymentOrderId   String?   @map("payment_order_id") @db.Uuid
+  creditsTotal     Int?      @map("credits_total")
+  creditsRemaining Int?      @map("credits_remaining")
+  validFrom        DateTime  @default(now()) @map("valid_from") @db.Timestamptz(6)
+  expiresAt        DateTime? @map("expires_at") @db.Timestamptz(6)
+  status           String    @default("active")
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user         Profile                   @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  provider     Provider                  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  program      ClassProgram              @relation(fields: [programId], references: [id], onDelete: Cascade)
+  package      ClassPackage?             @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  paymentOrder PaymentOrder?             @relation(fields: [paymentOrderId], references: [id], onDelete: SetNull)
+  reservations ClassSessionReservation[]
+
+  @@index([userId, programId, status, expiresAt])
+  @@map("user_class_passes")
+}
+
+model ClassSessionReservation {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  providerId      String    @map("provider_id") @db.Uuid
+  programId       String    @map("program_id") @db.Uuid
+  templateId      String?   @map("template_id") @db.Uuid
+  passId          String?   @map("pass_id") @db.Uuid
+  sessionDate     DateTime  @map("session_date") @db.Date
+  startTime       DateTime  @map("start_time") @db.Time(6)
+  durationMinutes Int       @map("duration_minutes")
+  instructorName  String?   @map("instructor_name")
+  status          String    @default("reserved")
+  cancelledAt     DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user     Profile               @relation(fields: [userId], references: [userId], onDelete: Cascade)
+  provider Provider              @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  program  ClassProgram          @relation(fields: [programId], references: [id], onDelete: Cascade)
+  template ClassSessionTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  pass     UserClassPass?        @relation(fields: [passId], references: [id], onDelete: SetNull)
+
+  @@index([programId, sessionDate, startTime, status], map: "class_session_reservations_occurrence_idx")
+  @@map("class_session_reservations")
+}
+
+model Event {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  providerId            String?   @map("provider_id") @db.Uuid
+  title                 String
+  description           String?
+  startsAt              DateTime? @map("starts_at") @db.Timestamptz(6)
+  endsAt                DateTime? @map("ends_at") @db.Timestamptz(6)
+  city                  String?
+  venue                 String?
+  address               String?
+  latitude              Float?    @map("latitude") @db.DoublePrecision
+  longitude             Float?    @map("longitude") @db.DoublePrecision
+  coverImageUrl         String?   @map("cover_image_url")
+  themeColor            String?   @map("theme_color")
+  smokingAllowed        Boolean   @default(false) @map("smoking_allowed")
+  petFriendly           Boolean   @default(false) @map("pet_friendly")
+  parkingAvailable      Boolean   @default(false) @map("parking_available")
+  minAge                Int?      @map("min_age")
+  eventType             String    @default("single") @map("event_type")
+  recurrence            String?
+  recurrenceCustom      Json?     @map("recurrence_custom")
+  classDiscipline       String?   @map("class_discipline")
+  ticketMode            String    @default("paid") @map("ticket_mode")
+  capacity              Int       @default(0)
+  /// Seats per session for recurring classes; `capacity` stays the total for single events.
+  capacityPerOccurrence Int?      @map("capacity_per_occurrence")
+  status                String    @default("draft")
+  refundPolicy          String    @default("none") @map("refund_policy")
+  refundPartialPct      Int?      @map("refund_partial_pct")
+  refundDeadlineDays    Int?      @map("refund_deadline_days")
+  createdBy             String?   @map("created_by") @db.Uuid
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   provider      Provider?       @relation(fields: [providerId], references: [id], onDelete: SetNull)
   creator       Profile?        @relation("events_created_by", fields: [createdBy], references: [userId], onDelete: SetNull)
@@ -130,7 +256,7 @@ model EventMedia {
   sortOrder Int      @default(0) @map("sort_order")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
 
   @@index([eventId, sortOrder, createdAt])
   @@map("event_media")
@@ -144,7 +270,7 @@ model ProviderReview {
   rating     Int?
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
 
   @@index([providerId, createdAt(sort: Desc)])
   @@map("provider_reviews")
@@ -181,25 +307,25 @@ enum TicketTab {
 }
 
 model Ticket {
-  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  code           String    @unique
-  ownerId        String    @map("owner_id") @db.Uuid
-  eventId        String?   @map("event_id") @db.Uuid
-  paymentOrderId String?   @map("payment_order_id") @db.Uuid
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code            String    @unique
+  ownerId         String    @map("owner_id") @db.Uuid
+  eventId         String?   @map("event_id") @db.Uuid
+  paymentOrderId  String?   @map("payment_order_id") @db.Uuid
   /// Row in `provider_event_ticket_types` (raw side table, not modelled here).
-  ticketTypeId   String?   @map("ticket_type_id") @db.Uuid
-  title          String
-  tab            TicketTab @default(eventos)
-  themeColor     String?   @map("theme_color")
-  attendeeCount  Int       @default(0) @map("attendee_count")
+  ticketTypeId    String?   @map("ticket_type_id") @db.Uuid
+  title           String
+  tab             TicketTab @default(eventos)
+  themeColor      String?   @map("theme_color")
+  attendeeCount   Int       @default(0) @map("attendee_count")
   /// Session this ticket grants access to. NULL on a package credit that is not booked yet.
-  occurrenceDate DateTime? @map("occurrence_date") @db.Date
+  occurrenceDate  DateTime? @map("occurrence_date") @db.Date
   /// When an unbooked package credit stops being redeemable.
-  expiresAt      DateTime? @map("expires_at") @db.Timestamptz(6)
+  expiresAt       DateTime? @map("expires_at") @db.Timestamptz(6)
   /// Ties the N ticket rows created by one package purchase together.
-  purchaseGroupId String?  @map("purchase_group_id") @db.Uuid
-  cancelledAt    DateTime? @map("cancelled_at") @db.Timestamptz(6)
-  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  purchaseGroupId String?   @map("purchase_group_id") @db.Uuid
+  cancelledAt     DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
   owner        Profile       @relation(fields: [ownerId], references: [userId], onDelete: Cascade)
   event        Event?        @relation(fields: [eventId], references: [id], onDelete: SetNull)
@@ -301,10 +427,11 @@ model PaymentOrder {
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  user    Profile  @relation(fields: [userId], references: [userId], onDelete: Restrict)
-  event   Event    @relation(fields: [eventId], references: [id], onDelete: Restrict)
-  tickets Ticket[]
-  refunds Refund[]
+  user        Profile         @relation(fields: [userId], references: [userId], onDelete: Restrict)
+  event       Event           @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  tickets     Ticket[]
+  refunds     Refund[]
+  classPasses UserClassPass[]
 
   @@index([userId])
   @@index([eventId])
@@ -343,22 +470,22 @@ model ProviderSubscriptionOrder {
 }
 
 model Refund {
-  id                            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  paymentOrderId                String       @map("payment_order_id") @db.Uuid
-  ticketId                      String?      @map("ticket_id") @db.Uuid
-  userId                        String       @map("user_id") @db.Uuid
-  amountCents                   Int          @map("amount_cents")
-  currency                      String       @default("HNL")
-  reason                        String
-  status                        String
-  policyEligibleAtRequest       Boolean      @map("policy_eligible_at_request")
-  policyDeadlineHoursAtRequest  Int?         @map("policy_deadline_hours_at_request")
-  paygatePaymentId              String?      @map("paygate_payment_id")
-  paygateRefundResponse         Json?        @map("paygate_refund_response")
-  notes                         String?
-  requestedAt                   DateTime     @default(now()) @map("requested_at") @db.Timestamptz(6)
-  resolvedAt                    DateTime?    @map("resolved_at") @db.Timestamptz(6)
-  updatedAt                     DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id                           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  paymentOrderId               String    @map("payment_order_id") @db.Uuid
+  ticketId                     String?   @map("ticket_id") @db.Uuid
+  userId                       String    @map("user_id") @db.Uuid
+  amountCents                  Int       @map("amount_cents")
+  currency                     String    @default("HNL")
+  reason                       String
+  status                       String
+  policyEligibleAtRequest      Boolean   @map("policy_eligible_at_request")
+  policyDeadlineHoursAtRequest Int?      @map("policy_deadline_hours_at_request")
+  paygatePaymentId             String?   @map("paygate_payment_id")
+  paygateRefundResponse        Json?     @map("paygate_refund_response")
+  notes                        String?
+  requestedAt                  DateTime  @default(now()) @map("requested_at") @db.Timestamptz(6)
+  resolvedAt                   DateTime? @map("resolved_at") @db.Timestamptz(6)
+  updatedAt                    DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   paymentOrder PaymentOrder @relation(fields: [paymentOrderId], references: [id], onDelete: Restrict)
   ticket       Ticket?      @relation(fields: [ticketId], references: [id], onDelete: SetNull)
@@ -392,8 +519,8 @@ model AdminAuditLog {
   httpMethod String? @map("http_method")
   httpPath   String? @map("http_path")
 
-  ipAddress  String? @map("ip_address")
-  userAgent  String? @map("user_agent")
+  ipAddress String? @map("ip_address")
+  userAgent String? @map("user_agent")
 
   correlationId   String? @map("correlation_id") @db.Uuid
   clientRequestId String? @map("client_request_id")

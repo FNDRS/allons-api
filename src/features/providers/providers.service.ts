@@ -23,7 +23,7 @@ import {
 import { NotificationsService } from '../notifications/notifications.service';
 import { SubscriptionService } from '../subscription/subscription.service';
 
-type ProviderRole = 'owner' | 'admin' | 'staff_scanner';
+export type ProviderRole = 'owner' | 'admin' | 'staff_scanner';
 
 interface ProviderMembership {
   providerId: string;
