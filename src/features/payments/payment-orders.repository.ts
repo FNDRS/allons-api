@@ -218,7 +218,7 @@ export class PaymentOrdersRepository {
         tickets: { none: { cancelledAt: null } },
         updatedAt: { lt: cutoffUpdated },
       },
-      orderBy: { updatedAt: 'desc' },
+      orderBy: { updatedAt: 'asc' },
       take: limit,
     });
   }
@@ -235,7 +235,7 @@ export class PaymentOrdersRepository {
         classPasses: { none: {} },
         updatedAt: { lt: cutoffUpdated },
       },
-      orderBy: { updatedAt: 'desc' },
+      orderBy: { updatedAt: 'asc' },
       take: limit,
     });
   }

@@ -4,24 +4,35 @@ import type {
   PaymentOrderStatus,
 } from '../../../generated/prisma';
 
-/**
- * Inputs accepted by the repository when creating an order. We mirror
- * only the fields callers should set explicitly — derived fields like
- * `id`, `status`, `createdAt` come from defaults.
- */
-export interface CreatePaymentOrderInput {
+interface CreatePaymentOrderBaseInput {
   userId: string;
-  orderType?: 'event_ticket' | 'class_package';
-  eventId?: string | null;
-  entryTypeId?: string | null;
-  classProgramId?: string | null;
-  classPackageId?: string | null;
   quantity: number;
   amountCents: number;
   currency?: string;
   paygateLinkId: string;
   expiresAt: Date;
 }
+
+/**
+ * Inputs accepted by the repository when creating an order. We mirror
+ * only the fields callers should set explicitly — derived fields like
+ * `id`, `status`, `createdAt` come from defaults.
+ */
+export type CreatePaymentOrderInput =
+  | (CreatePaymentOrderBaseInput & {
+      orderType?: 'event_ticket';
+      eventId: string;
+      entryTypeId?: string | null;
+      classProgramId?: null;
+      classPackageId?: null;
+    })
+  | (CreatePaymentOrderBaseInput & {
+      orderType: 'class_package';
+      eventId: null;
+      entryTypeId?: null;
+      classProgramId: string;
+      classPackageId: string;
+    });
 
 /**
  * Which code path drove an order from `pending_payment` to a terminal

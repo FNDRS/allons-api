@@ -127,13 +127,13 @@ export class PaymentOrderDetailResponseDto {
   })
   classPassIds!: string[];
 
-  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @ApiProperty({ format: 'uuid', nullable: true })
   eventId!: string | null;
 
-  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @ApiProperty({ format: 'uuid', nullable: true })
   classPackageId!: string | null;
 
-  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @ApiProperty({ format: 'uuid', nullable: true })
   classProgramId!: string | null;
 
   @ApiPropertyOptional({
@@ -159,13 +159,13 @@ export class PaymentOrderListItemDto {
   @ApiProperty({ enum: PAYMENT_ORDER_TYPES })
   orderType!: string;
 
-  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @ApiProperty({ format: 'uuid', nullable: true })
   eventId!: string | null;
 
-  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @ApiProperty({ format: 'uuid', nullable: true })
   classPackageId!: string | null;
 
-  @ApiPropertyOptional({ format: 'uuid', nullable: true })
+  @ApiProperty({ format: 'uuid', nullable: true })
   classProgramId!: string | null;
 
   @ApiProperty({ description: 'ISO 8601' })

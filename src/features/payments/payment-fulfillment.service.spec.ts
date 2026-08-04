@@ -14,14 +14,16 @@ function buildService() {
     event: { findUnique: jest.fn() },
     ticket: { count: jest.fn() },
   };
+  const me = { createTicket: jest.fn() };
+  const supabaseAdmin = {
+    db: { auth: { admin: { getUserById: jest.fn() } } },
+  };
   const service = new PaymentFulfillmentService(
     prisma as unknown as PrismaService,
-    { createTicket: jest.fn() } as unknown as MeService,
-    {
-      db: { auth: { admin: { getUserById: jest.fn() } } },
-    } as unknown as SupabaseAdminService,
+    me as unknown as MeService,
+    supabaseAdmin as unknown as SupabaseAdminService,
   );
-  return { service, prisma };
+  return { service, prisma, me, supabaseAdmin };
 }
 
 function fakeOrder(overrides: Partial<PaymentOrder> = {}): PaymentOrder {
@@ -111,5 +113,66 @@ describe('PaymentFulfillmentService', () => {
 
     expect(result).toBe(false);
     expect(prisma.userClassPass.create).not.toHaveBeenCalled();
+  });
+
+  it('mints tickets for a paid event ticket order', async () => {
+    const { service, prisma, me, supabaseAdmin } = buildService();
+    prisma.event.findUnique.mockResolvedValue({ id: 'event-1', capacity: 10 });
+    prisma.ticket.count.mockResolvedValue(2);
+    supabaseAdmin.db.auth.admin.getUserById.mockResolvedValue({
+      data: {
+        user: { email: 'buyer@example.com', user_metadata: { name: 'Buyer' } },
+      },
+    });
+    me.createTicket.mockResolvedValue({ createdCount: 2 });
+
+    const result = await service.fulfillPaidOrder(
+      fakeOrder({
+        orderType: 'event_ticket',
+        eventId: 'event-1',
+        entryTypeId: 'tier-1',
+        classProgramId: null,
+        classPackageId: null,
+        quantity: 2,
+      }),
+      'test-ticket-fulfill',
+    );
+
+    expect(result).toBe(true);
+    expect(me.createTicket).toHaveBeenCalledWith(
+      'user-1',
+      'event-1',
+      2,
+      expect.objectContaining({
+        email: 'buyer@example.com',
+        name: 'Buyer',
+        paymentOrderId: 'order-1',
+        ticketTypeId: 'tier-1',
+        holders: [
+          { email: 'buyer@example.com', name: 'Buyer' },
+          { email: 'buyer@example.com', name: 'Buyer' },
+        ],
+      }),
+    );
+  });
+
+  it('does not mint tickets when paid order would exceed event capacity', async () => {
+    const { service, prisma, me } = buildService();
+    prisma.event.findUnique.mockResolvedValue({ id: 'event-1', capacity: 3 });
+    prisma.ticket.count.mockResolvedValue(2);
+
+    const result = await service.fulfillPaidOrder(
+      fakeOrder({
+        orderType: 'event_ticket',
+        eventId: 'event-1',
+        classProgramId: null,
+        classPackageId: null,
+        quantity: 2,
+      }),
+      'test-ticket-fulfill',
+    );
+
+    expect(result).toBe(false);
+    expect(me.createTicket).not.toHaveBeenCalled();
   });
 });
