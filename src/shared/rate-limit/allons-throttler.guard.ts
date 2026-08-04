@@ -9,7 +9,23 @@ import {
 } from '@nestjs/throttler';
 import { SupabaseAdminService } from '../supabase/supabase-admin.service';
 
-const PAYMENT_INITIATE_LIMIT_KEY = 'THROTTLER:LIMITpayment-initiate';
+const THROTTLER_LIMIT_PREFIX = 'THROTTLER:LIMIT';
+
+/**
+ * Named throttlers whose whole point is per-user tracking. `getTracker` runs
+ * inside the guard — strictly before the route handler — so a handler
+ * authenticating and setting `req.userId` itself (several already do, for
+ * activity-log attribution) is always too late to affect its OWN request's
+ * tracking key. Any route in this list gets pre-authenticated here instead.
+ * `paygate-webhook` is deliberately excluded: it's called by Paygate, not an
+ * end user, so there is no `req.userId` to resolve.
+ */
+const PER_USER_THROTTLE_KEYS = [
+  'payment-initiate',
+  'class-package-payment',
+  'class-reservation-create',
+  'class-reservation-cancel',
+].map((name) => `${THROTTLER_LIMIT_PREFIX}${name}`);
 
 // Uses authenticated user id when available. Falls back to the client IP
 // (trust proxy is enabled in main.ts).
@@ -29,12 +45,15 @@ export class AllonsThrottlerGuard extends ThrottlerGuard {
     context?: ExecutionContext,
   ): Promise<string> {
     if (context) {
-      const paymentLimit = this.reflector.getAllAndOverride(
-        PAYMENT_INITIATE_LIMIT_KEY,
-        [context.getHandler(), context.getClass()],
+      const isPerUserThrottle = PER_USER_THROTTLE_KEYS.some(
+        (key) =>
+          this.reflector.getAllAndOverride(key, [
+            context.getHandler(),
+            context.getClass(),
+          ]) !== undefined,
       );
       if (
-        paymentLimit !== undefined &&
+        isPerUserThrottle &&
         typeof req.userId !== 'string' &&
         req.headers?.authorization
       ) {
