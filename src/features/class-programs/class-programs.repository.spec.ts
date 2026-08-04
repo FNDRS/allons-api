@@ -409,6 +409,15 @@ describe('ClassProgramsRepository.getCivilToday', () => {
 
     await expect(repository.getCivilToday()).resolves.toBe('2026-08-04');
   });
+
+  it('throws a clear error instead of a bare TypeError on an empty result', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await expect(repository.getCivilToday()).rejects.toThrow(
+      /returned no rows/,
+    );
+  });
 });
 
 describe('ClassProgramsRepository.getUserReservedOccurrences', () => {

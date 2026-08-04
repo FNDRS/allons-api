@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import type {
@@ -181,7 +181,13 @@ export class ClassProgramsRepository {
     const rows = await this.prisma.$queryRaw<Array<{ today: string }>>`
       SELECT (now() AT TIME ZONE 'America/Tegucigalpa')::date::text AS today
     `;
-    return rows[0].today;
+    const today = rows[0]?.today;
+    if (!today) {
+      throw new InternalServerErrorException(
+        "getCivilToday: SELECT now() returned no rows — this can't happen on a healthy connection",
+      );
+    }
+    return today;
   }
 
   getUserReservedOccurrences(

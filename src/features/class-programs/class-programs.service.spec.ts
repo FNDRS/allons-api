@@ -307,6 +307,35 @@ describe('ClassProgramsService', () => {
     );
   });
 
+  it('anchors the default range to civil today, not the from param', async () => {
+    // Regression test for the Codex-flagged bug: omitting `from` used to go
+    // through parseDateParam's own JS-Date() default (UTC), which disagrees
+    // with Honduras civil time for part of the day — the range would start a
+    // day late and "Hoy" would never appear.
+    const { service, repository } = makeService();
+    repository.getProgram.mockResolvedValue(programRow);
+    repository.getTemplates.mockResolvedValue([
+      {
+        id: '33333333-3333-3333-3333-333333333333',
+        program_id: programRow.id,
+        weekday: 2,
+        start_time: '09:00',
+        duration_minutes: null,
+        capacity: 6,
+        instructor_name: null,
+        active: true,
+      },
+    ]);
+    repository.getReservationCounts.mockResolvedValue([]);
+    repository.getCivilToday.mockResolvedValue('2026-08-04');
+
+    const result = await service.getAvailability(programRow.id, {
+      days: 1,
+    });
+
+    expect(result[0]).toMatchObject({ date: '2026-08-04', label: 'Hoy' });
+  });
+
   it('skips the reserved-occurrences lookup entirely for a guest', async () => {
     const { service, repository } = makeService();
     repository.getProgram.mockResolvedValue(programRow);
