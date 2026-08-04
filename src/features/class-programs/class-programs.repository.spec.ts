@@ -268,6 +268,10 @@ describe('ClassProgramsRepository.cancelReservation', () => {
       refunded: true,
     });
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    // Belt-and-suspenders: the credit UPDATE is scoped to the cancelling
+    // user, not just the pass id, so it can never refund the wrong account.
+    const [, ...values] = tx.$executeRaw.mock.calls[0];
+    expect(values).toEqual(expect.arrayContaining([passId, userId]));
   });
 
   it('cancels without a refund when outside the refund window', async () => {

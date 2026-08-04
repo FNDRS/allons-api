@@ -400,11 +400,18 @@ export class ClassProgramsRepository {
         // "is this pass finite" check here.
         let refunded = false;
         if (withinRefundWindow && reservation.pass_id) {
+          // `user_id` guard is belt-and-suspenders: `reservation.pass_id`
+          // should only ever reference a pass owned by `reservation.user_id`
+          // (already confirmed to equal `userId` above), since
+          // `createReservation` only ever selects a pass scoped to its own
+          // caller. Costs nothing and stops a future data-integrity bug from
+          // crediting the wrong account.
           const affected = await tx.$executeRaw`
           UPDATE user_class_passes
           SET credits_remaining = credits_remaining + 1,
             updated_at = now()
           WHERE id = ${reservation.pass_id}::uuid
+            AND user_id = ${userId}::uuid
             AND credits_remaining IS NOT NULL
         `;
           refunded = affected > 0;
