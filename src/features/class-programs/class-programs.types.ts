@@ -35,6 +35,26 @@ export interface PackagePayload {
   sortOrder: number;
 }
 
+/** `undefined` = leave the column untouched. */
+export type ProgramUpdatePayload = Partial<ProgramPayload>;
+
+/** `undefined` = leave the column untouched. */
+export type TemplateUpdatePayload = Partial<TemplatePayload> & {
+  active?: boolean;
+};
+
+/**
+ * `kind`/`credits`/`validityDays` move together (same rule as create — see
+ * `parsePackagePayload`): present `kind` means all three are being redefined,
+ * absent means none of the three changes. `undefined` elsewhere = untouched.
+ */
+export type PackageUpdatePayload = Partial<
+  Pick<PackagePayload, 'name' | 'price' | 'sortOrder'>
+> & {
+  plan?: Pick<PackagePayload, 'kind' | 'credits' | 'validityDays'>;
+  active?: boolean;
+};
+
 export interface ReservationPayload {
   programId: string;
   date: string;
@@ -100,6 +120,16 @@ export interface ReservationCountRow {
 export interface UserReservedOccurrenceRow {
   session_date: string;
   start_time: string;
+}
+
+export interface ProgramMetricsRow {
+  program_id: string;
+  sold_sessions: number;
+  upcoming_reservations: number;
+  /** Average reserved/capacity across occurrences that have >=1 reservation; null when there are none yet. */
+  avg_occupancy: number | null;
+  /** Postgres `bigint` comes back as a JS `bigint` from `$queryRaw` — not JSON-serializable, so the mapper converts it. */
+  revenue_cents: bigint;
 }
 
 export interface ReservationRow {

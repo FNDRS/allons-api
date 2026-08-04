@@ -7,8 +7,11 @@ import type {
   ClassPassRow,
   PackagePayload,
   PackageRow,
+  PackageUpdatePayload,
+  ProgramMetricsRow,
   ProgramPayload,
   ProgramRow,
+  ProgramUpdatePayload,
   ReservationCancelResult,
   ReservationCountRow,
   ReservationCreateResult,
@@ -16,6 +19,7 @@ import type {
   ReservationRow,
   TemplatePayload,
   TemplateRow,
+  TemplateUpdatePayload,
   UserReservedOccurrenceRow,
 } from './class-programs.types';
 
@@ -139,6 +143,113 @@ export class ClassProgramsRepository {
     return rows[0]?.id ?? null;
   }
 
+  /** The program a template belongs to, scoped to the caller's provider — used to authorize PATCH/DELETE by template id alone (no programId in that route). */
+  async findProviderProgramIdForTemplate(
+    providerId: string,
+    templateId: string,
+  ) {
+    const rows = await this.prisma.$queryRaw<Array<{ program_id: string }>>`
+      SELECT t.program_id
+      FROM class_session_templates t
+      JOIN class_programs p ON p.id = t.program_id
+      WHERE t.id = ${templateId}::uuid
+        AND p.provider_id = ${providerId}::uuid
+      LIMIT 1
+    `;
+    return rows[0]?.program_id ?? null;
+  }
+
+  /** Same as above, for a package id. */
+  async findProviderProgramIdForPackage(providerId: string, packageId: string) {
+    const rows = await this.prisma.$queryRaw<Array<{ program_id: string }>>`
+      SELECT c.program_id
+      FROM class_packages c
+      JOIN class_programs p ON p.id = c.program_id
+      WHERE c.id = ${packageId}::uuid
+        AND p.provider_id = ${providerId}::uuid
+      LIMIT 1
+    `;
+    return rows[0]?.program_id ?? null;
+  }
+
+  async updateProgram(programId: string, payload: ProgramUpdatePayload) {
+    const rows = await this.prisma.$queryRaw<ProgramRow[]>`
+      UPDATE class_programs
+      SET
+        title = COALESCE(${payload.title}, title),
+        description = CASE WHEN ${payload.description !== undefined} THEN ${payload.description ?? null} ELSE description END,
+        discipline = CASE WHEN ${payload.discipline !== undefined} THEN ${payload.discipline ?? null} ELSE discipline END,
+        instructor_name = CASE WHEN ${payload.instructorName !== undefined} THEN ${payload.instructorName ?? null} ELSE instructor_name END,
+        duration_minutes = COALESCE(${payload.durationMinutes}, duration_minutes),
+        capacity_per_session = COALESCE(${payload.capacityPerSession}, capacity_per_session),
+        location_name = CASE WHEN ${payload.locationName !== undefined} THEN ${payload.locationName ?? null} ELSE location_name END,
+        address = CASE WHEN ${payload.address !== undefined} THEN ${payload.address ?? null} ELSE address END,
+        city = CASE WHEN ${payload.city !== undefined} THEN ${payload.city ?? null} ELSE city END,
+        latitude = CASE WHEN ${payload.latitude !== undefined} THEN ${payload.latitude ?? null} ELSE latitude END,
+        longitude = CASE WHEN ${payload.longitude !== undefined} THEN ${payload.longitude ?? null} ELSE longitude END,
+        cover_image_url = CASE WHEN ${payload.coverImageUrl !== undefined} THEN ${payload.coverImageUrl ?? null} ELSE cover_image_url END,
+        theme_color = CASE WHEN ${payload.themeColor !== undefined} THEN ${payload.themeColor ?? null} ELSE theme_color END,
+        status = COALESCE(${payload.status}, status),
+        updated_at = now()
+      WHERE id = ${programId}::uuid
+      RETURNING *
+    `;
+    return rows[0] ?? null;
+  }
+
+  async updateTemplate(templateId: string, payload: TemplateUpdatePayload) {
+    const rows = await this.prisma.$queryRaw<TemplateRow[]>`
+      UPDATE class_session_templates
+      SET
+        weekday = COALESCE(${payload.weekday}, weekday),
+        start_time = COALESCE(${payload.startTime}::time, start_time),
+        duration_minutes = CASE WHEN ${payload.durationMinutes !== undefined} THEN ${payload.durationMinutes ?? null} ELSE duration_minutes END,
+        capacity = CASE WHEN ${payload.capacity !== undefined} THEN ${payload.capacity ?? null} ELSE capacity END,
+        instructor_name = CASE WHEN ${payload.instructorName !== undefined} THEN ${payload.instructorName ?? null} ELSE instructor_name END,
+        active = COALESCE(${payload.active}, active),
+        updated_at = now()
+      WHERE id = ${templateId}::uuid
+      RETURNING id, program_id, weekday, to_char(start_time, 'HH24:MI') AS start_time,
+        duration_minutes, capacity, instructor_name, active
+    `;
+    return rows[0] ?? null;
+  }
+
+  async deactivateTemplate(templateId: string) {
+    await this.prisma.$executeRaw`
+      UPDATE class_session_templates
+      SET active = false, updated_at = now()
+      WHERE id = ${templateId}::uuid
+    `;
+  }
+
+  async updatePackage(packageId: string, payload: PackageUpdatePayload) {
+    const rows = await this.prisma.$queryRaw<PackageRow[]>`
+      UPDATE class_packages
+      SET
+        name = COALESCE(${payload.name}, name),
+        price = COALESCE(${payload.price}, price),
+        sort_order = COALESCE(${payload.sortOrder}, sort_order),
+        active = COALESCE(${payload.active}, active),
+        kind = COALESCE(${payload.plan?.kind}, kind),
+        credits = CASE WHEN ${payload.plan !== undefined} THEN ${payload.plan?.credits ?? null} ELSE credits END,
+        validity_days = CASE WHEN ${payload.plan !== undefined} THEN ${payload.plan?.validityDays ?? null} ELSE validity_days END,
+        updated_at = now()
+      WHERE id = ${packageId}::uuid
+      RETURNING id, program_id, name, price::float8 AS price, credits,
+        validity_days, kind, active, sort_order
+    `;
+    return rows[0] ?? null;
+  }
+
+  async deactivatePackage(packageId: string) {
+    await this.prisma.$executeRaw`
+      UPDATE class_packages
+      SET active = false, updated_at = now()
+      WHERE id = ${packageId}::uuid
+    `;
+  }
+
   getTemplates(programIds: string[], options: { publicOnly: boolean }) {
     const ids = Prisma.join(programIds.map((id) => Prisma.sql`${id}::uuid`));
     return this.prisma.$queryRaw<TemplateRow[]>`
@@ -160,6 +271,68 @@ export class ClassProgramsRepository {
       WHERE program_id IN (${ids})
         AND (${options.publicOnly} = false OR active = true)
       ORDER BY sort_order ASC, created_at ASC
+    `;
+  }
+
+  /**
+   * Batch metrics for the provider's program list. A program with no sales
+   * yet still gets a zeroed row (via the `ids` CTE + LEFT JOINs), so callers
+   * don't have to special-case "missing" vs "zero".
+   */
+  getProgramMetrics(programIds: string[]): Promise<ProgramMetricsRow[]> {
+    if (programIds.length === 0) return Promise.resolve([]);
+    // Each row needs its own parens — VALUES ($1::uuid, $2::uuid) would be one
+    // row of two columns, not two rows of one; VALUES ($1::uuid), ($2::uuid)
+    // is what actually produces one row per id.
+    const ids = Prisma.join(programIds.map((id) => Prisma.sql`(${id}::uuid)`));
+    return this.prisma.$queryRaw<ProgramMetricsRow[]>`
+      WITH ids AS (
+        SELECT * FROM (VALUES ${ids}) AS v(program_id)
+      ),
+      reservation_stats AS (
+        SELECT program_id,
+          count(*) FILTER (WHERE status = 'reserved') AS sold_sessions,
+          count(*) FILTER (
+            WHERE status = 'reserved'
+              AND (session_date + start_time) > (now() AT TIME ZONE 'America/Tegucigalpa')
+          ) AS upcoming_reservations
+        FROM class_session_reservations
+        WHERE program_id IN (SELECT program_id FROM ids)
+        GROUP BY program_id
+      ),
+      occupancy_stats AS (
+        SELECT program_id, avg(reserved_count::float8 / NULLIF(capacity, 0)) AS avg_occupancy
+        FROM (
+          SELECT r.program_id, r.session_date, r.start_time, r.template_id,
+            count(*) AS reserved_count,
+            COALESCE(t.capacity, p.capacity_per_session) AS capacity
+          FROM class_session_reservations r
+          JOIN class_programs p ON p.id = r.program_id
+          LEFT JOIN class_session_templates t ON t.id = r.template_id
+          WHERE r.status = 'reserved'
+            AND r.program_id IN (SELECT program_id FROM ids)
+          GROUP BY r.program_id, r.session_date, r.start_time, r.template_id, t.capacity, p.capacity_per_session
+        ) occ
+        GROUP BY program_id
+      ),
+      revenue_stats AS (
+        SELECT class_program_id AS program_id, sum(amount_cents)::bigint AS revenue_cents
+        FROM payment_orders
+        WHERE order_type = 'class_package'
+          AND status = 'paid'::payment_order_status
+          AND class_program_id IN (SELECT program_id FROM ids)
+        GROUP BY class_program_id
+      )
+      SELECT
+        ids.program_id::text AS program_id,
+        COALESCE(rs.sold_sessions, 0)::int AS sold_sessions,
+        COALESCE(rs.upcoming_reservations, 0)::int AS upcoming_reservations,
+        os.avg_occupancy AS avg_occupancy,
+        COALESCE(rv.revenue_cents, 0)::bigint AS revenue_cents
+      FROM ids
+      LEFT JOIN reservation_stats rs ON rs.program_id = ids.program_id
+      LEFT JOIN occupancy_stats os ON os.program_id = ids.program_id
+      LEFT JOIN revenue_stats rv ON rv.program_id = ids.program_id
     `;
   }
 

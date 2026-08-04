@@ -2,10 +2,13 @@ import { BadRequestException } from '@nestjs/common';
 import type {
   PackageKind,
   PackagePayload,
+  PackageUpdatePayload,
   ProgramPayload,
   ProgramStatus,
+  ProgramUpdatePayload,
   ReservationPayload,
   TemplatePayload,
+  TemplateUpdatePayload,
 } from './class-programs.types';
 
 export function parseProgramPayload(
@@ -32,6 +35,46 @@ export function parseProgramPayload(
   };
 }
 
+/** Every field optional; only keys present in `body` are validated/returned. */
+export function parseProgramUpdatePayload(
+  body: Record<string, unknown>,
+): ProgramUpdatePayload {
+  const payload: ProgramUpdatePayload = {};
+  if (body.title !== undefined)
+    payload.title = requiredString(body.title, 'title');
+  if (body.description !== undefined)
+    payload.description = optionalString(body.description);
+  if (body.discipline !== undefined)
+    payload.discipline = optionalString(body.discipline);
+  if (body.instructorName !== undefined)
+    payload.instructorName = optionalString(body.instructorName);
+  if (body.durationMinutes !== undefined)
+    payload.durationMinutes = positiveInt(
+      body.durationMinutes,
+      'durationMinutes',
+    );
+  if (body.capacityPerSession !== undefined)
+    payload.capacityPerSession = positiveInt(
+      body.capacityPerSession,
+      'capacityPerSession',
+    );
+  if (body.locationName !== undefined)
+    payload.locationName = optionalString(body.locationName);
+  if (body.address !== undefined)
+    payload.address = optionalString(body.address);
+  if (body.city !== undefined) payload.city = optionalString(body.city);
+  if (body.latitude !== undefined)
+    payload.latitude = optionalNumber(body.latitude);
+  if (body.longitude !== undefined)
+    payload.longitude = optionalNumber(body.longitude);
+  if (body.coverImageUrl !== undefined)
+    payload.coverImageUrl = optionalString(body.coverImageUrl);
+  if (body.themeColor !== undefined)
+    payload.themeColor = optionalString(body.themeColor);
+  if (body.status !== undefined) payload.status = parseStatus(body.status);
+  return payload;
+}
+
 export function parseTemplatePayload(
   body: Record<string, unknown>,
 ): TemplatePayload {
@@ -48,9 +91,49 @@ export function parseTemplatePayload(
   };
 }
 
-export function parsePackagePayload(
+/**
+ * `active` and the name/price/sortOrder fields update independently.
+ * `kind`/`credits`/`validityDays` only change together, via `plan` — see
+ * `PackageUpdatePayload`.
+ */
+export function parsePackageUpdatePayload(
   body: Record<string, unknown>,
-): PackagePayload {
+): PackageUpdatePayload {
+  const payload: PackageUpdatePayload = {};
+  if (body.name !== undefined) payload.name = requiredString(body.name, 'name');
+  if (body.price !== undefined)
+    payload.price = nonNegativeNumber(body.price, 'price');
+  if (body.sortOrder !== undefined)
+    payload.sortOrder = nonNegativeInt(body.sortOrder, 'sortOrder');
+  if (body.active !== undefined) payload.active = Boolean(body.active);
+  if (body.kind !== undefined) payload.plan = parsePackagePlan(body);
+  return payload;
+}
+
+/** Every field optional; only keys present in `body` are validated/returned. */
+export function parseTemplateUpdatePayload(
+  body: Record<string, unknown>,
+): TemplateUpdatePayload {
+  const payload: TemplateUpdatePayload = {};
+  if (body.weekday !== undefined) payload.weekday = parseWeekday(body.weekday);
+  if (body.startTime !== undefined)
+    payload.startTime = parseTime(body.startTime);
+  if (body.durationMinutes !== undefined)
+    payload.durationMinutes =
+      body.durationMinutes == null
+        ? null
+        : positiveInt(body.durationMinutes, 'durationMinutes');
+  if (body.capacity !== undefined)
+    payload.capacity =
+      body.capacity == null ? null : positiveInt(body.capacity, 'capacity');
+  if (body.instructorName !== undefined)
+    payload.instructorName = optionalString(body.instructorName);
+  if (body.active !== undefined) payload.active = Boolean(body.active);
+  return payload;
+}
+
+/** `kind` determines `credits` (and requires `validityDays` for `unlimited`). */
+function parsePackagePlan(body: Record<string, unknown>) {
   const kind = parsePackageKind(body.kind);
   const credits =
     kind === 'drop_in'
@@ -65,6 +148,13 @@ export function parsePackagePayload(
   if (kind === 'unlimited' && validityDays == null) {
     throw new BadRequestException('validityDays es requerido para ilimitado');
   }
+  return { kind, credits, validityDays };
+}
+
+export function parsePackagePayload(
+  body: Record<string, unknown>,
+): PackagePayload {
+  const { kind, credits, validityDays } = parsePackagePlan(body);
   return {
     name: requiredString(body.name, 'name'),
     price: nonNegativeNumber(body.price, 'price'),
