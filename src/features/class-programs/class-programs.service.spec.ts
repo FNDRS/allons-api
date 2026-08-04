@@ -149,6 +149,49 @@ describe('ClassProgramsService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('returns myBalance: null for a guest, without querying passes', async () => {
+    const { service, repository } = makeService();
+    repository.getProgram.mockResolvedValueOnce(programRow);
+
+    const result = await service.getPublicProgram(programRow.id);
+
+    expect(result).toMatchObject({ myBalance: null });
+    expect(repository.listUserClassPasses).not.toHaveBeenCalled();
+  });
+
+  it("embeds the caller's mapped balance for this program when authenticated", async () => {
+    const { service, repository } = makeService();
+    repository.getProgram.mockResolvedValueOnce(programRow);
+    repository.listUserClassPasses.mockResolvedValueOnce([
+      {
+        id: 'pass-1',
+        provider_id: programRow.provider_id,
+        program_id: programRow.id,
+        program_title: programRow.title,
+        package_id: 'pkg-1',
+        package_name: 'Pack 8 clases',
+        package_kind: 'pack',
+        credits_total: 8,
+        credits_remaining: 5,
+        valid_from: new Date('2026-07-01T00:00:00.000Z'),
+        expires_at: new Date('2026-09-04T00:00:00.000Z'),
+        status: 'active',
+      },
+    ]);
+
+    const result = await service.getPublicProgram(programRow.id, {
+      userId: 'user-1',
+    });
+
+    expect(result).toMatchObject({
+      myBalance: {
+        id: 'pass-1',
+        programId: programRow.id,
+        creditsRemaining: 5,
+      },
+    });
+  });
+
   it('requests only published programs on public provider listings', async () => {
     const { service, repository } = makeService();
     repository.getProgramsByProvider.mockResolvedValueOnce([programRow]);
