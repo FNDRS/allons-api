@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import type {
@@ -16,6 +16,7 @@ import type {
   ReservationRow,
   TemplatePayload,
   TemplateRow,
+  UserReservedOccurrenceRow,
 } from './class-programs.types';
 
 /** Cancelling this far ahead of the session (or further) returns the credit. */
@@ -172,6 +173,37 @@ export class ClassProgramsRepository {
         AND status = 'reserved'
         AND session_date BETWEEN ${from}::date AND ${to}::date
       GROUP BY session_date, start_time
+    `;
+  }
+
+  /** Today's civil date in Honduras — the same "wall clock" every elapsed/refund check in this module anchors to. */
+  async getCivilToday(): Promise<string> {
+    const rows = await this.prisma.$queryRaw<Array<{ today: string }>>`
+      SELECT (now() AT TIME ZONE 'America/Tegucigalpa')::date::text AS today
+    `;
+    const today = rows[0]?.today;
+    if (!today) {
+      throw new InternalServerErrorException(
+        "getCivilToday: SELECT now() returned no rows — this can't happen on a healthy connection",
+      );
+    }
+    return today;
+  }
+
+  getUserReservedOccurrences(
+    programId: string,
+    userId: string,
+    from: string,
+    to: string,
+  ) {
+    return this.prisma.$queryRaw<UserReservedOccurrenceRow[]>`
+      SELECT session_date::text AS session_date,
+        to_char(start_time, 'HH24:MI') AS start_time
+      FROM class_session_reservations
+      WHERE program_id = ${programId}::uuid
+        AND user_id = ${userId}::uuid
+        AND status = 'reserved'
+        AND session_date BETWEEN ${from}::date AND ${to}::date
     `;
   }
 

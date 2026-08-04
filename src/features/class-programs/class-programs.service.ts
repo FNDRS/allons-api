@@ -119,23 +119,39 @@ export class ClassProgramsService {
 
   async getAvailability(
     programId: string,
-    options: { from?: string; days: number },
+    options: { from?: string; days: number; userId?: string | null },
   ) {
     const program = await this.getProgramOrThrow(programId, {
       publicOnly: true,
     });
-    const from = parseDateParam(options.from);
+    // Fetched before `from` is resolved: when the caller omits `from`, the
+    // range must start on Honduras' civil today, not `parseDateParam`'s own
+    // JS-`Date()`-based default (UTC) — between 00:00-05:59 UTC (evening in
+    // Honduras) the two disagree by a day, which used to make the very first
+    // occurrence come back labeled "Mañana" with no "Hoy" in the response.
+    const todayCivil = await this.repository.getCivilToday();
+    const from = options.from
+      ? parseDateParam(options.from)
+      : new Date(`${todayCivil}T00:00:00.000Z`);
     const dates = Array.from({ length: options.days }, (_, index) =>
       addUtcDays(from, index),
     );
     const end = dates[dates.length - 1];
-    const [templates, counts] = await Promise.all([
+    const [templates, counts, myReservations] = await Promise.all([
       this.repository.getTemplates([program.id], { publicOnly: true }),
       this.repository.getReservationCounts(
         program.id,
         formatDate(from),
         formatDate(end),
       ),
+      options.userId
+        ? this.repository.getUserReservedOccurrences(
+            program.id,
+            options.userId,
+            formatDate(from),
+            formatDate(end),
+          )
+        : Promise.resolve([]),
     ]);
     const reservedByOccurrence = new Map(
       counts.map((row) => [
@@ -143,10 +159,22 @@ export class ClassProgramsService {
         Number(row.reserved_count),
       ]),
     );
+    const myReservedOccurrences = new Set(
+      myReservations.map((row) => `${row.session_date}|${row.start_time}`),
+    );
+    const tomorrowCivil = formatDate(
+      addUtcDays(new Date(`${todayCivil}T00:00:00.000Z`), 1),
+    );
 
     return dates.flatMap((date) => {
       const dateKey = formatDate(date);
       const weekday = date.getUTCDay();
+      const label =
+        dateKey === todayCivil
+          ? 'Hoy'
+          : dateKey === tomorrowCivil
+            ? 'Mañana'
+            : WEEKDAY_LABELS_ES[weekday];
       return templates
         .filter((template) => template.weekday === weekday)
         .map((template) => {
@@ -156,6 +184,7 @@ export class ClassProgramsService {
           const availableSpots = Math.max(0, capacity - reservedCount);
           return {
             date: dateKey,
+            label,
             startTime: template.start_time,
             durationMinutes:
               template.duration_minutes ?? program.duration_minutes,
@@ -164,6 +193,9 @@ export class ClassProgramsService {
             reservedCount,
             availableSpots,
             canReserve: availableSpots > 0,
+            alreadyReserved: myReservedOccurrences.has(
+              `${dateKey}|${template.start_time}`,
+            ),
           };
         });
     });
@@ -377,3 +409,14 @@ function addUtcDays(date: Date, days: number) {
   next.setUTCDate(next.getUTCDate() + days);
   return next;
 }
+
+/** Indexed by `Date.getUTCDay()` (0 = Sunday). */
+const WEEKDAY_LABELS_ES = [
+  'Domingo',
+  'Lunes',
+  'Martes',
+  'Miércoles',
+  'Jueves',
+  'Viernes',
+  'Sábado',
+];
