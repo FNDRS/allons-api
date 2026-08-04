@@ -104,14 +104,21 @@ export function parseDateParam(value?: string) {
   return parseDateString(raw, 'from');
 }
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function parseOptionalUuidParam(value: unknown, field: string) {
   const parsed = optionalString(value);
   if (parsed === null) return null;
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-      parsed,
-    )
-  ) {
+  if (!UUID_PATTERN.test(parsed)) {
+    throw new BadRequestException(`${field} inválido`);
+  }
+  return parsed;
+}
+
+export function parseRequiredUuidParam(value: unknown, field: string) {
+  const parsed = requiredString(value, field);
+  if (!UUID_PATTERN.test(parsed)) {
     throw new BadRequestException(`${field} inválido`);
   }
   return parsed;

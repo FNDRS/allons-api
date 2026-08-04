@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+  Query,
+  Req,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -66,5 +75,20 @@ export class MeClassProgramsController {
     );
     (req as any).userId = user.id;
     return this.classPrograms.createReservation(user.id, body);
+  }
+
+  @Delete('class-reservations/:reservationId')
+  @Throttle({ 'class-reservation-cancel': { ttl: seconds(60), limit: 20 } })
+  @ApiOperation({ summary: 'Cancel a class reservation' })
+  @ApiParam({ name: 'reservationId', format: 'uuid' })
+  async cancelReservation(
+    @Req() req: Request,
+    @Param('reservationId') reservationId: string,
+  ) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
+    (req as any).userId = user.id;
+    return this.classPrograms.cancelReservation(user.id, reservationId);
   }
 }

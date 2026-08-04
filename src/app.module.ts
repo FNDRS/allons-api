@@ -31,9 +31,14 @@ import { AllonsThrottlerGuard } from './shared/rate-limit/allons-throttler.guard
       throttlers: [
         // Baseline protection for the whole API.
         { name: 'default', ttl: seconds(60), limit: 200 },
-        // Sensitive routes get stricter limits via @Throttle.
+        // Sensitive routes get stricter limits via @Throttle. A name used by
+        // @Throttle() but missing here is silently ignored by the underlying
+        // library — the route falls through to 'default' instead.
         { name: 'payment-initiate', ttl: seconds(60), limit: 10 },
         { name: 'paygate-webhook', ttl: seconds(60), limit: 600 },
+        { name: 'class-package-payment', ttl: seconds(60), limit: 10 },
+        { name: 'class-reservation-create', ttl: seconds(60), limit: 20 },
+        { name: 'class-reservation-cancel', ttl: seconds(60), limit: 20 },
       ],
       setHeaders: true,
     }),

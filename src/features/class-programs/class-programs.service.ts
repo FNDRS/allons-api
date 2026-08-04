@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   HttpException,
   HttpStatus,
   Injectable,
@@ -26,6 +27,7 @@ import {
   parseOptionalUuidParam,
   parsePackagePayload,
   parseProgramPayload,
+  parseRequiredUuidParam,
   parseReservationPayload,
   parseTemplatePayload,
 } from './class-programs.validation';
@@ -287,6 +289,32 @@ export class ClassProgramsService {
       instructorName: reservation.instructor_name,
       status: reservation.status,
       createdAt: reservation.created_at.toISOString(),
+    };
+  }
+
+  async cancelReservation(userId: string, reservationId: string) {
+    const id = parseRequiredUuidParam(reservationId, 'reservationId');
+    const result = await this.repository.cancelReservation(userId, id);
+    if (!result.ok) {
+      switch (result.reason) {
+        case 'not_found':
+          throw new NotFoundException('Reserva no encontrada');
+        case 'forbidden':
+          throw new ForbiddenException('La reserva no pertenece al usuario');
+        case 'already_cancelled':
+          throw new BadRequestException('La reserva ya fue cancelada');
+        case 'occurrence_elapsed':
+          throw new BadRequestException(
+            'Esta clase ya pasó; no se puede cancelar',
+          );
+      }
+    }
+
+    return {
+      id: result.reservation.id,
+      status: result.reservation.status,
+      cancelledAt: result.reservation.cancelled_at.toISOString(),
+      refunded: result.refunded,
     };
   }
 

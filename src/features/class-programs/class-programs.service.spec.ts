@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import type { FeatureFlagsService } from '../../shared/feature-flags.service';
 import type { ObservabilityService } from '../../shared/observability/observability.service';
 import type { PaygateService } from '../paygate/paygate.service';
@@ -20,6 +24,7 @@ type RepositoryMock = {
   getActivePackageForPayment: jest.Mock;
   createReservation: jest.Mock;
   listUserClassPasses: jest.Mock;
+  cancelReservation: jest.Mock;
 };
 
 function makeService() {
@@ -36,6 +41,7 @@ function makeService() {
     getActivePackageForPayment: jest.fn(),
     createReservation: jest.fn(),
     listUserClassPasses: jest.fn().mockResolvedValue([]),
+    cancelReservation: jest.fn(),
   } satisfies RepositoryMock;
   const providers = {
     requireMembership: jest.fn().mockResolvedValue({
@@ -419,4 +425,65 @@ describe('ClassProgramsService', () => {
     ).rejects.toMatchObject({ message: 'startTime es requerido' });
     expect(repository.createReservation).not.toHaveBeenCalled();
   });
+
+  it('cancels a reservation and reports whether the credit was refunded', async () => {
+    const { service, repository } = makeService();
+    repository.cancelReservation.mockResolvedValueOnce({
+      ok: true,
+      reservation: {
+        id: '55555555-5555-5555-5555-555555555555',
+        status: 'cancelled',
+        cancelled_at: new Date('2026-08-04T12:00:00.000Z'),
+      },
+      refunded: true,
+    });
+
+    const result = await service.cancelReservation(
+      'user-1',
+      '55555555-5555-5555-5555-555555555555',
+    );
+
+    expect(repository.cancelReservation).toHaveBeenCalledWith(
+      'user-1',
+      '55555555-5555-5555-5555-555555555555',
+    );
+    expect(result).toEqual({
+      id: '55555555-5555-5555-5555-555555555555',
+      status: 'cancelled',
+      cancelledAt: '2026-08-04T12:00:00.000Z',
+      refunded: true,
+    });
+  });
+
+  it('rejects a malformed reservationId before hitting the DB', async () => {
+    const { service, repository } = makeService();
+
+    await expect(
+      service.cancelReservation('user-1', 'not-a-uuid'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(repository.cancelReservation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['not_found', NotFoundException],
+    ['forbidden', ForbiddenException],
+    ['already_cancelled', BadRequestException],
+    ['occurrence_elapsed', BadRequestException],
+  ] as const)(
+    'maps cancellation failure reason "%s" to the right HTTP error',
+    async (reason, expected) => {
+      const { service, repository } = makeService();
+      repository.cancelReservation.mockResolvedValueOnce({
+        ok: false,
+        reason,
+      });
+
+      await expect(
+        service.cancelReservation(
+          'user-1',
+          '55555555-5555-5555-5555-555555555555',
+        ),
+      ).rejects.toBeInstanceOf(expected);
+    },
+  );
 });
