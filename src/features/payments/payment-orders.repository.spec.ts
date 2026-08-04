@@ -31,8 +31,11 @@ function fakeOrder(overrides: Partial<PaymentOrder> = {}): PaymentOrder {
   return {
     id: 'order-1',
     userId: 'user-1',
+    orderType: 'event_ticket',
     eventId: 'event-1',
     entryTypeId: null,
+    classProgramId: null,
+    classPackageId: null,
     quantity: 1,
     amountCents: 10000,
     currency: 'HNL',
@@ -40,6 +43,7 @@ function fakeOrder(overrides: Partial<PaymentOrder> = {}): PaymentOrder {
     paygateLinkId: 'pg-link-1',
     paygatePaymentId: null,
     paygateRawWebhook: null,
+    resolutionSource: null,
     expiresAt: new Date('2026-05-14T22:00:00Z'),
     createdAt: new Date('2026-05-14T20:00:00Z'),
     updatedAt: new Date('2026-05-14T20:00:00Z'),
@@ -64,8 +68,11 @@ describe('PaymentOrdersRepository.create', () => {
     expect(prisma.paymentOrder.create).toHaveBeenCalledWith({
       data: {
         userId: 'user-1',
+        orderType: 'event_ticket',
         eventId: 'event-1',
         entryTypeId: null,
+        classProgramId: null,
+        classPackageId: null,
         quantity: 2,
         amountCents: 5000,
         currency: 'HNL',
@@ -96,6 +103,41 @@ describe('PaymentOrdersRepository.create', () => {
         data: expect.objectContaining({ currency: 'USD' }),
       }),
     );
+  });
+
+  it('creates class package orders without event references', async () => {
+    const { repo, prisma } = buildRepo();
+    prisma.paymentOrder.create.mockResolvedValue(
+      fakeOrder({
+        orderType: 'class_package',
+        eventId: null,
+        classProgramId: 'program-1',
+        classPackageId: 'package-1',
+      }),
+    );
+
+    await repo.create({
+      userId: 'user-1',
+      orderType: 'class_package',
+      eventId: null,
+      entryTypeId: null,
+      classProgramId: 'program-1',
+      classPackageId: 'package-1',
+      quantity: 1,
+      amountCents: 160000,
+      paygateLinkId: 'pg-link-1',
+      expiresAt: new Date('2026-05-14T22:00:00Z'),
+    });
+
+    expect(prisma.paymentOrder.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderType: 'class_package',
+        eventId: null,
+        entryTypeId: null,
+        classProgramId: 'program-1',
+        classPackageId: 'package-1',
+      }),
+    });
   });
 });
 

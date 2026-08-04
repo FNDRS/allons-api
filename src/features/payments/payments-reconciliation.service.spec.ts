@@ -1,6 +1,5 @@
-import type { MeService } from '../me/me.service';
 import type { PaygateService } from '../paygate/paygate.service';
-import type { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
+import type { PaymentFulfillmentService } from './payment-fulfillment.service';
 import { PaymentsReconciliationService } from './payments-reconciliation.service';
 import type { PaymentOrdersRepository } from './payment-orders.repository';
 import type { PaymentOrder } from './payment-orders.types';
@@ -11,14 +10,12 @@ interface Mocks {
     listExpiredPending: jest.Mock;
     listExpiredPendingWithLink: jest.Mock;
     listPaidWithoutTickets: jest.Mock;
+    listPaidClassPackagesWithoutPasses: jest.Mock;
     transitionStatus: jest.Mock;
     canaryStats: jest.Mock;
   };
   paygate: { getPaymentLinkDetail: jest.Mock };
-  me: { createTicket: jest.Mock };
-  supabaseAdmin: {
-    db: { auth: { admin: { getUserById: jest.Mock } } };
-  };
+  fulfillment: { fulfillPaidOrder: jest.Mock };
 }
 
 function buildService(): {
@@ -31,20 +28,17 @@ function buildService(): {
       listExpiredPending: jest.fn().mockResolvedValue([]),
       listExpiredPendingWithLink: jest.fn().mockResolvedValue([]),
       listPaidWithoutTickets: jest.fn().mockResolvedValue([]),
+      listPaidClassPackagesWithoutPasses: jest.fn().mockResolvedValue([]),
       transitionStatus: jest.fn(),
       canaryStats: jest.fn(),
     },
     paygate: { getPaymentLinkDetail: jest.fn() },
-    me: { createTicket: jest.fn() },
-    supabaseAdmin: {
-      db: { auth: { admin: { getUserById: jest.fn() } } },
-    },
+    fulfillment: { fulfillPaidOrder: jest.fn().mockResolvedValue(true) },
   };
   const service = new PaymentsReconciliationService(
     mocks.orders as unknown as PaymentOrdersRepository,
     mocks.paygate as unknown as PaygateService,
-    mocks.me as unknown as MeService,
-    mocks.supabaseAdmin as unknown as SupabaseAdminService,
+    mocks.fulfillment as unknown as PaymentFulfillmentService,
   );
   return { service, mocks };
 }
@@ -53,8 +47,11 @@ function fakeOrder(overrides: Partial<PaymentOrder> = {}): PaymentOrder {
   return {
     id: 'order-1',
     userId: 'user-1',
+    orderType: 'event_ticket',
     eventId: 'event-1',
     entryTypeId: null,
+    classProgramId: null,
+    classPackageId: null,
     quantity: 1,
     amountCents: 10000,
     currency: 'HNL',
@@ -84,27 +81,15 @@ describe('PaymentsReconciliationService.runNightlySweep', () => {
       applied: true,
       order: { ...stuck, status: 'paid' as const },
     });
-    mocks.supabaseAdmin.db.auth.admin.getUserById.mockResolvedValue({
-      data: {
-        user: { email: 'buyer@example.com', user_metadata: { name: 'Buyer' } },
-      },
-    });
-    mocks.me.createTicket.mockResolvedValue({ createdCount: 1 });
-
     const result = await service.runNightlySweep();
 
     expect(mocks.orders.transitionStatus).toHaveBeenCalledWith(
       'order-1',
       expect.objectContaining({ status: 'paid', source: 'cron' }),
     );
-    expect(mocks.me.createTicket).toHaveBeenCalledWith(
-      'user-1',
-      'event-1',
-      1,
-      expect.objectContaining({
-        email: 'buyer@example.com',
-        paymentOrderId: 'order-1',
-      }),
+    expect(mocks.fulfillment.fulfillPaidOrder).toHaveBeenCalledWith(
+      { ...stuck, status: 'paid' },
+      'cron-fulfill',
     );
     expect(result.reconciledPaid).toBe(1);
     expect(result.ticketsBackfilled).toBe(1);
@@ -142,11 +127,6 @@ describe('PaymentsReconciliationService.runNightlySweep', () => {
       applied: true,
       order: fakeOrder({ id: 'order-b', status: 'paid' }),
     });
-    mocks.supabaseAdmin.db.auth.admin.getUserById.mockResolvedValue({
-      data: { user: { email: 'b@example.com', user_metadata: { name: 'B' } } },
-    });
-    mocks.me.createTicket.mockResolvedValue({ createdCount: 1 });
-
     const result = await service.runNightlySweep();
 
     expect(result.paygateErrors).toBe(1);
@@ -196,11 +176,6 @@ describe('PaymentsReconciliationService.runNightlySweep', () => {
       // rejects it).
       return Promise.resolve({ applied: false, reason: 'not_pending' });
     });
-    mocks.supabaseAdmin.db.auth.admin.getUserById.mockResolvedValue({
-      data: { user: { email: 'late@x.com', user_metadata: { name: 'L' } } },
-    });
-    mocks.me.createTicket.mockResolvedValue({ createdCount: 1 });
-
     const result = await service.runNightlySweep();
 
     expect(result.reconciledPaid).toBe(1);
@@ -213,15 +188,34 @@ describe('PaymentsReconciliationService.runNightlySweep', () => {
     mocks.orders.listPaidWithoutTickets.mockResolvedValue([
       fakeOrder({ status: 'paid' }),
     ]);
-    mocks.supabaseAdmin.db.auth.admin.getUserById.mockResolvedValue({
-      data: { user: { email: 'x@y.com', user_metadata: { name: 'X' } } },
-    });
-    mocks.me.createTicket.mockResolvedValue({ createdCount: 1 });
-
     const result = await service.runNightlySweep();
 
     expect(result.ticketsBackfilled).toBe(1);
-    expect(mocks.me.createTicket).toHaveBeenCalled();
+    expect(mocks.fulfillment.fulfillPaidOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'paid' }),
+      'cron-backfill',
+    );
+  });
+
+  it('backfills class passes for paid package orders that have none', async () => {
+    const { service, mocks } = buildService();
+    mocks.orders.listPaidClassPackagesWithoutPasses.mockResolvedValue([
+      fakeOrder({
+        status: 'paid',
+        orderType: 'class_package',
+        eventId: null,
+        classProgramId: 'program-1',
+        classPackageId: 'package-1',
+      }),
+    ]);
+
+    const result = await service.runNightlySweep();
+
+    expect(result.classPassesBackfilled).toBe(1);
+    expect(mocks.fulfillment.fulfillPaidOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ orderType: 'class_package' }),
+      'cron-class-pass-backfill',
+    );
   });
 
   it('records lastSweep snapshot and totals on success', async () => {

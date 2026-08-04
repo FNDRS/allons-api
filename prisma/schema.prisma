@@ -101,11 +101,12 @@ model ClassProgram {
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  provider     Provider                  @relation(fields: [providerId], references: [id], onDelete: Cascade)
-  templates    ClassSessionTemplate[]
-  packages     ClassPackage[]
-  passes       UserClassPass[]
-  reservations ClassSessionReservation[]
+  provider      Provider                  @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  templates     ClassSessionTemplate[]
+  packages      ClassPackage[]
+  passes        UserClassPass[]
+  paymentOrders PaymentOrder[]
+  reservations  ClassSessionReservation[]
 
   @@index([providerId, status, createdAt(sort: Desc)])
   @@map("class_programs")
@@ -143,8 +144,9 @@ model ClassPackage {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  program ClassProgram    @relation(fields: [programId], references: [id], onDelete: Cascade)
-  passes  UserClassPass[]
+  program       ClassProgram    @relation(fields: [programId], references: [id], onDelete: Cascade)
+  passes        UserClassPass[]
+  paymentOrders PaymentOrder[]
 
   @@index([programId, active, sortOrder, createdAt])
   @@map("class_packages")
@@ -413,8 +415,11 @@ enum PaymentOrderStatus {
 model PaymentOrder {
   id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId            String             @map("user_id") @db.Uuid
-  eventId           String             @map("event_id") @db.Uuid
+  orderType         String             @default("event_ticket") @map("order_type")
+  eventId           String?            @map("event_id") @db.Uuid
   entryTypeId       String?            @map("entry_type_id") @db.Uuid
+  classProgramId    String?            @map("class_program_id") @db.Uuid
+  classPackageId    String?            @map("class_package_id") @db.Uuid
   quantity          Int                @default(1)
   amountCents       Int                @map("amount_cents")
   currency          String             @default("HNL") @db.VarChar(3)
@@ -427,14 +432,18 @@ model PaymentOrder {
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  user        Profile         @relation(fields: [userId], references: [userId], onDelete: Restrict)
-  event       Event           @relation(fields: [eventId], references: [id], onDelete: Restrict)
-  tickets     Ticket[]
-  refunds     Refund[]
-  classPasses UserClassPass[]
+  user         Profile         @relation(fields: [userId], references: [userId], onDelete: Restrict)
+  event        Event?          @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  classProgram ClassProgram?   @relation(fields: [classProgramId], references: [id], onDelete: Restrict)
+  classPackage ClassPackage?   @relation(fields: [classPackageId], references: [id], onDelete: Restrict)
+  tickets      Ticket[]
+  refunds      Refund[]
+  classPasses  UserClassPass[]
 
   @@index([userId])
   @@index([eventId])
+  @@index([classPackageId])
+  @@index([classProgramId])
   @@index([status])
   @@map("payment_orders")
 }

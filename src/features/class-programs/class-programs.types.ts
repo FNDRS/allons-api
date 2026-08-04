@@ -79,6 +79,12 @@ export interface PackageRow {
   sort_order: number;
 }
 
+export interface ClassPackagePaymentRow extends PackageRow {
+  provider_id: string;
+  program_title: string;
+  program_status: ProgramStatus;
+}
+
 export interface ReservationCountRow {
   session_date: string;
   start_time: string;

@@ -28,8 +28,11 @@ export class PaymentOrdersRepository {
     return this.prisma.paymentOrder.create({
       data: {
         userId: input.userId,
-        eventId: input.eventId,
+        orderType: input.orderType ?? 'event_ticket',
+        eventId: input.eventId ?? null,
         entryTypeId: input.entryTypeId ?? null,
+        classProgramId: input.classProgramId ?? null,
+        classPackageId: input.classPackageId ?? null,
         quantity: input.quantity,
         amountCents: input.amountCents,
         currency: input.currency ?? 'HNL',
@@ -68,6 +71,16 @@ export class PaymentOrdersRepository {
     return this.prisma.paymentOrder.findMany({
       where: { eventId },
       orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  countRecentPendingForUser(userId: string, since: Date): Promise<number> {
+    return this.prisma.paymentOrder.count({
+      where: {
+        userId,
+        status: 'pending_payment',
+        createdAt: { gte: since },
+      },
     });
   }
 
@@ -197,11 +210,29 @@ export class PaymentOrdersRepository {
     return this.prisma.paymentOrder.findMany({
       where: {
         status: 'paid',
+        orderType: 'event_ticket',
         // "No active tickets" — soft-deleted ones don't count as
         // satisfying the order. If they did, an order whose only
         // ticket got cancelled would be invisible here even though
         // the user has nothing usable.
         tickets: { none: { cancelledAt: null } },
+        updatedAt: { lt: cutoffUpdated },
+      },
+      orderBy: { updatedAt: 'desc' },
+      take: limit,
+    });
+  }
+
+  listPaidClassPackagesWithoutPasses(
+    minAgeMs: number,
+    limit = 50,
+  ): Promise<PaymentOrder[]> {
+    const cutoffUpdated = new Date(Date.now() - minAgeMs);
+    return this.prisma.paymentOrder.findMany({
+      where: {
+        status: 'paid',
+        orderType: 'class_package',
+        classPasses: { none: {} },
         updatedAt: { lt: cutoffUpdated },
       },
       orderBy: { updatedAt: 'desc' },
@@ -250,7 +281,9 @@ export class PaymentOrdersRepository {
         SELECT COUNT(*)::int AS n
         FROM payment_orders o
         LEFT JOIN tickets t ON t.payment_order_id = o.id
-        WHERE o.status = 'paid' AND t.id IS NULL
+        WHERE o.status = 'paid'
+          AND o.order_type = 'event_ticket'
+          AND t.id IS NULL
       `,
       this.prisma.$queryRaw<Array<{ source: string | null; n: number }>>`
         SELECT resolution_source AS source, COUNT(*)::int AS n

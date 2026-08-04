@@ -10,11 +10,11 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { FeatureFlagsService } from '../../shared/feature-flags.service';
 import { ObservabilityService } from '../../shared/observability/observability.service';
 import { MeService } from '../me/me.service';
 import { PaygateService } from '../paygate/paygate.service';
+import { PaymentFulfillmentService } from './payment-fulfillment.service';
 import { PaymentOrdersRepository } from './payment-orders.repository';
 import type { PaymentOrder } from './payment-orders.types';
 
@@ -43,7 +43,7 @@ export class MePaymentsService {
     private readonly paygate: PaygateService,
     private readonly orders: PaymentOrdersRepository,
     private readonly me: MeService,
-    private readonly supabaseAdmin: SupabaseAdminService,
+    private readonly fulfillment: PaymentFulfillmentService,
     private readonly flags: FeatureFlagsService,
     private readonly obs: ObservabilityService,
   ) {}
@@ -213,14 +213,23 @@ export class MePaymentsService {
       where: { paymentOrderId: order.id, cancelledAt: null },
       select: { id: true },
     });
+    const classPasses = await this.prisma.userClassPass.findMany({
+      where: { paymentOrderId: order.id, status: 'active' },
+      select: { id: true },
+    });
 
     return {
       orderId: order.id,
       status: computedStatus,
       amountCents: order.amountCents,
       currency: order.currency,
+      orderType: order.orderType,
       ticketIds: computedStatus === 'paid' ? tickets.map((t) => t.id) : [],
+      classPassIds:
+        computedStatus === 'paid' ? classPasses.map((pass) => pass.id) : [],
       eventId: order.eventId,
+      classPackageId: order.classPackageId,
+      classProgramId: order.classProgramId,
       expiresAt: order.expiresAt?.toISOString() ?? null,
     };
   }
@@ -291,44 +300,21 @@ export class MePaymentsService {
       paygatePaymentId: detail.id,
     });
 
-    // Mint the tickets — same code path the webhook controller uses.
-    // Failures here are logged but not rolled back: the order stays
-    // `paid` and the support flow can backfill missing tickets.
-    try {
-      const { data } = await this.supabaseAdmin.db.auth.admin.getUserById(
-        order.userId,
-      );
-      const userEmail = data?.user?.email ?? null;
-      const userMeta = data?.user?.user_metadata as
-        | { name?: unknown }
-        | null
-        | undefined;
-      const userName =
-        typeof userMeta?.name === 'string' ? userMeta.name : null;
-      if (!userEmail) {
-        throw new Error('No se pudo obtener el email del comprador');
-      }
-      await this.me.createTicket(order.userId, order.eventId, order.quantity, {
-        email: userEmail,
-        name: userName,
-        holders: [],
-        paymentOrderId: order.id,
-        ticketTypeId: order.entryTypeId,
-      });
-      this.logger.log(
-        `reconcile: fulfilled order=${order.id} via Paygate polling (paygatePaymentId=${detail.id})`,
-      );
-    } catch (err) {
-      this.obs.error('payments.order.fulfillment_failed', err, {
-        orderId: order.id,
-        userId: order.userId,
-        eventId: order.eventId,
+    const fulfilled = await this.fulfillment.fulfillPaidOrder(
+      transition.order,
+      'polling-fulfill',
+    );
+    if (!fulfilled) {
+      this.obs.warn('payments.order.fulfillment_deferred', {
+        orderId: transition.order.id,
+        userId: transition.order.userId,
+        orderType: transition.order.orderType,
+        eventId: transition.order.eventId,
+        classPackageId: transition.order.classPackageId,
         source: 'polling',
       });
       this.logger.error(
-        `reconcile: order ${order.id} marked paid but ticket creation failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        `reconcile: order ${transition.order.id} marked paid but fulfillment was deferred`,
       );
     }
 
@@ -343,7 +329,10 @@ export class MePaymentsService {
         status: row.status,
         amountCents: row.amountCents,
         currency: row.currency,
+        orderType: row.orderType,
         eventId: row.eventId,
+        classPackageId: row.classPackageId,
+        classProgramId: row.classProgramId,
         createdAt: row.createdAt.toISOString(),
       })),
     };

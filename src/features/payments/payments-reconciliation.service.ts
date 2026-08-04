@@ -1,8 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
-import { MeService } from '../me/me.service';
 import { PaygateService } from '../paygate/paygate.service';
+import { PaymentFulfillmentService } from './payment-fulfillment.service';
 import { PaymentOrdersRepository } from './payment-orders.repository';
 import type { PaymentOrder } from './payment-orders.types';
 
@@ -18,6 +17,7 @@ export interface SweepResult {
   reconciledPaid: number;
   expiredCancelled: number;
   ticketsBackfilled: number;
+  classPassesBackfilled: number;
   paygateErrors: number;
   startedAt: string;
   finishedAt: string;
@@ -49,8 +49,7 @@ export class PaymentsReconciliationService {
   constructor(
     private readonly orders: PaymentOrdersRepository,
     private readonly paygate: PaygateService,
-    private readonly me: MeService,
-    private readonly supabaseAdmin: SupabaseAdminService,
+    private readonly fulfillment: PaymentFulfillmentService,
   ) {}
 
   /** Snapshot of the last completed cron sweep (or `null` pre-boot). */
@@ -64,7 +63,8 @@ export class PaymentsReconciliationService {
    */
   async backfillTicketsForPaidOrder(order: PaymentOrder): Promise<boolean> {
     if (order.status !== 'paid') return false;
-    return this.tryMintTickets(order, 'admin-override');
+    if (order.orderType !== 'event_ticket') return false;
+    return this.fulfillment.fulfillPaidOrder(order, 'admin-override');
   }
 
   /**
@@ -84,6 +84,7 @@ export class PaymentsReconciliationService {
       reconciledPaid: 0,
       expiredCancelled: 0,
       ticketsBackfilled: 0,
+      classPassesBackfilled: 0,
       paygateErrors: 0,
     };
     let errored = false;
@@ -138,8 +139,21 @@ export class PaymentsReconciliationService {
       const paidNoTickets =
         await this.orders.listPaidWithoutTickets(STUCK_MIN_AGE_MS);
       for (const order of paidNoTickets) {
-        const minted = await this.tryMintTickets(order, 'cron-backfill');
+        const minted = await this.fulfillment.fulfillPaidOrder(
+          order,
+          'cron-backfill',
+        );
         if (minted) stats.ticketsBackfilled += 1;
+      }
+
+      const paidNoPasses =
+        await this.orders.listPaidClassPackagesWithoutPasses(STUCK_MIN_AGE_MS);
+      for (const order of paidNoPasses) {
+        const created = await this.fulfillment.fulfillPaidOrder(
+          order,
+          'cron-class-pass-backfill',
+        );
+        if (created) stats.classPassesBackfilled += 1;
       }
     } catch (err) {
       errored = true;
@@ -159,7 +173,7 @@ export class PaymentsReconciliationService {
         errorMessage,
       };
       this.logger.log(
-        `[reconciliation] sweep done errored=${errored} scanned=${stats.scanned} reconciledPaid=${stats.reconciledPaid} expiredCancelled=${stats.expiredCancelled} ticketsBackfilled=${stats.ticketsBackfilled} paygateErrors=${stats.paygateErrors} durationMs=${this.lastSweep.durationMs}`,
+        `[reconciliation] sweep done errored=${errored} scanned=${stats.scanned} reconciledPaid=${stats.reconciledPaid} expiredCancelled=${stats.expiredCancelled} ticketsBackfilled=${stats.ticketsBackfilled} classPassesBackfilled=${stats.classPassesBackfilled} paygateErrors=${stats.paygateErrors} durationMs=${this.lastSweep.durationMs}`,
       );
     }
     return this.lastSweep;
@@ -210,6 +224,7 @@ export class PaymentsReconciliationService {
     stats: {
       reconciledPaid: number;
       ticketsBackfilled: number;
+      classPassesBackfilled: number;
       paygateErrors: number;
     },
   ): Promise<void> {
@@ -241,50 +256,16 @@ export class PaymentsReconciliationService {
     if (!transition.applied) return;
 
     stats.reconciledPaid += 1;
-    const minted = await this.tryMintTickets(transition.order, 'cron-fulfill');
-    if (minted) stats.ticketsBackfilled += 1;
-  }
-
-  /**
-   * Mints tickets for a `paid` order that doesn't have any. Best
-   * effort; the order stays `paid` regardless. Returns whether
-   * tickets were actually created (so the sweep stats stay honest).
-   */
-  private async tryMintTickets(
-    order: PaymentOrder,
-    label: string,
-  ): Promise<boolean> {
-    try {
-      const { data } = await this.supabaseAdmin.db.auth.admin.getUserById(
-        order.userId,
-      );
-      const email = data?.user?.email ?? null;
-      const meta = data?.user?.user_metadata as { name?: unknown } | null;
-      const name = typeof meta?.name === 'string' ? meta.name : null;
-      if (!email) {
-        this.logger.error(
-          `[reconciliation] ${label}: missing email for user=${order.userId} order=${order.id}`,
-        );
-        return false;
+    const fulfilled = await this.fulfillment.fulfillPaidOrder(
+      transition.order,
+      'cron-fulfill',
+    );
+    if (fulfilled) {
+      if (transition.order.orderType === 'class_package') {
+        stats.classPassesBackfilled += 1;
+      } else {
+        stats.ticketsBackfilled += 1;
       }
-      await this.me.createTicket(order.userId, order.eventId, order.quantity, {
-        email,
-        name,
-        holders: [],
-        paymentOrderId: order.id,
-        ticketTypeId: order.entryTypeId,
-      });
-      this.logger.log(
-        `[reconciliation] ${label}: minted ${order.quantity} ticket(s) for order=${order.id}`,
-      );
-      return true;
-    } catch (err) {
-      this.logger.error(
-        `[reconciliation] ${label}: ticket creation failed for order=${order.id}: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-      return false;
     }
   }
 }

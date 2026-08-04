@@ -5,9 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { PrismaService } from '../../prisma/prisma.service';
+import type { FeatureFlagsService } from '../../shared/feature-flags.service';
+import type { ObservabilityService } from '../../shared/observability/observability.service';
 import type { MeService } from '../me/me.service';
 import type { PaygateService } from '../paygate/paygate.service';
 import { MePaymentsService } from './me-payments.service';
+import type { PaymentFulfillmentService } from './payment-fulfillment.service';
 import type { PaymentOrdersRepository } from './payment-orders.repository';
 import type { PaymentOrder } from './payment-orders.types';
 
@@ -16,6 +19,7 @@ interface Mocks {
     event: { findUnique: jest.Mock };
     paymentOrder: { count: jest.Mock };
     ticket: { count: jest.Mock; findMany: jest.Mock };
+    userClassPass: { findMany: jest.Mock };
     $queryRaw: jest.Mock;
   };
   paygate: {
@@ -31,12 +35,9 @@ interface Mocks {
   me: {
     captureReferralCode: jest.Mock;
     getReferralCheckoutPreview: jest.Mock;
-    createTicket: jest.Mock;
   };
-  supabaseAdmin: {
-    db: {
-      auth: { admin: { getUserById: jest.Mock } };
-    };
+  fulfillment: {
+    fulfillPaidOrder: jest.Mock;
   };
 }
 
@@ -46,6 +47,7 @@ function buildService(): { service: MePaymentsService; mocks: Mocks } {
       event: { findUnique: jest.fn() },
       paymentOrder: { count: jest.fn() },
       ticket: { count: jest.fn(), findMany: jest.fn() },
+      userClassPass: { findMany: jest.fn() },
       $queryRaw: jest.fn(),
     },
     paygate: {
@@ -61,10 +63,9 @@ function buildService(): { service: MePaymentsService; mocks: Mocks } {
     me: {
       captureReferralCode: jest.fn(),
       getReferralCheckoutPreview: jest.fn(),
-      createTicket: jest.fn(),
     },
-    supabaseAdmin: {
-      db: { auth: { admin: { getUserById: jest.fn() } } },
+    fulfillment: {
+      fulfillPaidOrder: jest.fn(),
     },
   };
   const service = new MePaymentsService(
@@ -72,14 +73,19 @@ function buildService(): { service: MePaymentsService; mocks: Mocks } {
     mocks.paygate as unknown as PaygateService,
     mocks.orders as unknown as PaymentOrdersRepository,
     mocks.me as unknown as MeService,
-    mocks.supabaseAdmin as unknown as import('../../shared/supabase/supabase-admin.service').SupabaseAdminService,
+    mocks.fulfillment as unknown as PaymentFulfillmentService,
     {
       paymentsEnabled: true,
       forceFreeEvents: false,
-    } as any,
-    { event: jest.fn(), warn: jest.fn(), error: jest.fn() } as any,
+    } as unknown as FeatureFlagsService,
+    {
+      event: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+    } as unknown as ObservabilityService,
   );
   mocks.prisma.paymentOrder.count.mockResolvedValue(0);
+  mocks.prisma.userClassPass.findMany.mockResolvedValue([]);
   return { service, mocks };
 }
 
@@ -116,8 +122,11 @@ function fakeOrder(overrides: Partial<PaymentOrder> = {}): PaymentOrder {
   return {
     id: 'order-1',
     userId: 'user-1',
+    orderType: 'event_ticket',
     eventId: 'event-1',
     entryTypeId: null,
+    classProgramId: null,
+    classPackageId: null,
     quantity: 1,
     amountCents: 10000,
     currency: 'HNL',
@@ -125,6 +134,7 @@ function fakeOrder(overrides: Partial<PaymentOrder> = {}): PaymentOrder {
     paygateLinkId: 'pg-link-1',
     paygatePaymentId: null,
     paygateRawWebhook: null,
+    resolutionSource: null,
     expiresAt: new Date('2026-05-14T22:00:00Z'),
     createdAt: new Date('2026-05-14T20:00:00Z'),
     updatedAt: new Date('2026-05-14T20:00:00Z'),
@@ -212,12 +222,13 @@ describe('MePaymentsService.initiatePayment', () => {
       discountValueCents: 0,
     });
     mocks.paygate.createPaymentLink.mockResolvedValue(fakeLink());
-    mocks.orders.create.mockImplementation((input) =>
-      fakeOrder({
-        ...input,
-        id: 'order-1',
-        status: 'pending_payment',
-      }),
+    mocks.orders.create.mockImplementation(
+      (input: Parameters<PaymentOrdersRepository['create']>[0]) =>
+        fakeOrder({
+          ...input,
+          id: 'order-1',
+          status: 'pending_payment',
+        }),
     );
 
     const result = await service.initiatePayment('user-1', {
@@ -253,8 +264,9 @@ describe('MePaymentsService.initiatePayment', () => {
       discountValueCents: 2000, // 20 HNL off
     });
     mocks.paygate.createPaymentLink.mockResolvedValue(fakeLink({ amount: 80 }));
-    mocks.orders.create.mockImplementation((input) =>
-      fakeOrder({ ...input, id: 'order-1' }),
+    mocks.orders.create.mockImplementation(
+      (input: Parameters<PaymentOrdersRepository['create']>[0]) =>
+        fakeOrder({ ...input, id: 'order-1' }),
     );
 
     const result = await service.initiatePayment('user-1', {
@@ -311,8 +323,9 @@ describe('MePaymentsService.initiatePayment', () => {
       discountValueCents: 0,
     });
     mocks.paygate.createPaymentLink.mockResolvedValue(fakeLink());
-    mocks.orders.create.mockImplementation((input) =>
-      fakeOrder({ ...input, id: 'order-1' }),
+    mocks.orders.create.mockImplementation(
+      (input: Parameters<PaymentOrdersRepository['create']>[0]) =>
+        fakeOrder({ ...input, id: 'order-1' }),
     );
 
     await expect(
@@ -468,13 +481,7 @@ describe('MePaymentsService.getOrder — Paygate polling reconciliation', () => 
       applied: true,
       order: paidOrder,
     });
-    mocks.supabaseAdmin.db.auth.admin.getUserById.mockResolvedValue({
-      data: {
-        user: { email: 'buyer@example.com', user_metadata: { name: 'Buyer' } },
-      },
-      error: null,
-    });
-    mocks.me.createTicket.mockResolvedValue({ createdCount: 1 });
+    mocks.fulfillment.fulfillPaidOrder.mockResolvedValue(true);
 
     const result = await service.getOrder('user-1', 'order-1');
 
@@ -485,14 +492,9 @@ describe('MePaymentsService.getOrder — Paygate polling reconciliation', () => 
         paygatePaymentId: fakePaidLinkDetail.id,
       }),
     );
-    expect(mocks.me.createTicket).toHaveBeenCalledWith(
-      pendingOrder.userId,
-      pendingOrder.eventId,
-      pendingOrder.quantity,
-      expect.objectContaining({
-        email: 'buyer@example.com',
-        paymentOrderId: pendingOrder.id,
-      }),
+    expect(mocks.fulfillment.fulfillPaidOrder).toHaveBeenCalledWith(
+      paidOrder,
+      'polling-fulfill',
     );
     expect(result.status).toBe('paid');
   });
@@ -519,7 +521,7 @@ describe('MePaymentsService.getOrder — Paygate polling reconciliation', () => 
 
     const result = await service.getOrder('user-1', 'order-1');
 
-    expect(mocks.me.createTicket).not.toHaveBeenCalled();
+    expect(mocks.fulfillment.fulfillPaidOrder).not.toHaveBeenCalled();
     expect(result.status).toBe('paid');
   });
 

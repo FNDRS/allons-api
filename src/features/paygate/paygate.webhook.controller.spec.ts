@@ -6,10 +6,8 @@ import type { Request } from 'express';
 import { PaygateConfigService } from './paygate.config';
 import { PaygateSignatureVerifier } from './paygate.signature';
 import { PaygateWebhookController } from './paygate.webhook.controller';
+import { PaymentFulfillmentService } from '../payments/payment-fulfillment.service';
 import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
-import { MeService } from '../me/me.service';
-import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
-import { PrismaService } from '../../prisma/prisma.service';
 import { ObservabilityService } from '../../shared/observability/observability.service';
 import { PostHogService } from '../../shared/posthog/posthog.service';
 import { SubscriptionService } from '../subscription/subscription.service';
@@ -30,19 +28,8 @@ async function buildController(env: Record<string, string | undefined>) {
         },
       },
       {
-        provide: MeService,
-        useValue: { createTicket: jest.fn() },
-      },
-      {
-        provide: SupabaseAdminService,
-        useValue: { db: { auth: { admin: { getUserById: jest.fn() } } } },
-      },
-      {
-        provide: PrismaService,
-        useValue: {
-          event: { findUnique: jest.fn() },
-          ticket: { count: jest.fn() },
-        },
+        provide: PaymentFulfillmentService,
+        useValue: { fulfillPaidOrder: jest.fn() },
       },
       {
         provide: ConfigService,

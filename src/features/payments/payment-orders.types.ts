@@ -11,8 +11,11 @@ import type {
  */
 export interface CreatePaymentOrderInput {
   userId: string;
-  eventId: string;
+  orderType?: 'event_ticket' | 'class_package';
+  eventId?: string | null;
   entryTypeId?: string | null;
+  classProgramId?: string | null;
+  classPackageId?: string | null;
   quantity: number;
   amountCents: number;
   currency?: string;
