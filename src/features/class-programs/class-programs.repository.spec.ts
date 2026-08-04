@@ -193,4 +193,19 @@ describe('ClassProgramsRepository.listUserClassPasses', () => {
     const [, sqlFragment] = prisma.$queryRaw.mock.calls[0];
     expect(sqlFragment.values).toEqual(['user-1']);
   });
+
+  it('excludes passes with no credits left, but keeps unlimited ones', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await repository.listUserClassPasses('user-1', {
+      providerId: null,
+      programId: null,
+    });
+
+    const [, sqlFragment] = prisma.$queryRaw.mock.calls[0];
+    expect(sqlFragment.text).toContain(
+      '(ucp.credits_remaining IS NULL OR ucp.credits_remaining > 0)',
+    );
+  });
 });

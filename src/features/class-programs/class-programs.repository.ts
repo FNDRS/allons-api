@@ -326,11 +326,10 @@ export class ClassProgramsRepository {
   }
 
   /**
-   * A user's usable class passes: active, within their validity window.
-   * Deliberately does NOT require `credits_remaining > 0` — a finite pack the
-   * user already burned through should still show as "0 left" rather than
-   * silently disappear, which is what `createReservation`'s stricter
-   * `pass_not_found` predicate is for.
+   * A user's usable class passes: active, within their validity window, and
+   * with credits left to spend (unlimited passes have no `credits_remaining`
+   * to check). A finite pack the user already burned through is excluded —
+   * it grants nothing further, so it has no place in a *usable balance* list.
    */
   listUserClassPasses(
     userId: string,
@@ -341,6 +340,7 @@ export class ClassProgramsRepository {
       Prisma.sql`ucp.status = 'active'`,
       Prisma.sql`ucp.valid_from <= now()`,
       Prisma.sql`(ucp.expires_at IS NULL OR ucp.expires_at > now())`,
+      Prisma.sql`(ucp.credits_remaining IS NULL OR ucp.credits_remaining > 0)`,
     ];
     if (filters.providerId) {
       conditions.push(

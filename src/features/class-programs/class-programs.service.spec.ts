@@ -263,7 +263,7 @@ describe('ClassProgramsService', () => {
     });
   });
 
-  it('lists the caller class passes mapped to camelCase, including exhausted ones', async () => {
+  it('lists the caller class passes mapped to camelCase', async () => {
     const { service, repository } = makeService();
     repository.listUserClassPasses.mockResolvedValueOnce([
       {
@@ -275,7 +275,7 @@ describe('ClassProgramsService', () => {
         package_name: 'Pack 8 clases',
         package_kind: 'pack',
         credits_total: 8,
-        credits_remaining: 0,
+        credits_remaining: 5,
         valid_from: new Date('2026-07-01T00:00:00.000Z'),
         expires_at: new Date('2026-09-04T00:00:00.000Z'),
         status: 'active',
@@ -300,7 +300,7 @@ describe('ClassProgramsService', () => {
         packageName: 'Pack 8 clases',
         packageKind: 'pack',
         creditsTotal: 8,
-        creditsRemaining: 0,
+        creditsRemaining: 5,
         validFrom: '2026-07-01T00:00:00.000Z',
         expiresAt: '2026-09-04T00:00:00.000Z',
         status: 'active',
