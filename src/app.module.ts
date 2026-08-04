@@ -7,6 +7,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { SharedModule } from './shared/shared.module';
 import { HealthModule } from './features/health/health.module';
 import { ProvidersModule } from './features/providers/providers.module';
+import { ClassProgramsModule } from './features/class-programs/class-programs.module';
 import { EventsModule } from './features/events/events.module';
 import { AccountModule } from './features/account/account.module';
 import { InterestsModule } from './features/interests/interests.module';
@@ -41,6 +42,7 @@ import { AllonsThrottlerGuard } from './shared/rate-limit/allons-throttler.guard
     SharedModule,
     HealthModule,
     ProvidersModule,
+    ClassProgramsModule,
     EventsModule,
     AccountModule,
     InterestsModule,
