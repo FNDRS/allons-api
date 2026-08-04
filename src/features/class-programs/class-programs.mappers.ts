@@ -1,6 +1,7 @@
 import type {
   ClassPassRow,
   PackageRow,
+  ProgramMetricsRow,
   ProgramRow,
   TemplateRow,
 } from './class-programs.types';
@@ -52,6 +53,15 @@ export function mapPackage(row: PackageRow) {
     kind: row.kind,
     active: row.active,
     sortOrder: row.sort_order,
+  };
+}
+
+export function mapProgramMetrics(row: ProgramMetricsRow) {
+  return {
+    soldSessions: row.sold_sessions,
+    upcomingReservations: row.upcoming_reservations,
+    avgOccupancy: row.avg_occupancy,
+    revenueCents: row.revenue_cents,
   };
 }
 

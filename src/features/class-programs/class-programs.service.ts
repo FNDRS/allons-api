@@ -16,6 +16,7 @@ import {
   mapClassPass,
   mapPackage,
   mapProgram,
+  mapProgramMetrics,
   mapTemplate,
 } from './class-programs.mappers';
 import { ClassProgramsRepository } from './class-programs.repository';
@@ -26,10 +27,13 @@ import {
   parseObjectArray,
   parseOptionalUuidParam,
   parsePackagePayload,
+  parsePackageUpdatePayload,
   parseProgramPayload,
+  parseProgramUpdatePayload,
   parseRequiredUuidParam,
   parseReservationPayload,
   parseTemplatePayload,
+  parseTemplateUpdatePayload,
 } from './class-programs.validation';
 
 @Injectable()
@@ -52,7 +56,10 @@ export class ClassProgramsService {
       membership.providerId,
       { publicOnly: false },
     );
-    return this.withChildren(programs, { publicOnly: false });
+    const withChildren = await this.withChildren(programs, {
+      publicOnly: false,
+    });
+    return this.attachMetrics(withChildren);
   }
 
   async createProviderProgram(userId: string, body: Record<string, unknown>) {
@@ -98,6 +105,60 @@ export class ClassProgramsService {
       parsePackagePayload(body),
     );
     return mapPackage(row);
+  }
+
+  async updateProviderProgram(
+    userId: string,
+    programId: string,
+    body: Record<string, unknown>,
+  ) {
+    await this.assertProviderProgramAccess(userId, programId);
+    const updated = await this.repository.updateProgram(
+      programId,
+      parseProgramUpdatePayload(body),
+    );
+    if (!updated) throw new NotFoundException('Programa no encontrado');
+    return this.getProviderProgramForUser(userId, programId);
+  }
+
+  async updateSessionTemplate(
+    userId: string,
+    templateId: string,
+    body: Record<string, unknown>,
+  ) {
+    await this.assertProviderTemplateAccess(userId, templateId);
+    const updated = await this.repository.updateTemplate(
+      templateId,
+      parseTemplateUpdatePayload(body),
+    );
+    if (!updated) throw new NotFoundException('Horario no encontrado');
+    return mapTemplate(updated);
+  }
+
+  async deactivateSessionTemplate(userId: string, templateId: string) {
+    await this.assertProviderTemplateAccess(userId, templateId);
+    await this.repository.deactivateTemplate(templateId);
+    return { deactivated: true };
+  }
+
+  async updatePackage(
+    userId: string,
+    packageId: string,
+    body: Record<string, unknown>,
+  ) {
+    await this.assertProviderPackageAccess(userId, packageId);
+    const updated = await this.repository.updatePackage(
+      packageId,
+      parsePackageUpdatePayload(body),
+    );
+    if (!updated) throw new NotFoundException('Paquete no encontrado');
+    return mapPackage(updated);
+  }
+
+  async deactivatePackage(userId: string, packageId: string) {
+    await this.assertProviderPackageAccess(userId, packageId);
+    await this.repository.deactivatePackage(packageId);
+    return { deactivated: true };
   }
 
   async listPublicPrograms(providerId: string) {
@@ -375,7 +436,32 @@ export class ClassProgramsService {
     const [withChildren] = await this.withChildren([program], {
       publicOnly: false,
     });
-    return withChildren;
+    const [withMetrics] = await this.attachMetrics([withChildren]);
+    return withMetrics;
+  }
+
+  /**
+   * Provider-only aggregates (sold sessions, upcoming reservations, average
+   * occupancy, revenue) — never merged inside `withChildren`, which is also
+   * used by the public listing/detail routes and must not leak this data.
+   */
+  private async attachMetrics<T extends { id: string }>(programs: T[]) {
+    if (programs.length === 0) return [];
+    const rows = await this.repository.getProgramMetrics(
+      programs.map((program) => program.id),
+    );
+    const metricsById = new Map(
+      rows.map((row) => [row.program_id, mapProgramMetrics(row)]),
+    );
+    return programs.map((program) => ({
+      ...program,
+      metrics: metricsById.get(program.id) ?? {
+        soldSessions: 0,
+        upcomingReservations: 0,
+        avgOccupancy: null,
+        revenueCents: 0,
+      },
+    }));
   }
 
   private async assertProviderProgramAccess(userId: string, programId: string) {
@@ -388,6 +474,34 @@ export class ClassProgramsService {
       programId,
     );
     if (!found) throw new NotFoundException('Programa no encontrado');
+  }
+
+  /** Templates/packages are addressed by their own id (no programId in the route), so ownership resolves through the parent program instead. */
+  private async assertProviderTemplateAccess(
+    userId: string,
+    templateId: string,
+  ) {
+    const membership = await this.providers.requireMembership(userId, [
+      'owner',
+      'admin',
+    ]);
+    const programId = await this.repository.findProviderProgramIdForTemplate(
+      membership.providerId,
+      templateId,
+    );
+    if (!programId) throw new NotFoundException('Horario no encontrado');
+  }
+
+  private async assertProviderPackageAccess(userId: string, packageId: string) {
+    const membership = await this.providers.requireMembership(userId, [
+      'owner',
+      'admin',
+    ]);
+    const programId = await this.repository.findProviderProgramIdForPackage(
+      membership.providerId,
+      packageId,
+    );
+    if (!programId) throw new NotFoundException('Paquete no encontrado');
   }
 
   private async getProgramOrThrow(

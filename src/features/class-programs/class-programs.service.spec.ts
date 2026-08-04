@@ -27,6 +27,14 @@ type RepositoryMock = {
   cancelReservation: jest.Mock;
   getCivilToday: jest.Mock;
   getUserReservedOccurrences: jest.Mock;
+  updateProgram: jest.Mock;
+  findProviderProgramIdForTemplate: jest.Mock;
+  updateTemplate: jest.Mock;
+  deactivateTemplate: jest.Mock;
+  findProviderProgramIdForPackage: jest.Mock;
+  updatePackage: jest.Mock;
+  deactivatePackage: jest.Mock;
+  getProgramMetrics: jest.Mock;
 };
 
 function makeService() {
@@ -48,6 +56,14 @@ function makeService() {
     // weekday name unless a test deliberately aligns them for "Hoy"/"Mañana".
     getCivilToday: jest.fn().mockResolvedValue('2020-01-01'),
     getUserReservedOccurrences: jest.fn().mockResolvedValue([]),
+    updateProgram: jest.fn(),
+    findProviderProgramIdForTemplate: jest.fn(),
+    updateTemplate: jest.fn(),
+    deactivateTemplate: jest.fn(),
+    findProviderProgramIdForPackage: jest.fn(),
+    updatePackage: jest.fn(),
+    deactivatePackage: jest.fn(),
+    getProgramMetrics: jest.fn().mockResolvedValue([]),
   } satisfies RepositoryMock;
   const providers = {
     requireMembership: jest.fn().mockResolvedValue({
@@ -192,6 +208,46 @@ describe('ClassProgramsService', () => {
     });
   });
 
+  it("attaches each program's own metrics on the provider listing", async () => {
+    const { service, repository } = makeService();
+    const otherProgram = { ...programRow, id: 'other-program-id' };
+    repository.getProgramsByProvider.mockResolvedValueOnce([
+      programRow,
+      otherProgram,
+    ]);
+    repository.getProgramMetrics.mockResolvedValueOnce([
+      {
+        program_id: programRow.id,
+        sold_sessions: 12,
+        upcoming_reservations: 3,
+        avg_occupancy: 0.75,
+        revenue_cents: 280000,
+      },
+      // otherProgram deliberately omitted — must default to zeroed metrics,
+      // not be dropped from the result or throw.
+    ]);
+
+    const [withMetrics, otherWithMetrics] =
+      await service.listProviderPrograms('user-1');
+
+    expect(repository.getProgramMetrics).toHaveBeenCalledWith([
+      programRow.id,
+      'other-program-id',
+    ]);
+    expect(withMetrics.metrics).toEqual({
+      soldSessions: 12,
+      upcomingReservations: 3,
+      avgOccupancy: 0.75,
+      revenueCents: 280000,
+    });
+    expect(otherWithMetrics.metrics).toEqual({
+      soldSessions: 0,
+      upcomingReservations: 0,
+      avgOccupancy: null,
+      revenueCents: 0,
+    });
+  });
+
   it('requests only published programs on public provider listings', async () => {
     const { service, repository } = makeService();
     repository.getProgramsByProvider.mockResolvedValueOnce([programRow]);
@@ -222,6 +278,28 @@ describe('ClassProgramsService', () => {
       'admin',
     ]);
     expect(repository.createPackage).not.toHaveBeenCalled();
+  });
+
+  it("rejects updating a template that isn't owned by the caller's provider", async () => {
+    const { service, repository } = makeService();
+    repository.findProviderProgramIdForTemplate.mockResolvedValueOnce(null);
+
+    await expect(
+      service.updateSessionTemplate('user-1', 'someone-elses-template', {
+        capacity: 10,
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(repository.updateTemplate).not.toHaveBeenCalled();
+  });
+
+  it("rejects deactivating a package that isn't owned by the caller's provider", async () => {
+    const { service, repository } = makeService();
+    repository.findProviderProgramIdForPackage.mockResolvedValueOnce(null);
+
+    await expect(
+      service.deactivatePackage('user-1', 'someone-elses-package'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(repository.deactivatePackage).not.toHaveBeenCalled();
   });
 
   it('rejects normalized invalid calendar dates', async () => {
