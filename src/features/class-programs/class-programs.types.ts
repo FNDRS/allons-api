@@ -118,6 +118,8 @@ export type ReservationCreateResult =
       ok: false;
       reason:
         | 'template_not_found'
+        | 'template_ambiguous'
+        | 'occurrence_elapsed'
         | 'pass_not_found'
         | 'capacity_full'
         | 'duplicate_reservation';

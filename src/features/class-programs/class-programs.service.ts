@@ -243,6 +243,12 @@ export class ClassProgramsService {
       switch (result.reason) {
         case 'template_not_found':
           throw new NotFoundException('Horario no encontrado');
+        case 'template_ambiguous':
+          throw new BadRequestException(
+            'Horario duplicado; contacta al comercio',
+          );
+        case 'occurrence_elapsed':
+          throw new BadRequestException('Este horario ya pasó');
         case 'pass_not_found':
           throw new BadRequestException('No tienes sesiones disponibles');
         case 'capacity_full':

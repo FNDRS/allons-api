@@ -191,8 +191,12 @@ export class ClassProgramsRepository {
     return this.prisma
       .$transaction(async (tx): Promise<ReservationCreateResult> => {
         await tx.$executeRaw`
-        SELECT pg_advisory_xact_lock(hashtext(${`${payload.programId}|${payload.date}|${payload.startTime}`}))
-      `;
+          SELECT pg_advisory_xact_lock(hashtext(
+            (${payload.programId}::uuid)::text || '|' ||
+            (${payload.date}::date)::text || '|' ||
+            to_char(${payload.startTime}::time, 'HH24:MI')
+          ))
+        `;
 
         const templateRows = await tx.$queryRaw<
           Array<{
@@ -202,12 +206,14 @@ export class ClassProgramsRepository {
             duration_minutes: number;
             instructor_name: string | null;
             capacity: number;
+            template_count: number;
           }>
         >`
         SELECT t.id AS template_id, p.provider_id, p.id AS program_id,
           COALESCE(t.duration_minutes, p.duration_minutes) AS duration_minutes,
           COALESCE(t.instructor_name, p.instructor_name) AS instructor_name,
-          COALESCE(t.capacity, p.capacity_per_session) AS capacity
+          COALESCE(t.capacity, p.capacity_per_session) AS capacity,
+          count(*) OVER ()::int AS template_count
         FROM class_session_templates t
         JOIN class_programs p ON p.id = t.program_id
         WHERE p.id = ${payload.programId}::uuid
@@ -215,10 +221,23 @@ export class ClassProgramsRepository {
           AND t.active = true
           AND t.weekday = EXTRACT(DOW FROM ${payload.date}::date)::int
           AND t.start_time = ${payload.startTime}::time
+        ORDER BY t.created_at ASC, t.id ASC
         LIMIT 1
       `;
         const template = templateRows[0];
         if (!template) return { ok: false, reason: 'template_not_found' };
+        if (template.template_count > 1) {
+          return { ok: false, reason: 'template_ambiguous' };
+        }
+
+        const elapsedRows = await tx.$queryRaw<Array<{ elapsed: boolean }>>`
+          SELECT (
+            ${payload.date}::date + ${payload.startTime}::time
+          ) <= (now() AT TIME ZONE 'America/Tegucigalpa') AS elapsed
+        `;
+        if (elapsedRows[0]?.elapsed) {
+          return { ok: false, reason: 'occurrence_elapsed' };
+        }
 
         const passRows = await tx.$queryRaw<
           Array<{

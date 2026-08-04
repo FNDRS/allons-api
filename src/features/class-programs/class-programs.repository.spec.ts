@@ -35,8 +35,10 @@ describe('ClassProgramsRepository.createReservation', () => {
           duration_minutes: 60,
           instructor_name: 'Francisco Guillen',
           capacity: 8,
+          template_count: 1,
         },
       ])
+      .mockResolvedValueOnce([{ elapsed: false }])
       .mockResolvedValueOnce([
         {
           id: '66666666-6666-6666-6666-666666666666',
@@ -73,7 +75,7 @@ describe('ClassProgramsRepository.createReservation', () => {
       reservation: { id: '55555555-5555-5555-5555-555555555555' },
     });
     expect(tx.$executeRaw).toHaveBeenCalledTimes(2);
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(5);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(6);
   });
 
   it('returns capacity_full before inserting when the occurrence is full', async () => {
@@ -87,8 +89,10 @@ describe('ClassProgramsRepository.createReservation', () => {
           duration_minutes: 60,
           instructor_name: null,
           capacity: 2,
+          template_count: 1,
         },
       ])
+      .mockResolvedValueOnce([{ elapsed: false }])
       .mockResolvedValueOnce([
         {
           id: '66666666-6666-6666-6666-666666666666',
@@ -105,6 +109,56 @@ describe('ClassProgramsRepository.createReservation', () => {
 
     expect(result).toEqual({ ok: false, reason: 'capacity_full' });
     expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(4);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(5);
+  });
+
+  it('returns occurrence_elapsed before locking or decrementing a pass', async () => {
+    const { repository, tx } = buildRepository();
+    tx.$queryRaw
+      .mockResolvedValueOnce([
+        {
+          template_id: '33333333-3333-3333-3333-333333333333',
+          provider_id: '11111111-1111-1111-1111-111111111111',
+          program_id: payload.programId,
+          duration_minutes: 60,
+          instructor_name: null,
+          capacity: 2,
+          template_count: 1,
+        },
+      ])
+      .mockResolvedValueOnce([{ elapsed: true }]);
+
+    const result = await repository.createReservation(
+      '77777777-7777-7777-7777-777777777777',
+      payload,
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'occurrence_elapsed' });
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns template_ambiguous when multiple active templates match the slot', async () => {
+    const { repository, tx } = buildRepository();
+    tx.$queryRaw.mockResolvedValueOnce([
+      {
+        template_id: '33333333-3333-3333-3333-333333333333',
+        provider_id: '11111111-1111-1111-1111-111111111111',
+        program_id: payload.programId,
+        duration_minutes: 60,
+        instructor_name: null,
+        capacity: 2,
+        template_count: 2,
+      },
+    ]);
+
+    const result = await repository.createReservation(
+      '77777777-7777-7777-7777-777777777777',
+      payload,
+    );
+
+    expect(result).toEqual({ ok: false, reason: 'template_ambiguous' });
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
   });
 });

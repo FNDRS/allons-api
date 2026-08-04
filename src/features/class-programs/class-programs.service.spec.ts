@@ -334,4 +334,23 @@ describe('ClassProgramsService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(repository.createReservation).not.toHaveBeenCalled();
   });
+
+  it('uses reservation-specific validation messages', async () => {
+    const { service, repository } = makeService();
+
+    await expect(
+      service.createReservation('user-1', {
+        programId: programRow.id,
+        date: '2026-02-31',
+        startTime: '09:00',
+      }),
+    ).rejects.toMatchObject({ message: 'date inválido' });
+    await expect(
+      service.createReservation('user-1', {
+        programId: programRow.id,
+        date: '2026-08-04',
+      }),
+    ).rejects.toMatchObject({ message: 'startTime es requerido' });
+    expect(repository.createReservation).not.toHaveBeenCalled();
+  });
 });
