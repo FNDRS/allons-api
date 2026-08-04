@@ -208,4 +208,22 @@ describe('ClassProgramsRepository.listUserClassPasses', () => {
       '(ucp.credits_remaining IS NULL OR ucp.credits_remaining > 0)',
     );
   });
+
+  it('returns only published-program balances grouped by program', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await repository.listUserClassPasses('user-1', {
+      providerId: null,
+      programId: null,
+    });
+
+    const [strings, sqlFragment] = prisma.$queryRaw.mock.calls[0];
+    const fullSql = `${strings.join(' ')} ${sqlFragment.text}`;
+    expect(fullSql).toContain("cp.status = 'published'");
+    expect(fullSql).toContain(
+      'GROUP BY ucp.provider_id, ucp.program_id, cp.title',
+    );
+    expect(fullSql).toContain('sum(ucp.credits_remaining)::int');
+  });
 });

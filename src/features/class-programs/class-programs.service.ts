@@ -23,6 +23,7 @@ import {
   formatDate,
   parseDateParam,
   parseObjectArray,
+  parseOptionalUuidParam,
   parsePackagePayload,
   parseProgramPayload,
   parseReservationPayload,
@@ -246,8 +247,8 @@ export class ClassProgramsService {
     filters: { providerId?: string; programId?: string },
   ) {
     const rows = await this.repository.listUserClassPasses(userId, {
-      providerId: filters.providerId ?? null,
-      programId: filters.programId ?? null,
+      providerId: parseOptionalUuidParam(filters.providerId, 'providerId'),
+      programId: parseOptionalUuidParam(filters.programId, 'programId'),
     });
     return rows.map(mapClassPass);
   }

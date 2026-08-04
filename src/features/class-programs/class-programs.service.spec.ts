@@ -318,6 +318,15 @@ describe('ClassProgramsService', () => {
     expect(result).toEqual([]);
   });
 
+  it('rejects invalid class pass filters before hitting the DB', async () => {
+    const { service, repository } = makeService();
+
+    await expect(
+      service.listMyClassPasses('user-1', { providerId: 'not-a-uuid' }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(repository.listUserClassPasses).not.toHaveBeenCalled();
+  });
+
   it('creates a reservation from a valid class occurrence', async () => {
     const { service, repository } = makeService();
     repository.createReservation.mockResolvedValueOnce({

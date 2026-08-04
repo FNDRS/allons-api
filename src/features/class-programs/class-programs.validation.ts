@@ -104,6 +104,19 @@ export function parseDateParam(value?: string) {
   return parseDateString(raw, 'from');
 }
 
+export function parseOptionalUuidParam(value: unknown, field: string) {
+  const parsed = optionalString(value);
+  if (parsed === null) return null;
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      parsed,
+    )
+  ) {
+    throw new BadRequestException(`${field} inválido`);
+  }
+  return parsed;
+}
+
 function parseDateField(value: unknown, field: string) {
   return parseDateString(requiredString(value, field), field);
 }

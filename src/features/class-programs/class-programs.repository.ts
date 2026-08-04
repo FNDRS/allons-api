@@ -326,10 +326,10 @@ export class ClassProgramsRepository {
   }
 
   /**
-   * A user's usable class passes: active, within their validity window, and
-   * with credits left to spend (unlimited passes have no `credits_remaining`
-   * to check). A finite pack the user already burned through is excluded —
-   * it grants nothing further, so it has no place in a *usable balance* list.
+   * A user's usable class balance by published program: active, within the
+   * validity window, and with credits left to spend (unlimited passes have no
+   * `credits_remaining` to check). A finite pack the user already burned
+   * through is excluded because it grants nothing further.
    */
   listUserClassPasses(
     userId: string,
@@ -353,23 +353,25 @@ export class ClassProgramsRepository {
 
     return this.prisma.$queryRaw<ClassPassRow[]>`
       SELECT
-        ucp.id,
+        MIN(ucp.id::text) AS id,
         ucp.provider_id,
         ucp.program_id,
         cp.title AS program_title,
-        ucp.package_id,
-        pkg.name AS package_name,
-        pkg.kind AS package_kind,
-        ucp.credits_total,
-        ucp.credits_remaining,
-        ucp.valid_from,
-        ucp.expires_at,
-        ucp.status
+        CASE WHEN count(*) = 1 THEN MIN(ucp.package_id::text)::uuid ELSE NULL END AS package_id,
+        CASE WHEN count(*) = 1 THEN MIN(pkg.name) ELSE NULL END AS package_name,
+        CASE WHEN count(*) = 1 THEN MIN(pkg.kind) ELSE NULL END AS package_kind,
+        CASE WHEN bool_or(ucp.credits_total IS NULL) THEN NULL ELSE sum(ucp.credits_total)::int END AS credits_total,
+        CASE WHEN bool_or(ucp.credits_remaining IS NULL) THEN NULL ELSE sum(ucp.credits_remaining)::int END AS credits_remaining,
+        MIN(ucp.valid_from) AS valid_from,
+        MIN(ucp.expires_at) AS expires_at,
+        'active' AS status
       FROM user_class_passes ucp
       JOIN class_programs cp ON cp.id = ucp.program_id
       LEFT JOIN class_packages pkg ON pkg.id = ucp.package_id
       WHERE ${Prisma.join(conditions, ' AND ')}
-      ORDER BY ucp.expires_at ASC NULLS LAST, ucp.created_at ASC
+        AND cp.status = 'published'
+      GROUP BY ucp.provider_id, ucp.program_id, cp.title
+      ORDER BY MIN(ucp.expires_at) ASC NULLS LAST, MIN(ucp.created_at) ASC
     `;
   }
 }
