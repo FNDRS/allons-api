@@ -201,6 +201,11 @@ model ClassSessionReservation {
   pass     UserClassPass?        @relation(fields: [passId], references: [id], onDelete: SetNull)
 
   @@index([programId, sessionDate, startTime, status], map: "class_session_reservations_occurrence_idx")
+  // Also has a partial unique index preventing a duplicate active booking per
+  // user/occurrence: `class_session_reservations_user_occurrence_uidx` on
+  // (userId, programId, sessionDate, startTime) WHERE status = 'reserved'.
+  // Not representable in the Prisma schema DSL (no partial index support),
+  // so it only exists in migration 20260804010000_class_programs_foundation.
   @@map("class_session_reservations")
 }
 
