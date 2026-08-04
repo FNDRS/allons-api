@@ -107,14 +107,28 @@ export class ClassProgramsService {
     return this.withChildren(programs, { publicOnly: true });
   }
 
-  async getPublicProgram(programId: string) {
+  async getPublicProgram(
+    programId: string,
+    options: { userId?: string | null } = {},
+  ) {
     const program = await this.getProgramOrThrow(programId, {
       publicOnly: true,
     });
     const [withChildren] = await this.withChildren([program], {
       publicOnly: true,
     });
-    return withChildren;
+    // `listUserClassPasses` groups by program, so this is at most one row —
+    // the caller's combined balance across every pass they hold here, or
+    // null for a guest (or a user with no active pass for this program).
+    const myBalance = options.userId
+      ? ((
+          await this.repository.listUserClassPasses(options.userId, {
+            providerId: null,
+            programId,
+          })
+        )[0] ?? null)
+      : null;
+    return { ...withChildren, myBalance: myBalance && mapClassPass(myBalance) };
   }
 
   async getAvailability(

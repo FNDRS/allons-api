@@ -21,7 +21,7 @@ export class ClassProgramsController {
    * Best-effort auth for a public route: a present-but-invalid/expired token
    * degrades to guest instead of failing the request, since browsing a class
    * program never requires an account. Only `getAvailability`'s
-   * `alreadyReserved` flag depends on this.
+   * `alreadyReserved` and `getPublicProgram`'s `myBalance` depend on this.
    */
   private async tryGetUserId(req: Request): Promise<string | null> {
     if (!req.headers.authorization) return null;
@@ -41,8 +41,12 @@ export class ClassProgramsController {
   }
 
   @Get('class-programs/:programId')
-  getPublicProgram(@Param('programId') programId: string) {
-    return this.classPrograms.getPublicProgram(programId);
+  async getPublicProgram(
+    @Req() req: Request,
+    @Param('programId') programId: string,
+  ) {
+    const userId = await this.tryGetUserId(req);
+    return this.classPrograms.getPublicProgram(programId, { userId });
   }
 
   @Get('class-programs/:programId/availability')

@@ -6,6 +6,7 @@ import type { ClassProgramsService } from './class-programs.service';
 function makeController(getAuthenticatedUser: jest.Mock) {
   const classPrograms = {
     getAvailability: jest.fn().mockResolvedValue([]),
+    getPublicProgram: jest.fn().mockResolvedValue({}),
   } as unknown as jest.Mocked<ClassProgramsService>;
   const supabaseAdmin = {
     getAuthenticatedUser,
@@ -66,6 +67,25 @@ describe('ClassProgramsController.getAvailability', () => {
       from: undefined,
       days: 7,
       userId: null,
+    });
+  });
+});
+
+describe('ClassProgramsController.getPublicProgram', () => {
+  // Auth degradation itself (missing/invalid token -> guest) is already
+  // covered by the getAvailability tests above via the same tryGetUserId
+  // helper; this only checks the resolved id reaches the right call.
+  it('passes the resolved userId through to the service', async () => {
+    const getAuthenticatedUser = jest.fn().mockResolvedValue({ id: 'user-1' });
+    const { controller, classPrograms } = makeController(getAuthenticatedUser);
+
+    await controller.getPublicProgram(
+      makeRequest('Bearer good-token'),
+      'program-1',
+    );
+
+    expect(classPrograms.getPublicProgram).toHaveBeenCalledWith('program-1', {
+      userId: 'user-1',
     });
   });
 });
