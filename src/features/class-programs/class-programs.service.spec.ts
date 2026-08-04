@@ -1,4 +1,8 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import type { FeatureFlagsService } from '../../shared/feature-flags.service';
+import type { ObservabilityService } from '../../shared/observability/observability.service';
+import type { PaygateService } from '../paygate/paygate.service';
+import type { PaymentOrdersRepository } from '../payments/payment-orders.repository';
 import { ProvidersService } from '../providers/providers.service';
 import { ClassProgramsRepository } from './class-programs.repository';
 import { ClassProgramsService } from './class-programs.service';
@@ -13,6 +17,7 @@ type RepositoryMock = {
   getTemplates: jest.Mock;
   getPackages: jest.Mock;
   getReservationCounts: jest.Mock;
+  getActivePackageForPayment: jest.Mock;
 };
 
 function makeService() {
@@ -26,6 +31,7 @@ function makeService() {
     getTemplates: jest.fn().mockResolvedValue([]),
     getPackages: jest.fn().mockResolvedValue([]),
     getReservationCounts: jest.fn(),
+    getActivePackageForPayment: jest.fn(),
   } satisfies RepositoryMock;
   const providers = {
     requireMembership: jest.fn().mockResolvedValue({
@@ -33,13 +39,38 @@ function makeService() {
       role: 'owner',
     }),
   } as unknown as jest.Mocked<ProvidersService>;
+  const paygate = {
+    createPaymentLink: jest.fn().mockResolvedValue({
+      id: 'pg-link-1',
+      link: 'https://stage.paygate.biz/checkout/pg-link-1',
+      expirationHours: 2,
+      currency: 'HNL',
+    }),
+  };
+  const orders = {
+    countRecentPendingForUser: jest.fn().mockResolvedValue(0),
+    create: jest.fn().mockImplementation((input) => ({
+      id: 'order-1',
+      status: 'pending_payment',
+      ...input,
+    })),
+  };
+  const flags = { paymentsEnabled: true, forceFreeEvents: false };
+  const obs = { event: jest.fn(), warn: jest.fn() };
   return {
     service: new ClassProgramsService(
       repository as unknown as ClassProgramsRepository,
       providers,
+      paygate as unknown as PaygateService,
+      orders as unknown as PaymentOrdersRepository,
+      flags as unknown as FeatureFlagsService,
+      obs as unknown as ObservabilityService,
     ),
     repository,
     providers,
+    paygate,
+    orders,
+    flags,
   };
 }
 
@@ -183,5 +214,48 @@ describe('ClassProgramsService', () => {
         canReserve: true,
       },
     ]);
+  });
+
+  it('creates a Paygate order for an active published class package', async () => {
+    const { service, repository, paygate, orders } = makeService();
+    repository.getActivePackageForPayment.mockResolvedValueOnce({
+      id: '44444444-4444-4444-4444-444444444444',
+      program_id: programRow.id,
+      provider_id: programRow.provider_id,
+      program_title: programRow.title,
+      program_status: 'published',
+      name: '8 sesiones',
+      price: 1600,
+      credits: 8,
+      validity_days: 30,
+      kind: 'pack',
+      active: true,
+      sort_order: 0,
+    });
+
+    const result = await service.initiatePackagePayment(
+      'user-1',
+      '44444444-4444-4444-4444-444444444444',
+    );
+
+    expect(paygate.createPaymentLink).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 1600, currency: 'HNL' }),
+    );
+    expect(orders.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        orderType: 'class_package',
+        eventId: null,
+        classProgramId: programRow.id,
+        classPackageId: '44444444-4444-4444-4444-444444444444',
+        quantity: 1,
+        amountCents: 160000,
+      }),
+    );
+    expect(result).toMatchObject({
+      orderId: 'order-1',
+      packageId: '44444444-4444-4444-4444-444444444444',
+      programId: programRow.id,
+    });
   });
 });

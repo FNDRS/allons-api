@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import type {
+  ClassPackagePaymentRow,
   PackagePayload,
   PackageRow,
   ProgramPayload,
@@ -163,5 +164,20 @@ export class ClassProgramsRepository {
         AND session_date BETWEEN ${from}::date AND ${to}::date
       GROUP BY session_date, start_time
     `;
+  }
+
+  async getActivePackageForPayment(packageId: string) {
+    const rows = await this.prisma.$queryRaw<ClassPackagePaymentRow[]>`
+      SELECT cp.id, cp.program_id, cp.name, cp.price::float8 AS price,
+        cp.credits, cp.validity_days, cp.kind, cp.active, cp.sort_order,
+        p.provider_id, p.title AS program_title, p.status AS program_status
+      FROM class_packages cp
+      JOIN class_programs p ON p.id = cp.program_id
+      WHERE cp.id = ${packageId}::uuid
+        AND cp.active = true
+        AND p.status = 'published'
+      LIMIT 1
+    `;
+    return rows[0] ?? null;
   }
 }

@@ -8,6 +8,7 @@ import { AdminPaymentsController } from './admin-payments.controller';
 import { AdminRefundsController } from './admin-refunds.controller';
 import { MePaymentsController } from './me-payments.controller';
 import { MePaymentsService } from './me-payments.service';
+import { PaymentFulfillmentService } from './payment-fulfillment.service';
 import { PaymentOrdersRepository } from './payment-orders.repository';
 import { PaymentsReconciliationService } from './payments-reconciliation.service';
 import { ProviderPaymentsController } from './provider-payments.controller';
@@ -25,6 +26,7 @@ import { RefundsRepository } from './refunds.repository';
   ],
   providers: [
     PaymentOrdersRepository,
+    PaymentFulfillmentService,
     MePaymentsService,
     ProviderPaymentsService,
     PaymentsReconciliationService,
@@ -32,6 +34,7 @@ import { RefundsRepository } from './refunds.repository';
   ],
   exports: [
     PaymentOrdersRepository,
+    PaymentFulfillmentService,
     MePaymentsService,
     PaymentsReconciliationService,
     RefundsRepository,

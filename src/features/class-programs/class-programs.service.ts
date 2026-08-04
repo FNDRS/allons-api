@@ -1,4 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import { FeatureFlagsService } from '../../shared/feature-flags.service';
+import { ObservabilityService } from '../../shared/observability/observability.service';
+import { PaygateService } from '../paygate/paygate.service';
+import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
 import { ProvidersService } from '../providers/providers.service';
 import { mapPackage, mapProgram, mapTemplate } from './class-programs.mappers';
 import { ClassProgramsRepository } from './class-programs.repository';
@@ -17,6 +28,10 @@ export class ClassProgramsService {
   constructor(
     private readonly repository: ClassProgramsRepository,
     private readonly providers: ProvidersService,
+    private readonly paygate: PaygateService,
+    private readonly orders: PaymentOrdersRepository,
+    private readonly flags: FeatureFlagsService,
+    private readonly obs: ObservabilityService,
   ) {}
 
   async listProviderPrograms(userId: string) {
@@ -143,6 +158,81 @@ export class ClassProgramsService {
           };
         });
     });
+  }
+
+  async initiatePackagePayment(userId: string, packageId: string) {
+    if (!this.flags.paymentsEnabled || this.flags.forceFreeEvents) {
+      this.obs.warn('class_packages.payment.disabled', {
+        userId,
+        packageId,
+        paymentsEnabled: this.flags.paymentsEnabled,
+        forceFreeEvents: this.flags.forceFreeEvents,
+      });
+      throw new ServiceUnavailableException(
+        'Pagos temporalmente deshabilitados',
+      );
+    }
+
+    const recentPending = await this.orders.countRecentPendingForUser(
+      userId,
+      new Date(Date.now() - 10 * 60 * 1000),
+    );
+    if (recentPending >= 3) {
+      throw new HttpException(
+        'Demasiados intentos de pago; intenta de nuevo en unos minutos',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    const item = await this.repository.getActivePackageForPayment(packageId);
+    if (!item) throw new NotFoundException('Paquete no encontrado');
+
+    const amountCents = Math.round(Number(item.price) * 100);
+    if (!Number.isFinite(amountCents) || amountCents <= 0) {
+      throw new BadRequestException('El paquete no tiene precio configurado');
+    }
+
+    const link = await this.paygate.createPaymentLink({
+      description: `Paquete de clases - ${item.program_title} - ${item.name}`,
+      amount: Number((amountCents / 100).toFixed(2)),
+      currency: 'HNL',
+    });
+    const expiresAt = new Date(
+      Date.now() + link.expirationHours * 60 * 60 * 1000,
+    );
+
+    const order = await this.orders.create({
+      userId,
+      orderType: 'class_package',
+      eventId: null,
+      entryTypeId: null,
+      classProgramId: item.program_id,
+      classPackageId: item.id,
+      quantity: 1,
+      amountCents,
+      currency: link.currency,
+      paygateLinkId: link.id,
+      expiresAt,
+    });
+
+    this.obs.event('class_packages.payment.created', {
+      orderId: order.id,
+      userId,
+      packageId: item.id,
+      programId: item.program_id,
+      amountCents,
+      currency: order.currency,
+    });
+
+    return {
+      orderId: order.id,
+      paymentLink: link.link,
+      amountCents: order.amountCents,
+      currency: order.currency,
+      expiresAt: order.expiresAt?.toISOString() ?? expiresAt.toISOString(),
+      packageId: item.id,
+      programId: item.program_id,
+    };
   }
 
   private async getProviderProgramForUser(userId: string, programId: string) {

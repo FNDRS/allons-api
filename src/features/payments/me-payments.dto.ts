@@ -17,6 +17,8 @@ const PAYMENT_ORDER_STATUSES = [
   'refunded',
 ] as const;
 
+const PAYMENT_ORDER_TYPES = ['event_ticket', 'class_package'] as const;
+
 export class InitiatePaymentBodyDto {
   @ApiProperty({
     format: 'uuid',
@@ -108,6 +110,9 @@ export class PaymentOrderDetailResponseDto {
   @ApiProperty({ example: 'HNL' })
   currency!: string;
 
+  @ApiProperty({ enum: PAYMENT_ORDER_TYPES })
+  orderType!: string;
+
   @ApiProperty({
     type: [String],
     format: 'uuid',
@@ -115,8 +120,21 @@ export class PaymentOrderDetailResponseDto {
   })
   ticketIds!: string[];
 
-  @ApiProperty({ format: 'uuid' })
-  eventId!: string;
+  @ApiProperty({
+    type: [String],
+    format: 'uuid',
+    description: 'Class pass ids issued when a class package order is paid.',
+  })
+  classPassIds!: string[];
+
+  @ApiProperty({ format: 'uuid', nullable: true })
+  eventId!: string | null;
+
+  @ApiProperty({ format: 'uuid', nullable: true })
+  classPackageId!: string | null;
+
+  @ApiProperty({ format: 'uuid', nullable: true })
+  classProgramId!: string | null;
 
   @ApiPropertyOptional({
     nullable: true,
@@ -138,8 +156,17 @@ export class PaymentOrderListItemDto {
   @ApiProperty()
   currency!: string;
 
-  @ApiProperty({ format: 'uuid' })
-  eventId!: string;
+  @ApiProperty({ enum: PAYMENT_ORDER_TYPES })
+  orderType!: string;
+
+  @ApiProperty({ format: 'uuid', nullable: true })
+  eventId!: string | null;
+
+  @ApiProperty({ format: 'uuid', nullable: true })
+  classPackageId!: string | null;
+
+  @ApiProperty({ format: 'uuid', nullable: true })
+  classProgramId!: string | null;
 
   @ApiProperty({ description: 'ISO 8601' })
   createdAt!: string;

@@ -17,10 +17,8 @@ import { PaygateConfigService } from './paygate.config';
 import { PaygateWebhookSignatureError } from './paygate.errors';
 import { PaygateSignatureVerifier } from './paygate.signature';
 import type { PaygateWebhookPayload } from './paygate.types';
+import { PaymentFulfillmentService } from '../payments/payment-fulfillment.service';
 import { PaymentOrdersRepository } from '../payments/payment-orders.repository';
-import { MeService } from '../me/me.service';
-import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
-import { PrismaService } from '../../prisma/prisma.service';
 import { SubscriptionService } from '../subscription/subscription.service';
 
 @ApiTags('webhooks')
@@ -32,9 +30,7 @@ export class PaygateWebhookController {
     private readonly cfg: PaygateConfigService,
     private readonly signature: PaygateSignatureVerifier,
     private readonly orders: PaymentOrdersRepository,
-    private readonly me: MeService,
-    private readonly supabaseAdmin: SupabaseAdminService,
-    private readonly prisma: PrismaService,
+    private readonly fulfillment: PaymentFulfillmentService,
     private readonly obs: ObservabilityService,
     private readonly posthog: PostHogService,
     private readonly subscription: SubscriptionService,
@@ -221,6 +217,8 @@ export class PaygateWebhookController {
         properties: {
           order_id: order.id,
           event_id: order.eventId,
+          order_type: order.orderType,
+          class_package_id: order.classPackageId,
           amount_cents: order.amountCents,
           currency: order.currency,
           quantity: order.quantity,
@@ -234,6 +232,8 @@ export class PaygateWebhookController {
         properties: {
           order_id: order.id,
           event_id: order.eventId,
+          order_type: order.orderType,
+          class_package_id: order.classPackageId,
           amount_cents: order.amountCents,
           currency: order.currency,
           status: nextStatus,
@@ -244,59 +244,10 @@ export class PaygateWebhookController {
 
     if (nextStatus !== 'paid') return;
 
-    const eventRow = await this.prisma.event.findUnique({
-      where: { id: order.eventId },
-    });
-    if (!eventRow) {
-      this.logger.error(
-        `Paid order ${order.id} references missing event ${order.eventId}; cannot create tickets`,
-      );
-      return;
-    }
-    const sold = await this.prisma.ticket.count({
-      where: { eventId: order.eventId, cancelledAt: null },
-    });
-    if (eventRow.capacity > 0 && sold + order.quantity > eventRow.capacity) {
-      this.logger.error(
-        `Refusing ticket issuance for paid order ${order.id}: event ${order.eventId} capacity ${eventRow.capacity}, sold ${sold}, order quantity ${order.quantity}`,
-      );
-      return;
-    }
-
-    // Create tickets on successful payment.
-    try {
-      const { data, error } =
-        await this.supabaseAdmin.db.auth.admin.getUserById(order.userId);
-      if (error || !data?.user?.email) {
-        throw new Error('No se pudo obtener el email del usuario');
-      }
-
-      const buyerName =
-        typeof (data.user.user_metadata as { name?: unknown })?.name ===
-        'string'
-          ? String((data.user.user_metadata as { name: string }).name)
-          : null;
-      const holderTemplate = {
-        email: data.user.email,
-        ...(buyerName ? { name: buyerName } : {}),
-      };
-      const holders = Array.from({ length: order.quantity }, () => ({
-        ...holderTemplate,
-      }));
-
-      await this.me.createTicket(order.userId, order.eventId, order.quantity, {
-        email: data.user.email,
-        name: buyerName,
-        holders,
-        paymentOrderId: order.id,
-        ticketTypeId: order.entryTypeId,
-      });
-    } catch (err) {
-      // We keep the order as paid; manual reconciliation can create tickets.
-      this.logger.error(
-        `Failed to create tickets for paid order ${order.id}: ${String(err)}`,
-      );
-    }
+    await this.fulfillment.fulfillPaidOrder(
+      transitioned.order,
+      'webhook-fulfill',
+    );
   }
 
   private async findOrder(input: {
