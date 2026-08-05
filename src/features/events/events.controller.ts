@@ -28,6 +28,7 @@ export class EventsController {
     types?: string | string[];
     from?: string;
     to?: string;
+    q?: string;
   }) {
     const cities = [
       ...new Set([params.city, ...parseList(params.cities)]),
@@ -36,6 +37,7 @@ export class EventsController {
     const types = parseList(params.types);
     const from = parseDate(params.from);
     const to = parseDate(params.to);
+    const q = params.q?.trim() ?? '';
 
     if (cities.length > 0 && excludeCities.length > 0) {
       throw new BadRequestException(
@@ -72,6 +74,33 @@ export class EventsController {
             },
           }
         : {}),
+      // Wrapped in AND rather than returned as a bare OR: callers spread this
+      // object alongside their own OR (see `top`), and a sibling OR key would
+      // silently overwrite one of the two.
+      ...(q
+        ? {
+            AND: [
+              {
+                OR: [
+                  { title: { contains: q, mode: 'insensitive' as const } },
+                  {
+                    description: {
+                      contains: q,
+                      mode: 'insensitive' as const,
+                    },
+                  },
+                  { venue: { contains: q, mode: 'insensitive' as const } },
+                  { city: { contains: q, mode: 'insensitive' as const } },
+                  {
+                    provider: {
+                      name: { contains: q, mode: 'insensitive' as const },
+                    },
+                  },
+                ],
+              },
+            ],
+          }
+        : {}),
     };
   }
 
@@ -83,6 +112,7 @@ export class EventsController {
     @Query('types') types?: string | string[],
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('q') q?: string,
   ) {
     const where = this.buildWhere({
       city,
@@ -91,6 +121,7 @@ export class EventsController {
       types,
       from,
       to,
+      q,
     });
 
     const rows = await this.prisma.event.findMany({
