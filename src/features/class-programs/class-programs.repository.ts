@@ -24,7 +24,13 @@ import type {
   UserReservedOccurrenceRow,
 } from './class-programs.types';
 
-/** Cancelling this far ahead of the session (or further) returns the credit. */
+/**
+ * Cancelling this far ahead of the session (or further) returns the credit.
+ *
+ * Interpolated with an explicit `::int` at the call site: Prisma binds a JS
+ * number as `bigint`, and `make_interval(hours => bigint)` does not exist, so
+ * without the cast the whole cancellation query fails at runtime with 42883.
+ */
 const CANCELLATION_REFUND_WINDOW_HOURS = 6;
 
 @Injectable()
@@ -682,7 +688,7 @@ export class ClassProgramsRepository {
             <= (now() AT TIME ZONE 'America/Tegucigalpa') AS elapsed,
           (${reservation.session_date}::date + ${reservation.start_time}::time)
             - (now() AT TIME ZONE 'America/Tegucigalpa')
-            >= make_interval(hours => ${CANCELLATION_REFUND_WINDOW_HOURS}) AS refund_eligible
+            >= make_interval(hours => ${CANCELLATION_REFUND_WINDOW_HOURS}::int) AS refund_eligible
       `;
         if (checkRows[0]?.elapsed) {
           return { ok: false, reason: 'occurrence_elapsed' };
