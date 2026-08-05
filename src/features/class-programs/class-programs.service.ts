@@ -215,7 +215,7 @@ export class ClassProgramsService {
     // `myBalance` only needs `programId`/`userId` — so they run in parallel
     // rather than adding the balance lookup's latency on top for every
     // authenticated request.
-    const [[withChildren], passRows] = await Promise.all([
+    const [[withChildren], passRows, claimedPackageIds] = await Promise.all([
       this.withChildren([program], { publicOnly: true }),
       options.userId
         ? this.repository.listUserClassPasses(options.userId, {
@@ -223,12 +223,27 @@ export class ClassProgramsService {
             programId,
           })
         : Promise.resolve([]),
+      options.userId
+        ? this.repository.listFreeClaimedPackageIds(options.userId, programId)
+        : Promise.resolve([]),
     ]);
     // `listUserClassPasses` groups by program, so this is at most one row —
     // the caller's combined balance across every pass they hold here, or
     // null for a guest (or a user with no active pass for this program).
     const myBalance = passRows[0] ?? null;
-    return { ...withChildren, myBalance: myBalance && mapClassPass(myBalance) };
+    // Per package, not per program: a free package can only be claimed once,
+    // and the combined balance above cannot say *which* package it came from
+    // once the caller holds more than one pass here. Without this the app kept
+    // offering an already-claimed package and could only answer with an error.
+    const claimed = new Set(claimedPackageIds);
+    return {
+      ...withChildren,
+      packages: withChildren.packages.map((item) => ({
+        ...item,
+        claimed: claimed.has(item.id),
+      })),
+      myBalance: myBalance && mapClassPass(myBalance),
+    };
   }
 
   async getAvailability(

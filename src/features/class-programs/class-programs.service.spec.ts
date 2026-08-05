@@ -39,6 +39,7 @@ type RepositoryMock = {
   listPublishedPrograms: jest.Mock;
   listUserReservations: jest.Mock;
   findFreeClaimForPackage: jest.Mock;
+  listFreeClaimedPackageIds: jest.Mock;
   createFreeClassPass: jest.Mock;
 };
 
@@ -55,6 +56,7 @@ function makeService() {
     listPublishedPrograms: jest.fn().mockResolvedValue([]),
     listUserReservations: jest.fn().mockResolvedValue([]),
     findFreeClaimForPackage: jest.fn().mockResolvedValue(null),
+    listFreeClaimedPackageIds: jest.fn().mockResolvedValue([]),
     createFreeClassPass: jest.fn().mockResolvedValue({ id: 'pass-1' }),
     getReservationCounts: jest.fn(),
     getActivePackageForPayment: jest.fn(),
@@ -182,6 +184,78 @@ describe('ClassProgramsService', () => {
 
     expect(result).toMatchObject({ myBalance: null });
     expect(repository.listUserClassPasses).not.toHaveBeenCalled();
+    expect(repository.listFreeClaimedPackageIds).not.toHaveBeenCalled();
+  });
+
+  // A free package can be claimed once, and `myBalance` is grouped per program,
+  // so it cannot say which package the balance came from. Without a per-package
+  // flag the app kept offering an already-claimed package and could only answer
+  // with "Ya reclamaste este paquete gratis".
+  it('flags each package the caller already claimed for free', async () => {
+    const { service, repository } = makeService();
+    repository.getProgram.mockResolvedValueOnce(programRow);
+    repository.getPackages.mockResolvedValueOnce([
+      {
+        id: 'pkg-free',
+        program_id: programRow.id,
+        name: 'Semana gratis',
+        price: 0,
+        credits: null,
+        validity_days: 7,
+        kind: 'unlimited',
+        active: true,
+        sort_order: 0,
+      },
+      {
+        id: 'pkg-single',
+        program_id: programRow.id,
+        name: 'Entrada suelta',
+        price: 180,
+        credits: 1,
+        validity_days: null,
+        kind: 'single',
+        active: true,
+        sort_order: 1,
+      },
+    ]);
+    repository.listFreeClaimedPackageIds.mockResolvedValueOnce(['pkg-free']);
+
+    const result = await service.getPublicProgram(programRow.id, {
+      userId: 'user-1',
+    });
+
+    expect(repository.listFreeClaimedPackageIds).toHaveBeenCalledWith(
+      'user-1',
+      programRow.id,
+    );
+    expect(result.packages).toEqual([
+      expect.objectContaining({ id: 'pkg-free', claimed: true }),
+      expect.objectContaining({ id: 'pkg-single', claimed: false }),
+    ]);
+  });
+
+  it('reports nothing as claimed for a guest', async () => {
+    const { service, repository } = makeService();
+    repository.getProgram.mockResolvedValueOnce(programRow);
+    repository.getPackages.mockResolvedValueOnce([
+      {
+        id: 'pkg-free',
+        program_id: programRow.id,
+        name: 'Semana gratis',
+        price: 0,
+        credits: null,
+        validity_days: 7,
+        kind: 'unlimited',
+        active: true,
+        sort_order: 0,
+      },
+    ]);
+
+    const result = await service.getPublicProgram(programRow.id);
+
+    expect(result.packages).toEqual([
+      expect.objectContaining({ id: 'pkg-free', claimed: false }),
+    ]);
   });
 
   it("embeds the caller's mapped balance for this program when authenticated", async () => {
