@@ -25,6 +25,17 @@ import type {
   UserReservedOccurrenceRow,
 } from './class-programs.types';
 
+/**
+ * "Now" on Honduras' civil clock, as a naive timestamp.
+ *
+ * A session is stored as `session_date + start_time`: local wall time with no
+ * zone. The Postgres session runs in UTC, so comparing that against a bare
+ * `now()` reads a 07:00 class as 07:00 UTC — six hours early, which silently
+ * drops the last six hours of bookings out of "upcoming". Every comparison
+ * against a session's own clock goes through this.
+ */
+const NOW_HN = Prisma.sql`(now() AT TIME ZONE 'America/Tegucigalpa')`;
+
 /** Cancelling this far ahead of the session (or further) returns the credit. */
 const CANCELLATION_REFUND_WINDOW_HOURS = 6;
 
@@ -454,9 +465,9 @@ export class ClassProgramsRepository {
     const startsAt = Prisma.sql`(r.session_date::date + r.start_time::time)`;
     const scopeFilter =
       options.scope === 'upcoming'
-        ? Prisma.sql`AND ${startsAt} >= now() AND r.status = 'reserved'`
+        ? Prisma.sql`AND ${startsAt} >= ${NOW_HN} AND r.status = 'reserved'`
         : options.scope === 'past'
-          ? Prisma.sql`AND ${startsAt} < now()`
+          ? Prisma.sql`AND ${startsAt} < ${NOW_HN}`
           : Prisma.empty;
     const order =
       options.scope === 'past'

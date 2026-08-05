@@ -56,15 +56,25 @@ export class ClassReminderService {
           WHERE reminded_at IS NULL
             AND status = 'reserved'
             AND (session_date::date + start_time::time)
-                BETWEEN now()
-                    AND now() + make_interval(hours => ${REMIND_AHEAD_HOURS}::int)
+                BETWEEN (now() AT TIME ZONE 'America/Tegucigalpa')
+                    AND (now() AT TIME ZONE 'America/Tegucigalpa')
+                        + make_interval(hours => ${REMIND_AHEAD_HOURS}::int)
           ORDER BY (session_date::date + start_time::time) ASC
           LIMIT ${BATCH}
+          -- Skip rows another instance is already claiming instead of queueing
+          -- behind them; whatever it claims, it also notifies.
+          FOR UPDATE SKIP LOCKED
         ),
         claimed AS (
           UPDATE class_session_reservations r
           SET reminded_at = now()
           WHERE r.id IN (SELECT id FROM due)
+            -- Re-asserted on the UPDATE itself, not just in the CTE. Under READ
+            -- COMMITTED a second writer that blocked on the row lock re-checks
+            -- only this predicate once released; without it the id still
+            -- matched and the same reminder went out twice.
+            AND r.reminded_at IS NULL
+            AND r.status = 'reserved'
           RETURNING r.id, r.user_id, r.program_id, r.start_time
         )
         SELECT c.id::text AS id,
