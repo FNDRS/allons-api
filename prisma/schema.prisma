@@ -175,6 +175,12 @@ model UserClassPass {
   reservations ClassSessionReservation[]
 
   @@index([userId, programId, status, expiresAt])
+  // Also has a partial unique index capping free claims at one per user per
+  // package: `user_class_passes_free_claim_uidx` on (userId, packageId) WHERE
+  // paymentOrderId IS NULL AND packageId IS NOT NULL. Scoped that way so
+  // buying the same package twice still creates separate passes. Not
+  // representable in the Prisma schema DSL (no partial index support), so it
+  // lives only in migration 20260805060000_free_class_pass_unique.
   @@map("user_class_passes")
 }
 

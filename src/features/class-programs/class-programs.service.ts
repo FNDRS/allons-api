@@ -7,6 +7,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { Prisma } from '../../../generated/prisma';
 import { FeatureFlagsService } from '../../shared/feature-flags.service';
 import { ObservabilityService } from '../../shared/observability/observability.service';
 import { PaygateService } from '../paygate/paygate.service';
@@ -35,6 +36,8 @@ import {
   parseTemplatePayload,
   parseTemplateUpdatePayload,
 } from './class-programs.validation';
+
+const ALREADY_CLAIMED = 'Ya reclamaste este paquete gratis';
 
 @Injectable()
 export class ClassProgramsService {
@@ -305,6 +308,81 @@ export class ClassProgramsService {
           };
         });
     });
+  }
+
+  /**
+   * Grants a zero-price package without going through Paygate, which refuses
+   * zero amounts. Deliberately separate from `initiatePackagePayment` rather
+   * than a branch inside it: that route creates a `payment_orders` row and
+   * returns a checkout link, and neither exists here.
+   *
+   * One claim per user per package, ever. Without that a free pack could be
+   * re-claimed indefinitely for unlimited free sessions.
+   */
+  async claimFreePackage(userId: string, packageId: string) {
+    const item = await this.repository.getActivePackageForPayment(packageId);
+    if (!item) throw new NotFoundException('Paquete no encontrado');
+
+    const amountCents = Math.round(Number(item.price) * 100);
+    if (amountCents > 0) {
+      throw new BadRequestException(
+        'Este paquete tiene precio; usa el flujo de pago',
+      );
+    }
+
+    const existing = await this.repository.findFreeClaimForPackage(
+      userId,
+      packageId,
+    );
+    if (existing) {
+      throw new BadRequestException(ALREADY_CLAIMED);
+    }
+
+    // Same derivation as the paid path in `payment-fulfillment.service.ts`:
+    // an unlimited pass carries no credit count and is bounded by validity.
+    const credits = item.kind === 'unlimited' ? null : item.credits;
+    const expiresAt = item.validity_days
+      ? new Date(Date.now() + item.validity_days * 24 * 60 * 60 * 1000)
+      : null;
+
+    // The check above is not atomic on its own: two concurrent claims can both
+    // see no pass before either inserts. `user_class_passes_free_claim_uidx`
+    // is what actually guarantees one claim, so the race loser lands here as a
+    // unique violation and gets the same message rather than a 500.
+    try {
+      await this.repository.createFreeClassPass({
+        userId,
+        providerId: item.provider_id,
+        programId: item.program_id,
+        packageId: item.id,
+        creditsTotal: credits,
+        expiresAt,
+      });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new BadRequestException(ALREADY_CLAIMED);
+      }
+      throw err;
+    }
+
+    this.obs.event('class_packages.claimed_free', {
+      userId,
+      packageId: item.id,
+      programId: item.program_id,
+    });
+
+    const [balance] = await this.repository.listUserClassPasses(userId, {
+      providerId: null,
+      programId: item.program_id,
+    });
+    return {
+      programId: item.program_id,
+      packageId: item.id,
+      balance: balance ? mapClassPass(balance) : null,
+    };
   }
 
   async initiatePackagePayment(userId: string, packageId: string) {
