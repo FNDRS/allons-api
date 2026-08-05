@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { computeEntryTypeRemaining } from './events-availability.util';
 import { attachMinPriceCents } from './events-pricing.util';
 import { parseDate, parseList } from './events.types';
 
@@ -205,6 +206,16 @@ export class EventsController {
       ORDER BY sort_order ASC, created_at ASC
     `;
 
+    // Live rows, not `sold_count`: this is the number checkout compares
+    // against `capacity` before accepting a purchase, so it is what decides
+    // whether a reservation succeeds.
+    const soldTickets = await this.prisma.ticket.count({
+      where: { eventId: id, cancelledAt: null },
+    });
+    const eventCapacity = Number(
+      (event as { capacity?: number | null }).capacity ?? 0,
+    );
+
     // For a recurring class these are the packages (paquetes); for a single
     // event they are the entry tiers. Same rows, `planKind` tells them apart.
     const entryTypes = (ticketTypeRows ?? []).map((row) => ({
@@ -215,6 +226,13 @@ export class EventsController {
       credits: row.credits ?? null,
       validityDays: row.validity_days ?? null,
       soldOut: row.total > 0 && row.sold_count >= row.total,
+      /** Seats still buyable, or null when neither cap applies. */
+      remaining: computeEntryTypeRemaining({
+        capacity: eventCapacity,
+        soldTickets,
+        total: row.total,
+        soldCount: row.sold_count,
+      }),
     }));
 
     const providerContactRows = event.providerId
