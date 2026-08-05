@@ -11,9 +11,14 @@ import { MeService } from '../src/features/me/me.service';
 
 describe('AppController (e2e)', () => {
   let app: INestApplication<App>;
+  // Declares every member the suite actually stubs. It previously listed only
+  // the two findMany mocks, so each new call site added a type error instead of
+  // being caught at the mock.
   let prismaMock: {
+    $queryRaw: jest.Mock;
     provider: { findMany: jest.Mock };
-    event: { findMany: jest.Mock };
+    event: { findMany: jest.Mock; findUnique: jest.Mock };
+    ticket: { count: jest.Mock };
   };
   let supabaseAdminMock: { getAuthenticatedUser: jest.Mock };
 
@@ -22,6 +27,8 @@ describe('AppController (e2e)', () => {
       $queryRaw: jest.fn(),
       provider: { findMany: jest.fn() },
       event: { findMany: jest.fn(), findUnique: jest.fn() },
+      // getOne counts live tickets to cap each entry type.
+      ticket: { count: jest.fn() },
     };
 
     supabaseAdminMock = {
@@ -202,6 +209,7 @@ describe('AppController (e2e)', () => {
       petFriendly: false,
       parkingAvailable: false,
       minAge: null,
+      capacity: 10,
       status: 'published',
       coverImageUrl: 'https://example.com/cover.png',
       provider: {
@@ -230,35 +238,53 @@ describe('AppController (e2e)', () => {
       _count: { attendees: 3 },
     });
 
-    prismaMock.$queryRaw.mockResolvedValueOnce([]).mockResolvedValueOnce([
-      {
-        holder_email: 'a@b.com',
-        holder_name: 'Ana',
-        user_id: null,
-        full_name: null,
-        username: null,
-        avatar_url: null,
-        avatar_color: null,
-      },
-      {
-        holder_email: 'b@b.com',
-        holder_name: 'Beto',
-        user_id: null,
-        full_name: null,
-        username: null,
-        avatar_url: null,
-        avatar_color: null,
-      },
-      {
-        holder_email: 'c@b.com',
-        holder_name: 'Carla',
-        user_id: null,
-        full_name: null,
-        username: null,
-        avatar_url: null,
-        avatar_color: null,
-      },
-    ]);
+    // 4 of the event's 10 seats are taken, 3 of them on this single tier, so
+    // the tier cap (10 - 3) loses to the event cap (10 - 4) and remaining is 6.
+    prismaMock.ticket.count.mockResolvedValueOnce(4);
+
+    prismaMock.$queryRaw
+      .mockResolvedValueOnce([
+        {
+          id: 'tt1',
+          name: 'General',
+          price: 100,
+          total: 10,
+          sold_count: 99, // deliberately wrong: the drifting counter is ignored
+          plan_kind: null,
+          credits: null,
+          validity_days: null,
+        },
+      ])
+      .mockResolvedValueOnce([{ ticket_type_id: 'tt1', n: 3 }])
+      .mockResolvedValueOnce([
+        {
+          holder_email: 'a@b.com',
+          holder_name: 'Ana',
+          user_id: null,
+          full_name: null,
+          username: null,
+          avatar_url: null,
+          avatar_color: null,
+        },
+        {
+          holder_email: 'b@b.com',
+          holder_name: 'Beto',
+          user_id: null,
+          full_name: null,
+          username: null,
+          avatar_url: null,
+          avatar_color: null,
+        },
+        {
+          holder_email: 'c@b.com',
+          holder_name: 'Carla',
+          user_id: null,
+          full_name: null,
+          username: null,
+          avatar_url: null,
+          avatar_color: null,
+        },
+      ]);
 
     const res = await request(app.getHttpServer())
       .get('/events/e1')
@@ -269,6 +295,10 @@ describe('AppController (e2e)', () => {
     expect(res.body.gallery?.[0]?.url).toBe('https://example.com/cover.png');
     expect(res.body.gallery?.[1]?.url).toBe('https://example.com/1.png');
     expect(res.body.providerReviews?.[0]?.authorName).toBe('Humberto');
+    // Sold counts come from live ticket rows; had the tier's own sold_count of
+    // 99 been used, this would report 0 remaining and soldOut.
+    expect(res.body.entryTypes?.[0]?.remaining).toBe(6);
+    expect(res.body.entryTypes?.[0]?.soldOut).toBe(false);
   });
 
   it('/me (GET) requires auth', async () => {
