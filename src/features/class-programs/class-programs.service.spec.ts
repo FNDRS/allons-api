@@ -37,6 +37,7 @@ type RepositoryMock = {
   deactivatePackage: jest.Mock;
   getProgramMetrics: jest.Mock;
   listPublishedPrograms: jest.Mock;
+  listUserReservations: jest.Mock;
   findFreeClaimForPackage: jest.Mock;
   createFreeClassPass: jest.Mock;
 };
@@ -52,6 +53,7 @@ function makeService() {
     getTemplates: jest.fn().mockResolvedValue([]),
     getPackages: jest.fn().mockResolvedValue([]),
     listPublishedPrograms: jest.fn().mockResolvedValue([]),
+    listUserReservations: jest.fn().mockResolvedValue([]),
     findFreeClaimForPackage: jest.fn().mockResolvedValue(null),
     createFreeClassPass: jest.fn().mockResolvedValue({ id: 'pass-1' }),
     getReservationCounts: jest.fn(),
@@ -1001,5 +1003,89 @@ describe('ClassProgramsService.claimFreePackage — concurrent claims', () => {
     await expect(
       service.claimFreePackage('user-1', 'pkg-free'),
     ).rejects.toMatchObject({ message: 'connection reset' });
+  });
+});
+
+describe('ClassProgramsService.listMyReservations', () => {
+  function reservationRow(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'res-1',
+      user_id: 'user-1',
+      provider_id: 'provider-1',
+      program_id: 'program-1',
+      template_id: 'tpl-1',
+      pass_id: 'pass-1',
+      session_date: '2026-08-10',
+      start_time: '07:00',
+      duration_minutes: 55,
+      instructor_name: 'Lucía Ramos',
+      status: 'reserved',
+      created_at: new Date('2026-08-05T00:00:00.000Z'),
+      program_title: 'Barre Intensivo',
+      program_city: 'Tegucigalpa',
+      program_location_name: 'Studio Mixto HN',
+      provider_name: 'Studio Mixto HN',
+      provider_logo_url: null,
+      theme_color: '#2EC4B6',
+      ...overrides,
+    };
+  }
+
+  it('defaults to upcoming, which is what a ticket list wants', async () => {
+    const { service, repository } = makeService();
+
+    await service.listMyReservations('user-1');
+
+    expect(repository.listUserReservations).toHaveBeenCalledWith('user-1', {
+      scope: 'upcoming',
+      limit: 50,
+    });
+  });
+
+  it('accepts past and all, and rejects anything else back to upcoming', async () => {
+    const { service, repository } = makeService();
+
+    await service.listMyReservations('user-1', { scope: 'past' });
+    expect(repository.listUserReservations.mock.calls[0][1].scope).toBe('past');
+
+    await service.listMyReservations('user-1', { scope: 'all' });
+    expect(repository.listUserReservations.mock.calls[1][1].scope).toBe('all');
+
+    await service.listMyReservations('user-1', { scope: 'garbage' });
+    expect(repository.listUserReservations.mock.calls[2][1].scope).toBe(
+      'upcoming',
+    );
+  });
+
+  it('clamps the limit into 1..100 and floors it', async () => {
+    const { service, repository } = makeService();
+
+    await service.listMyReservations('user-1', { limit: 500 });
+    expect(repository.listUserReservations.mock.calls[0][1].limit).toBe(100);
+
+    await service.listMyReservations('user-1', { limit: 0 });
+    expect(repository.listUserReservations.mock.calls[1][1].limit).toBe(1);
+
+    await service.listMyReservations('user-1', { limit: 7.9 });
+    expect(repository.listUserReservations.mock.calls[2][1].limit).toBe(7);
+  });
+
+  it('maps a row into the shape a ticket needs, date and time included', async () => {
+    const { service, repository } = makeService();
+    repository.listUserReservations.mockResolvedValueOnce([reservationRow()]);
+
+    const [ticket] = await service.listMyReservations('user-1');
+
+    expect(ticket).toMatchObject({
+      id: 'res-1',
+      programTitle: 'Barre Intensivo',
+      providerName: 'Studio Mixto HN',
+      date: '2026-08-10',
+      startTime: '07:00',
+      durationMinutes: 55,
+      instructorName: 'Lucía Ramos',
+      status: 'reserved',
+      themeColor: '#2EC4B6',
+    });
   });
 });

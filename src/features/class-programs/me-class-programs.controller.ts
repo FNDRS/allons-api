@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -75,6 +76,29 @@ export class MeClassProgramsController {
     return this.classPrograms.listMyClassPasses(user.id, {
       providerId,
       programId,
+    });
+  }
+
+  @Get('class-reservations')
+  @ApiOperation({ summary: "List the caller's class reservations" })
+  @ApiQuery({ name: 'scope', required: false, enum: ['upcoming', 'past', 'all'] })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  async listMyReservations(
+    @Req() req: Request,
+    @Query('scope') scope?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const user = await this.supabaseAdmin.getAuthenticatedUser(
+      req.headers.authorization,
+    );
+    (req as any).userId = user.id;
+    const parsedLimit = limit === undefined ? undefined : Number(limit);
+    if (parsedLimit !== undefined && !Number.isFinite(parsedLimit)) {
+      throw new BadRequestException('limit debe ser un número');
+    }
+    return this.classPrograms.listMyReservations(user.id, {
+      scope,
+      limit: parsedLimit,
     });
   }
 

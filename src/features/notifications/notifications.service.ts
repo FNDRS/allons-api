@@ -303,6 +303,20 @@ export class NotificationsService {
   }
 
   /** Queues a push reminding a comercio owner that their plan is about to lapse. */
+  /** Reminder that a booked class starts shortly. Queued by ClassReminderService. */
+  async notifyClassSessionSoon(
+    userId: string,
+    programTitle: string,
+    providerName: string,
+    startTime: string,
+  ): Promise<void> {
+    await this.enqueuePush(
+      userId,
+      `Hoy tienes ${programTitle}`,
+      `${providerName} · ${startTime}. Te esperamos.`,
+    );
+  }
+
   async notifyProviderRenewalDue(
     userId: string,
     daysLeft: number,

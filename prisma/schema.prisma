@@ -197,6 +197,8 @@ model ClassSessionReservation {
   instructorName  String?   @map("instructor_name")
   status          String    @default("reserved")
   cancelledAt     DateTime? @map("cancelled_at") @db.Timestamptz(6)
+  /// Set when the session reminder was queued, so the sweep never repeats one.
+  remindedAt      DateTime? @map("reminded_at") @db.Timestamptz(6)
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
