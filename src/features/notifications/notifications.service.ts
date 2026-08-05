@@ -302,8 +302,13 @@ export class NotificationsService {
     }
   }
 
-  /** Queues a push reminding a comercio owner that their plan is about to lapse. */
-  /** Reminder that a booked class starts shortly. Queued by ClassReminderService. */
+  /**
+   * Reminder that a booked class starts shortly. Queued by ClassReminderService.
+   *
+   * Deliberately claims no calendar day: the sweep fires within a couple of
+   * hours of the session, so a 23:40 sweep for a 00:30 class would have called
+   * tomorrow "hoy". `startTime` is unambiguous over that short a horizon.
+   */
   async notifyClassSessionSoon(
     userId: string,
     programTitle: string,
@@ -312,11 +317,12 @@ export class NotificationsService {
   ): Promise<void> {
     await this.enqueuePush(
       userId,
-      `Hoy tienes ${programTitle}`,
+      `${programTitle} empieza pronto`,
       `${providerName} · ${startTime}. Te esperamos.`,
     );
   }
 
+  /** Queues a push reminding a comercio owner that their plan is about to lapse. */
   async notifyProviderRenewalDue(
     userId: string,
     daysLeft: number,
