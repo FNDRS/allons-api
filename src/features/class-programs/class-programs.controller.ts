@@ -52,7 +52,6 @@ export class ClassProgramsController {
     @Query('city') city?: string | string[],
     @Query('cities') cities?: string | string[],
     @Query('limit') limit?: string,
-    @Query('q') q?: string,
   ) {
     const parsedCities = [
       ...new Set([...parseList(city), ...parseList(cities)]),
@@ -64,7 +63,6 @@ export class ClassProgramsController {
     return this.classPrograms.listDiscoveryPrograms({
       cities: parsedCities,
       limit: Math.min(Math.floor(parsedLimit), 50),
-      q,
     });
   }
 

@@ -120,31 +120,13 @@ export class ClassProgramsRepository {
    * produce a dead card. Comercios whose sole content is classes have no other
    * way into the app, which is what this listing exists to solve.
    */
-  listPublishedPrograms(options: {
-    cities: string[];
-    limit: number;
-    q?: string;
-  }) {
+  listPublishedPrograms(options: { cities: string[]; limit: number }) {
     const cityFilter =
       options.cities.length > 0
         ? Prisma.sql`AND lower(cp.city) = ANY(${options.cities.map((c) =>
             c.toLowerCase(),
           )})`
         : Prisma.empty;
-    // Matches what a person would type: the class, its discipline, who teaches
-    // it, where it is, or the comercio's name.
-    const term = options.q?.trim();
-    const search = term
-      ? Prisma.sql`AND (
-          cp.title ILIKE ${'%' + term + '%'}
-          OR cp.description ILIKE ${'%' + term + '%'}
-          OR cp.discipline ILIKE ${'%' + term + '%'}
-          OR cp.instructor_name ILIKE ${'%' + term + '%'}
-          OR cp.location_name ILIKE ${'%' + term + '%'}
-          OR cp.city ILIKE ${'%' + term + '%'}
-          OR p.name ILIKE ${'%' + term + '%'}
-        )`
-      : Prisma.empty;
 
     return this.prisma.$queryRaw<DiscoveryProgramRow[]>`
       SELECT cp.*,
@@ -155,7 +137,6 @@ export class ClassProgramsRepository {
       JOIN providers p ON p.id = cp.provider_id
       WHERE cp.status = 'published'
         ${cityFilter}
-        ${search}
         AND EXISTS (
           SELECT 1 FROM class_session_templates t
           WHERE t.program_id = cp.id AND t.active = true

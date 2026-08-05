@@ -176,11 +176,7 @@ export class ClassProgramsService {
    * comercio's name and logo so a card can be rendered without a second
    * request per program.
    */
-  async listDiscoveryPrograms(options: {
-    cities: string[];
-    limit: number;
-    q?: string;
-  }) {
+  async listDiscoveryPrograms(options: { cities: string[]; limit: number }) {
     const rows = await this.repository.listPublishedPrograms(options);
     // Keyed by program id rather than by position: `withChildren` happens to
     // preserve order today, but pairing by index would break silently the

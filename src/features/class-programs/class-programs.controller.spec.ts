@@ -163,19 +163,3 @@ describe('ClassProgramsController.listDiscovery', () => {
     expect(getAuthenticatedUser).not.toHaveBeenCalled();
   });
 });
-
-describe('ClassProgramsController.listDiscovery — search term', () => {
-  function call(q?: string) {
-    const { controller, classPrograms } = makeController(jest.fn());
-    controller.listDiscovery(undefined, undefined, undefined, q);
-    return classPrograms.listDiscoveryPrograms.mock.calls[0][0];
-  }
-
-  it('forwards the search term to the service', () => {
-    expect(call('pilates').q).toBe('pilates');
-  });
-
-  it('forwards undefined when no term is given', () => {
-    expect(call().q).toBeUndefined();
-  });
-});
