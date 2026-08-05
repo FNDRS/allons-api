@@ -31,7 +31,13 @@ type TicketTypeSpec = {
   kind: 'general' | 'vip';
   price: number;
   total: number;
-  soldCount: number;
+  /**
+   * Seats already taken. Backed by real `tickets` rows, not just written to
+   * `sold_count`: paid checkout gates capacity on `ticket.count` against
+   * `events.capacity` (me-payments.service.ts) and never reads `sold_count`,
+   * so occupancy faked in the counter alone stays fully purchasable.
+   */
+  presold: number;
 };
 
 type EventSpec = {
@@ -163,11 +169,43 @@ async function findProviderIdByHandle(handle: string): Promise<string | null> {
   return rows[0]?.id ?? null;
 }
 
+/**
+ * Display names for every slug this script attaches. `fresh-start-seed` only
+ * creates ten interests, so the rest must be created here or the link is
+ * silently dropped and the event stops matching `GET /events?types=...`.
+ * Existing rows keep their own name — this only fills in what is missing.
+ */
+const INTEREST_NAMES: Record<string, string> = {
+  baile: 'Baile',
+  'bares-and-drinks': 'Bares & drinks',
+  'catas-de-vino-o-cerveza': 'Catas de vino o cerveza',
+  comidas: 'Comidas',
+  conciertos: 'Conciertos',
+  'festivales-culturales': 'Festivales culturales',
+  'festivales-gastronomicos': 'Festivales gastronómicos',
+  'fitness-y-entrenamiento': 'Fitness y entrenamiento',
+  'gaming-y-e-sports': 'Gaming y e-sports',
+  musica: 'Música',
+  'partidos-y-torneos': 'Partidos y torneos',
+};
+
 async function interestIdsBySlug(slugs: string[]): Promise<string[]> {
-  if (slugs.length === 0) return [];
-  const rows = await prisma.$queryRaw<Array<{ id: string }>>`
-    SELECT id::text AS id FROM interests WHERE slug = ANY(${slugs})`;
-  return rows.map((r) => r.id);
+  const ids: string[] = [];
+  for (const slug of slugs) {
+    const name = INTEREST_NAMES[slug];
+    if (!name) {
+      throw new Error(
+        `Falta el nombre para el interes "${slug}" en INTEREST_NAMES.`,
+      );
+    }
+    const interest = await prisma.interest.upsert({
+      where: { slug },
+      update: {},
+      create: { slug, name },
+    });
+    ids.push(interest.id);
+  }
+  return ids;
 }
 
 async function ensureEvent(providerId: string, spec: EventSpec): Promise<void> {
@@ -211,10 +249,89 @@ async function ensureEvent(providerId: string, spec: EventSpec): Promise<void> {
       INSERT INTO provider_event_ticket_types
         (provider_id, event_id, name, kind, price, total, sold_count, active, updated_at)
       VALUES (${providerId}::uuid, ${eventId}::uuid, ${tt.name}, ${tt.kind},
-              ${tt.price}, ${tt.total}, ${tt.soldCount}, true, now())`;
+              ${tt.price}, ${tt.total}, ${tt.presold}, true, now())`;
   }
 
   console.log(`  creado evento: ${spec.title}  [${spec.note}]`);
+}
+
+/** Six uppercase alphanumerics, matching the ALL-XXXXXX access-code shape. */
+function ticketCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let out = '';
+  for (let i = 0; i < 6; i += 1) {
+    out += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return `ALL-${out}`;
+}
+
+/**
+ * Realigns an already-seeded event with its spec and backs every pre-sold seat
+ * with a real `tickets` row. Runs on every invocation, not only on creation, so
+ * re-running repairs events seeded before this reconciliation existed.
+ */
+async function reconcileEventInventory(
+  providerId: string,
+  spec: EventSpec,
+  ownerIds: string[],
+): Promise<void> {
+  const events = await prisma.$queryRaw<Array<{ id: string; capacity: number }>>`
+    SELECT id::text AS id, capacity FROM events
+    WHERE provider_id = ${providerId}::uuid AND title = ${spec.title} LIMIT 1`;
+  const event = events[0];
+  if (!event) return;
+
+  if (event.capacity !== spec.capacity) {
+    await prisma.$executeRaw`
+      UPDATE events SET capacity = ${spec.capacity}, updated_at = now()
+      WHERE id = ${event.id}::uuid`;
+    console.log(
+      `  capacidad ajustada: ${spec.title} ${event.capacity} -> ${spec.capacity}`,
+    );
+  }
+
+  for (const tt of spec.ticketTypes) {
+    const rows = await prisma.$queryRaw<
+      Array<{ id: string; total: number; sold_count: number }>
+    >`
+      SELECT id::text AS id, total, sold_count FROM provider_event_ticket_types
+      WHERE event_id = ${event.id}::uuid AND name = ${tt.name} LIMIT 1`;
+    const type = rows[0];
+    if (!type) continue;
+
+    if (type.total !== tt.total || type.sold_count !== tt.presold) {
+      await prisma.$executeRaw`
+        UPDATE provider_event_ticket_types
+        SET total = ${tt.total}, sold_count = ${tt.presold}, updated_at = now()
+        WHERE id = ${type.id}::uuid`;
+      console.log(
+        `  inventario ajustado: ${spec.title} / ${tt.name} -> ${tt.presold}/${tt.total}`,
+      );
+    }
+
+    const [{ n }] = await prisma.$queryRaw<Array<{ n: number }>>`
+      SELECT count(*)::int AS n FROM tickets
+      WHERE event_id = ${event.id}::uuid
+        AND ticket_type_id = ${type.id}::uuid AND cancelled_at IS NULL`;
+    const missing = tt.presold - n;
+    if (missing <= 0) continue;
+
+    for (let i = 0; i < missing; i += 1) {
+      const ownerId = ownerIds[(n + i) % ownerIds.length];
+      await prisma.$executeRaw`
+        INSERT INTO tickets (
+          code, owner_id, event_id, ticket_type_id, title, tab,
+          theme_color, attendee_count
+        ) VALUES (
+          ${ticketCode()}, ${ownerId}::uuid, ${event.id}::uuid,
+          ${type.id}::uuid, ${spec.title}, 'eventos'::"TicketTab",
+          ${spec.themeColor}, 1
+        )`;
+    }
+    console.log(
+      `  tickets reales sembrados: ${spec.title} / ${tt.name} +${missing}`,
+    );
+  }
 }
 
 async function ensureProgram(
@@ -353,6 +470,15 @@ async function ensureReservation(
 async function main() {
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL es obligatorio.');
 
+  // Owners for the pre-sold tickets. The test client is included on purpose so
+  // its "Mis Tickets" list has event tickets to show, not only class balances.
+  const owners = await prisma.$queryRaw<Array<{ id: string }>>`
+    SELECT user_id::text AS id FROM profiles ORDER BY created_at`;
+  const ownerIds = owners.map((o) => o.id);
+  if (ownerIds.length === 0) {
+    throw new Error('No hay perfiles para asignar tickets pre-vendidos.');
+  }
+
   // 1. Los gimnasios existentes no tienen eventos, y sin un evento su perfil
   //    no se puede abrir desde la app, asi que sus clases son inalcanzables.
   console.log('\n[1] eventos para los gimnasios existentes (los hace alcanzables)');
@@ -365,7 +491,7 @@ async function main() {
       address: 'Col. Palmira, Tegucigalpa', themeColor: '#F67010',
       status: 'published', capacity: 30, parkingAvailable: true,
       interests: ['fitness-y-entrenamiento'],
-      ticketTypes: [{ name: 'Entrada libre', kind: 'general', price: 0, total: 30, soldCount: 0 }],
+      ticketTypes: [{ name: 'Entrada libre', kind: 'general', price: 0, total: 30, presold: 0 }],
       note: 'gratis; abre el perfil con clases',
     }],
     ['reformer-studio-sps', {
@@ -374,10 +500,13 @@ async function main() {
       startsInDays: 6, startHour: 10, durationHours: 2,
       city: 'San Pedro Sula', venue: 'Reformer Studio SPS',
       address: 'Col. Trejo, San Pedro Sula', themeColor: '#2EC4B6',
-      status: 'published', capacity: 10, minAge: 16,
+      // Capacity 3 with 2 real tickets: exactly one seat is buyable, and the
+      // next attempt hits the capacity gate. A big capacity with a faked
+      // sold_count would still be fully purchasable.
+      status: 'published', capacity: 3, minAge: 16,
       interests: ['fitness-y-entrenamiento'],
-      ticketTypes: [{ name: 'Cupo masterclass', kind: 'general', price: 550, total: 10, soldCount: 9 }],
-      note: 'ULTIMO CUPO (9/10 vendidos)',
+      ticketTypes: [{ name: 'Cupo masterclass', kind: 'general', price: 550, total: 3, presold: 2 }],
+      note: 'ULTIMO CUPO REAL (2/3, queda 1)',
     }],
     ['rava-studio', {
       title: 'RAVA Retiro de movilidad',
@@ -388,8 +517,8 @@ async function main() {
       status: 'published', capacity: 25, petFriendly: true,
       interests: ['fitness-y-entrenamiento'],
       ticketTypes: [
-        { name: 'General', kind: 'general', price: 400, total: 20, soldCount: 3 },
-        { name: 'VIP (incluye kit)', kind: 'vip', price: 900, total: 5, soldCount: 1 },
+        { name: 'General', kind: 'general', price: 400, total: 20, presold: 3 },
+        { name: 'VIP (incluye kit)', kind: 'vip', price: 900, total: 5, presold: 1 },
       ],
       note: 'DOS TIPOS DE TICKET (general + VIP)',
     }],
@@ -401,6 +530,7 @@ async function main() {
       continue;
     }
     await ensureEvent(providerId, spec);
+    await reconcileEventInventory(providerId, spec, ownerIds);
   }
 
   // 2. Estados de evento que la data feliz no cubre.
@@ -417,9 +547,9 @@ async function main() {
       startsInDays: -45, startHour: 18, durationHours: 5,
       city: 'Tegucigalpa', venue: 'Explanada Los Próceres',
       address: 'Bulevar Morazán, Tegucigalpa', themeColor: '#118AB2',
-      status: 'published', capacity: 400,
+      status: 'published', capacity: 40,
       interests: ['conciertos', 'musica'],
-      ticketTypes: [{ name: 'Entrada general', kind: 'general', price: 350, total: 400, soldCount: 380 }],
+      ticketTypes: [{ name: 'Entrada general', kind: 'general', price: 350, total: 40, presold: 6 }],
       note: 'PASADO (hace 45 dias)',
     },
     {
@@ -428,9 +558,9 @@ async function main() {
       startsInDays: -10, startHour: 14, durationHours: 6,
       city: 'San Pedro Sula', venue: 'Centro de Convenciones SPS',
       address: 'Av. Circunvalación, San Pedro Sula', themeColor: '#E63946',
-      status: 'ended', capacity: 120,
+      status: 'ended', capacity: 30,
       interests: ['gaming-y-e-sports'],
-      ticketTypes: [{ name: 'Competidor', kind: 'general', price: 200, total: 120, soldCount: 118 }],
+      ticketTypes: [{ name: 'Competidor', kind: 'general', price: 200, total: 30, presold: 5 }],
       note: 'STATUS ended',
     },
     {
@@ -439,10 +569,13 @@ async function main() {
       startsInDays: 9, startHour: 20, durationHours: 3,
       city: 'Tegucigalpa', venue: 'Teatro Manuel Bonilla',
       address: 'Av. Miguel Paz Barahona, Tegucigalpa', themeColor: '#F67010',
-      status: 'sold_out', capacity: 150,
+      // Small capacity so the seats can actually be filled with real tickets;
+      // the capacity gate counts rows, so 150/150 in sold_count alone would
+      // leave the event fully purchasable despite reading as agotado.
+      status: 'sold_out', capacity: 4,
       interests: ['conciertos', 'musica'],
-      ticketTypes: [{ name: 'Entrada general', kind: 'general', price: 500, total: 150, soldCount: 150 }],
-      note: 'AGOTADO (sold_out, 150/150)',
+      ticketTypes: [{ name: 'Entrada general', kind: 'general', price: 500, total: 4, presold: 4 }],
+      note: 'AGOTADO REAL (4/4 con tickets)',
     },
     {
       title: 'Cena maridaje en borrador',
@@ -452,7 +585,7 @@ async function main() {
       address: 'Col. Palmira, Tegucigalpa', themeColor: '#8D6E63',
       status: 'draft', capacity: 40, minAge: 18,
       interests: ['comidas', 'catas-de-vino-o-cerveza'],
-      ticketTypes: [{ name: 'Cubierto', kind: 'general', price: 1200, total: 40, soldCount: 0 }],
+      ticketTypes: [{ name: 'Cubierto', kind: 'general', price: 1200, total: 40, presold: 0 }],
       note: 'BORRADOR (no debe aparecer al cliente)',
     },
     {
@@ -463,7 +596,7 @@ async function main() {
       address: 'Av. San Isidro, La Ceiba', themeColor: '#06D6A0',
       status: 'published', capacity: 300, petFriendly: true, parkingAvailable: true,
       interests: ['festivales-culturales', 'baile', 'musica'],
-      ticketTypes: [{ name: 'Entrada libre', kind: 'general', price: 0, total: 300, soldCount: 42 }],
+      ticketTypes: [{ name: 'Entrada libre', kind: 'general', price: 0, total: 300, presold: 4 }],
       note: 'CIUDAD La Ceiba (filtro)',
     },
     {
@@ -474,7 +607,7 @@ async function main() {
       address: 'Centro histórico, Comayagua', themeColor: '#FFB703',
       status: 'published', capacity: 500, petFriendly: true,
       interests: ['festivales-gastronomicos', 'comidas'],
-      ticketTypes: [{ name: 'Entrada libre', kind: 'general', price: 0, total: 500, soldCount: 0 }],
+      ticketTypes: [{ name: 'Entrada libre', kind: 'general', price: 0, total: 500, presold: 0 }],
       note: 'CIUDAD Comayagua (filtro)',
     },
     {
@@ -485,11 +618,14 @@ async function main() {
       address: 'Col. Palmira, Tegucigalpa', themeColor: '#7209B7',
       status: 'published', capacity: 60, minAge: 18,
       interests: ['bares-and-drinks'],
-      ticketTypes: [{ name: 'Entrada general', kind: 'general', price: 250, total: 60, soldCount: 31 }],
+      ticketTypes: [{ name: 'Entrada general', kind: 'general', price: 250, total: 60, presold: 5 }],
       note: 'ES HOY',
     },
   ];
-  for (const spec of edgeEvents) await ensureEvent(edgeId, spec);
+  for (const spec of edgeEvents) {
+    await ensureEvent(edgeId, spec);
+    await reconcileEventInventory(edgeId, spec, ownerIds);
+  }
 
   // 3. Comercio con eventos Y clases, con dos programas: ejercita el selector
   //    de programas del tab Clases.
@@ -499,7 +635,7 @@ async function main() {
     'studio-mixto-hn',
     'Estudio con clases recurrentes y eventos especiales en Tegucigalpa.',
   );
-  await ensureEvent(mixtoId, {
+  const aniversarioSpec: EventSpec = {
     title: 'Aniversario Studio Mixto',
     description: 'Fiesta de aniversario con clases demo y música en vivo.',
     startsInDays: 8, startHour: 17, durationHours: 5,
@@ -507,9 +643,11 @@ async function main() {
     address: 'Col. Las Minitas, Tegucigalpa', themeColor: '#2EC4B6',
     status: 'published', capacity: 80, parkingAvailable: true,
     interests: ['fitness-y-entrenamiento', 'musica'],
-    ticketTypes: [{ name: 'Entrada general', kind: 'general', price: 200, total: 80, soldCount: 12 }],
+    ticketTypes: [{ name: 'Entrada general', kind: 'general', price: 200, total: 80, presold: 3 }],
     note: 'comercio con eventos Y clases',
-  });
+  };
+  await ensureEvent(mixtoId, aniversarioSpec);
+  await reconcileEventInventory(mixtoId, aniversarioSpec, ownerIds);
   const packOnlyId = await ensureProgram(mixtoId, {
     title: 'Barre Intensivo',
     description: 'Solo se vende por paquete de sesiones.',
@@ -545,7 +683,7 @@ async function main() {
     'box-ceiba-fit',
     'Box de entrenamiento en La Ceiba con pases ilimitados.',
   );
-  await ensureEvent(ceibaId, {
+  const retoSpec: EventSpec = {
     title: 'Reto Box Ceiba',
     description: 'Competencia interna abierta al público.',
     startsInDays: 11, startHour: 8, durationHours: 5,
@@ -553,9 +691,11 @@ async function main() {
     address: 'Barrio El Iman, La Ceiba', themeColor: '#E63946',
     status: 'published', capacity: 50,
     interests: ['fitness-y-entrenamiento', 'partidos-y-torneos'],
-    ticketTypes: [{ name: 'Competidor', kind: 'general', price: 300, total: 50, soldCount: 8 }],
+    ticketTypes: [{ name: 'Competidor', kind: 'general', price: 300, total: 50, presold: 3 }],
     note: 'abre el gimnasio de La Ceiba',
-  });
+  };
+  await ensureEvent(ceibaId, retoSpec);
+  await reconcileEventInventory(ceibaId, retoSpec, ownerIds);
   await ensureProgram(ceibaId, {
     title: 'Box Ilimitado',
     description: 'Solo pase ilimitado.',
