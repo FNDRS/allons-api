@@ -206,12 +206,32 @@ export class EventsController {
       ORDER BY sort_order ASC, created_at ASC
     `;
 
-    // Live rows, not `sold_count`: this is the number checkout compares
-    // against `capacity` before accepting a purchase, so it is what decides
-    // whether a reservation succeeds.
-    const soldTickets = await this.prisma.ticket.count({
-      where: { eventId: id, cancelledAt: null },
-    });
+    // Both caps are derived from live `tickets` rows rather than from
+    // `sold_count`, for two separate reasons:
+    //
+    // - the event cap is what checkout compares against `capacity`
+    //   (`me-payments.service.ts`), so only the row count decides whether a
+    //   purchase is accepted;
+    // - the per-tier counter drifts. `cancelTicket` does not decrement the
+    //   cancelled ticket's own `ticketTypeId`; it re-runs an ORDER BY and
+    //   decrements whichever tier sorts first (`me.service.ts`). Cancelling a
+    //   VIP ticket therefore decrements General, leaving VIP's `sold_count`
+    //   inflated — which would have reported a tier as full while a seat was
+    //   actually free, blocking a purchase checkout would have accepted.
+    const [soldTickets, soldByTypeRows] = await Promise.all([
+      this.prisma.ticket.count({ where: { eventId: id, cancelledAt: null } }),
+      this.prisma.$queryRaw<Array<{ ticket_type_id: string; n: number }>>`
+        SELECT ticket_type_id::text AS ticket_type_id, count(*)::int AS n
+        FROM tickets
+        WHERE event_id = ${id}::uuid
+          AND cancelled_at IS NULL
+          AND ticket_type_id IS NOT NULL
+        GROUP BY ticket_type_id
+      `,
+    ]);
+    const soldByTypeId = new Map(
+      soldByTypeRows.map((row) => [row.ticket_type_id, Number(row.n)]),
+    );
     const eventCapacity = Number(
       (event as { capacity?: number | null }).capacity ?? 0,
     );
@@ -231,7 +251,7 @@ export class EventsController {
         capacity: eventCapacity,
         soldTickets,
         total: row.total,
-        soldCount: row.sold_count,
+        soldCount: soldByTypeId.get(row.id) ?? 0,
       }),
     }));
 
