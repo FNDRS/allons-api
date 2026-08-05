@@ -53,12 +53,26 @@ CREATE POLICY event_images_public_read
   TO anon, authenticated
   USING (bucket_id = 'event-images');
 
+-- Uploading requires being an owner/admin of some comercio, mirroring the
+-- membership `createProviderEvent` / `updateProviderEvent` demand. Checking
+-- only the bucket would let any signed-in customer account write public
+-- objects here and use the bucket as arbitrary image hosting; the object path
+-- carries no identity, so the policy cannot key on it.
 DROP POLICY IF EXISTS event_images_authenticated_insert ON storage.objects;
-CREATE POLICY event_images_authenticated_insert
+DROP POLICY IF EXISTS event_images_provider_insert ON storage.objects;
+CREATE POLICY event_images_provider_insert
   ON storage.objects
   FOR INSERT
   TO authenticated
-  WITH CHECK (bucket_id = 'event-images');
+  WITH CHECK (
+    bucket_id = 'event-images'
+    AND EXISTS (
+      SELECT 1
+      FROM public.provider_members pm
+      WHERE pm.user_id = (SELECT auth.uid())
+        AND pm.role IN ('owner', 'admin')
+    )
+  );
 
 -- `auth.uid()` is wrapped in `(SELECT ...)` so the planner caches the call
 -- once per query instead of evaluating it per row, as the provider_realtime_rls
