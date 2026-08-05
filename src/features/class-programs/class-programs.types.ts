@@ -139,6 +139,16 @@ export interface ProgramMetricsRow {
   revenue_cents: bigint;
 }
 
+/** A reservation joined with the class and comercio it belongs to. */
+export interface UserReservationRow extends ReservationRow {
+  program_title: string;
+  program_city: string | null;
+  program_location_name: string | null;
+  provider_name: string;
+  provider_logo_url: string | null;
+  theme_color: string | null;
+}
+
 export interface ReservationRow {
   id: string;
   user_id: string;

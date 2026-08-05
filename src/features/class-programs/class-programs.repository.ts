@@ -21,8 +21,21 @@ import type {
   TemplatePayload,
   TemplateRow,
   TemplateUpdatePayload,
+  UserReservationRow,
   UserReservedOccurrenceRow,
 } from './class-programs.types';
+
+/**
+ * "Now" on Honduras' civil clock, as a naive timestamp.
+ *
+ * A session is stored as `session_date + start_time`: local wall time with no
+ * zone. The Postgres session runs in UTC, so comparing that against a bare
+ * `now()` reads a 07:00 class as 07:00 UTC — six hours early, which silently
+ * drops the last six hours of bookings out of "upcoming". Used wherever a
+ * session's own clock is compared; the cancellation check spells the same
+ * expression out inline because it builds one ad-hoc SELECT of its own.
+ */
+const NOW_HN = Prisma.sql`(now() AT TIME ZONE 'America/Tegucigalpa')`;
 
 /**
  * Cancelling this far ahead of the session (or further) returns the credit.
@@ -441,6 +454,52 @@ export class ClassProgramsRepository {
         AND user_id = ${userId}::uuid
         AND status = 'reserved'
         AND session_date BETWEEN ${from}::date AND ${to}::date
+    `;
+  }
+
+  /**
+   * The caller's class reservations, joined with the class and comercio so a
+   * ticket can be rendered without a follow-up request per row.
+   *
+   * `scope` splits on the session's own start moment rather than on the date,
+   * so a class earlier today reads as past while one later today is still
+   * upcoming — a reservation is only over once its session has begun.
+   */
+  listUserReservations(
+    userId: string,
+    options: { scope: 'upcoming' | 'past' | 'all'; limit: number },
+  ) {
+    const startsAt = Prisma.sql`(r.session_date::date + r.start_time::time)`;
+    const scopeFilter =
+      options.scope === 'upcoming'
+        ? Prisma.sql`AND ${startsAt} >= ${NOW_HN} AND r.status = 'reserved'`
+        : options.scope === 'past'
+          ? Prisma.sql`AND ${startsAt} < ${NOW_HN}`
+          : Prisma.empty;
+    const order =
+      options.scope === 'past'
+        ? Prisma.sql`ORDER BY ${startsAt} DESC`
+        : Prisma.sql`ORDER BY ${startsAt} ASC`;
+
+    return this.prisma.$queryRaw<UserReservationRow[]>`
+      SELECT r.id::text AS id, r.user_id, r.provider_id, r.program_id,
+             r.template_id, r.pass_id,
+             to_char(r.session_date, 'YYYY-MM-DD') AS session_date,
+             to_char(r.start_time, 'HH24:MI') AS start_time,
+             r.duration_minutes, r.instructor_name, r.status, r.created_at,
+             cp.title AS program_title,
+             cp.city AS program_city,
+             cp.location_name AS program_location_name,
+             cp.theme_color,
+             p.name AS provider_name,
+             p.logo_url AS provider_logo_url
+      FROM class_session_reservations r
+      JOIN class_programs cp ON cp.id = r.program_id
+      JOIN providers p ON p.id = cp.provider_id
+      WHERE r.user_id = ${userId}::uuid
+        ${scopeFilter}
+      ${order}
+      LIMIT ${options.limit}
     `;
   }
 

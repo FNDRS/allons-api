@@ -1,5 +1,6 @@
 import type {
   ClassPassRow,
+  UserReservationRow,
   PackageRow,
   ProgramMetricsRow,
   ProgramRow,
@@ -79,5 +80,26 @@ export function mapClassPass(row: ClassPassRow) {
     validFrom: row.valid_from.toISOString(),
     expiresAt: row.expires_at?.toISOString() ?? null,
     status: row.status,
+  };
+}
+
+/** A confirmed class reservation, as a client-facing ticket. */
+export function mapUserReservation(row: UserReservationRow) {
+  return {
+    id: row.id,
+    programId: row.program_id,
+    programTitle: row.program_title,
+    providerId: row.provider_id,
+    providerName: row.provider_name,
+    providerLogoUrl: row.provider_logo_url,
+    city: row.program_city,
+    locationName: row.program_location_name,
+    themeColor: row.theme_color,
+    date: row.session_date,
+    startTime: row.start_time,
+    durationMinutes: row.duration_minutes,
+    instructorName: row.instructor_name,
+    status: row.status,
+    createdAt: row.created_at.toISOString(),
   };
 }

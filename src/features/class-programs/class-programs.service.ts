@@ -19,6 +19,7 @@ import {
   mapProgram,
   mapProgramMetrics,
   mapTemplate,
+  mapUserReservation,
 } from './class-programs.mappers';
 import { ClassProgramsRepository } from './class-programs.repository';
 import type { ProgramRow } from './class-programs.types';
@@ -323,6 +324,29 @@ export class ClassProgramsService {
    * One claim per user per package, ever. Without that a free pack could be
    * re-claimed indefinitely for unlimited free sessions.
    */
+  /**
+   * The caller's class reservations. Exists because a booked class was
+   * previously invisible: only create and cancel routes existed, so once a
+   * finite pass hit zero credits its balance disappeared from
+   * `listMyClassPasses` and nothing was left showing when the class actually
+   * was.
+   */
+  async listMyReservations(
+    userId: string,
+    options: { scope?: string; limit?: number } = {},
+  ) {
+    const scope =
+      options.scope === 'past' || options.scope === 'all'
+        ? options.scope
+        : ('upcoming' as const);
+    const limit = Math.min(Math.max(Math.floor(options.limit ?? 50), 1), 100);
+    const rows = await this.repository.listUserReservations(userId, {
+      scope,
+      limit,
+    });
+    return rows.map(mapUserReservation);
+  }
+
   async claimFreePackage(userId: string, packageId: string) {
     const item = await this.repository.getActivePackageForPayment(packageId);
     if (!item) throw new NotFoundException('Paquete no encontrado');
