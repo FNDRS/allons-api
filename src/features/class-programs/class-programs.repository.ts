@@ -520,6 +520,24 @@ export class ClassProgramsRepository {
   }
 
   /**
+   * Which of a program's packages this user already claimed for free.
+   *
+   * Deliberately the same predicate as `findFreeClaimForPackage` — the flag
+   * this feeds is what the UI uses to stop offering a package it would then
+   * reject, so if the two ever disagreed the screen would go back to showing a
+   * tappable package and an error dialog instead.
+   */
+  async listFreeClaimedPackageIds(userId: string, programId: string) {
+    const rows = await this.prisma.$queryRaw<Array<{ package_id: string }>>`
+      SELECT package_id::text AS package_id FROM user_class_passes
+      WHERE user_id = ${userId}::uuid AND program_id = ${programId}::uuid
+        AND payment_order_id IS NULL
+        AND package_id IS NOT NULL
+    `;
+    return rows.map((row) => row.package_id);
+  }
+
+  /**
    * Grants a pass with no payment order behind it, for a free package.
    * `payment_order_id` stays null, which is what marks it as claimed rather
    * than purchased.
