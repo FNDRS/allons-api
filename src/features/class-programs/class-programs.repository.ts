@@ -419,6 +419,44 @@ export class ClassProgramsRepository {
     `;
   }
 
+  /** Any pass this user already holds for a package, regardless of state. */
+  async findPassForPackage(userId: string, packageId: string) {
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id::text AS id FROM user_class_passes
+      WHERE user_id = ${userId}::uuid AND package_id = ${packageId}::uuid
+      LIMIT 1
+    `;
+    return rows[0] ?? null;
+  }
+
+  /**
+   * Grants a pass with no payment order behind it, for a free package.
+   * `payment_order_id` stays null, which is what marks it as claimed rather
+   * than purchased.
+   */
+  async createFreeClassPass(input: {
+    userId: string;
+    providerId: string;
+    programId: string;
+    packageId: string;
+    creditsTotal: number | null;
+    expiresAt: Date | null;
+  }) {
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      INSERT INTO user_class_passes (
+        user_id, provider_id, program_id, package_id, payment_order_id,
+        credits_total, credits_remaining, valid_from, expires_at, status
+      ) VALUES (
+        ${input.userId}::uuid, ${input.providerId}::uuid,
+        ${input.programId}::uuid, ${input.packageId}::uuid, NULL,
+        ${input.creditsTotal}, ${input.creditsTotal}, now(),
+        ${input.expiresAt}::timestamptz, 'active'
+      )
+      RETURNING id::text AS id
+    `;
+    return rows[0];
+  }
+
   async getActivePackageForPayment(packageId: string) {
     const rows = await this.prisma.$queryRaw<ClassPackagePaymentRow[]>`
       SELECT cp.id, cp.program_id, cp.name, cp.price::float8 AS price,

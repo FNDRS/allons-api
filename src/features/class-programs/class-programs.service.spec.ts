@@ -36,6 +36,8 @@ type RepositoryMock = {
   deactivatePackage: jest.Mock;
   getProgramMetrics: jest.Mock;
   listPublishedPrograms: jest.Mock;
+  findPassForPackage: jest.Mock;
+  createFreeClassPass: jest.Mock;
 };
 
 function makeService() {
@@ -49,6 +51,8 @@ function makeService() {
     getTemplates: jest.fn().mockResolvedValue([]),
     getPackages: jest.fn().mockResolvedValue([]),
     listPublishedPrograms: jest.fn().mockResolvedValue([]),
+    findPassForPackage: jest.fn().mockResolvedValue(null),
+    createFreeClassPass: jest.fn().mockResolvedValue({ id: 'pass-1' }),
     getReservationCounts: jest.fn(),
     getActivePackageForPayment: jest.fn(),
     createReservation: jest.fn(),
@@ -825,5 +829,118 @@ describe('ClassProgramsService.listDiscoveryPrograms', () => {
     expect(b?.provider?.name).toBe('RAVA');
     expect(b?.packages).toHaveLength(1);
     expect(result.find((p) => p.id === 'a')?.provider?.name).toBe('Erei');
+  });
+});
+
+describe('ClassProgramsService.claimFreePackage', () => {
+  function freePackage(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'pkg-free',
+      program_id: 'program-1',
+      provider_id: 'provider-1',
+      program_title: 'Yoga Suave',
+      program_status: 'published',
+      name: 'Clase gratis',
+      price: 0,
+      credits: 1,
+      validity_days: null,
+      kind: 'drop_in',
+      active: true,
+      sort_order: 0,
+      ...overrides,
+    };
+  }
+
+  it('grants a pass for a zero-price package', async () => {
+    const { service, repository } = makeService();
+    repository.getActivePackageForPayment.mockResolvedValueOnce(freePackage());
+
+    await service.claimFreePackage('user-1', 'pkg-free');
+
+    expect(repository.createFreeClassPass).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        providerId: 'provider-1',
+        programId: 'program-1',
+        packageId: 'pkg-free',
+        creditsTotal: 1,
+        expiresAt: null,
+      }),
+    );
+  });
+
+  it('rejects a package that costs money, so it cannot bypass Paygate', async () => {
+    const { service, repository } = makeService();
+    repository.getActivePackageForPayment.mockResolvedValueOnce(
+      freePackage({ price: 150 }),
+    );
+
+    await expect(
+      service.claimFreePackage('user-1', 'pkg-free'),
+    ).rejects.toMatchObject({
+      message: 'Este paquete tiene precio; usa el flujo de pago',
+    });
+    expect(repository.createFreeClassPass).not.toHaveBeenCalled();
+  });
+
+  it('rejects a second claim of the same package', async () => {
+    const { service, repository } = makeService();
+    repository.getActivePackageForPayment.mockResolvedValueOnce(freePackage());
+    repository.findPassForPackage.mockResolvedValueOnce({ id: 'pass-old' });
+
+    await expect(
+      service.claimFreePackage('user-1', 'pkg-free'),
+    ).rejects.toMatchObject({
+      message: 'Ya reclamaste este paquete gratis',
+    });
+    expect(repository.createFreeClassPass).not.toHaveBeenCalled();
+  });
+
+  it('throws when the package does not exist or is unpublished', async () => {
+    const { service, repository } = makeService();
+    repository.getActivePackageForPayment.mockResolvedValueOnce(null);
+
+    await expect(
+      service.claimFreePackage('user-1', 'nope'),
+    ).rejects.toMatchObject({ message: 'Paquete no encontrado' });
+  });
+
+  it('stores no credit count for an unlimited pass and dates its expiry', async () => {
+    const { service, repository } = makeService();
+    repository.getActivePackageForPayment.mockResolvedValueOnce(
+      freePackage({ kind: 'unlimited', credits: null, validity_days: 30 }),
+    );
+
+    await service.claimFreePackage('user-1', 'pkg-free');
+
+    const arg = repository.createFreeClassPass.mock.calls[0][0];
+    expect(arg.creditsTotal).toBeNull();
+    expect(arg.expiresAt).toBeInstanceOf(Date);
+  });
+
+  it('returns the resulting balance for the program', async () => {
+    const { service, repository } = makeService();
+    repository.getActivePackageForPayment.mockResolvedValueOnce(freePackage());
+    repository.listUserClassPasses.mockResolvedValueOnce([
+      {
+        id: 'pass-1',
+        provider_id: 'provider-1',
+        program_id: 'program-1',
+        program_title: 'Yoga Suave',
+        package_id: 'pkg-free',
+        package_name: 'Clase gratis',
+        package_kind: 'drop_in',
+        credits_total: 1,
+        credits_remaining: 1,
+        valid_from: new Date('2026-01-01T00:00:00.000Z'),
+        expires_at: null,
+        status: 'active',
+      },
+    ]);
+
+    const result = await service.claimFreePackage('user-1', 'pkg-free');
+
+    expect(result.programId).toBe('program-1');
+    expect(result.balance?.creditsRemaining).toBe(1);
   });
 });
