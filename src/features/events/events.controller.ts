@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { computeEntryTypeRemaining } from './events-availability.util';
 import { attachMinPriceCents } from './events-pricing.util';
 import { parseDate, parseList } from './events.types';
 
@@ -205,17 +206,62 @@ export class EventsController {
       ORDER BY sort_order ASC, created_at ASC
     `;
 
+    // Both caps are derived from live `tickets` rows rather than from
+    // `sold_count`, for two separate reasons:
+    //
+    // - the event cap is what checkout compares against `capacity`
+    //   (`me-payments.service.ts`), so only the row count decides whether a
+    //   purchase is accepted;
+    // - the per-tier counter drifts. `cancelTicket` does not decrement the
+    //   cancelled ticket's own `ticketTypeId`; it re-runs an ORDER BY and
+    //   decrements whichever tier sorts first (`me.service.ts`). Cancelling a
+    //   VIP ticket therefore decrements General, leaving VIP's `sold_count`
+    //   inflated — which would have reported a tier as full while a seat was
+    //   actually free, blocking a purchase checkout would have accepted.
+    const [soldTickets, soldByTypeRows] = await Promise.all([
+      this.prisma.ticket.count({ where: { eventId: id, cancelledAt: null } }),
+      this.prisma.$queryRaw<Array<{ ticket_type_id: string; n: number }>>`
+        SELECT ticket_type_id::text AS ticket_type_id, count(*)::int AS n
+        FROM tickets
+        WHERE event_id = ${id}::uuid
+          AND cancelled_at IS NULL
+          AND ticket_type_id IS NOT NULL
+        GROUP BY ticket_type_id
+      `,
+    ]);
+    const soldByTypeId = new Map(
+      soldByTypeRows.map((row) => [row.ticket_type_id, Number(row.n)]),
+    );
+    const eventCapacity = Number(
+      (event as { capacity?: number | null }).capacity ?? 0,
+    );
+
     // For a recurring class these are the packages (paquetes); for a single
     // event they are the entry tiers. Same rows, `planKind` tells them apart.
-    const entryTypes = (ticketTypeRows ?? []).map((row) => ({
-      id: row.id,
-      name: row.name,
-      priceCents: Math.round(Number(row.price) * 100),
-      planKind: row.plan_kind ?? null,
-      credits: row.credits ?? null,
-      validityDays: row.validity_days ?? null,
-      soldOut: row.total > 0 && row.sold_count >= row.total,
-    }));
+    const entryTypes = (ticketTypeRows ?? []).map((row) => {
+      const remaining = computeEntryTypeRemaining({
+        capacity: eventCapacity,
+        soldTickets,
+        total: row.total,
+        soldCount: soldByTypeId.get(row.id) ?? 0,
+      });
+      return {
+        id: row.id,
+        name: row.name,
+        priceCents: Math.round(Number(row.price) * 100),
+        planKind: row.plan_kind ?? null,
+        credits: row.credits ?? null,
+        validityDays: row.validity_days ?? null,
+        // Derived from `remaining` rather than from `sold_count`, so the two
+        // can never disagree — previously this could report soldOut while
+        // `remaining` said seats were free, since only one of them had been
+        // moved off the drifting counter. `null` remaining means uncapped,
+        // which is never sold out.
+        soldOut: remaining === 0,
+        /** Seats still buyable, or null when neither cap applies. */
+        remaining,
+      };
+    });
 
     const providerContactRows = event.providerId
       ? await this.prisma.$queryRaw<Array<{ email: string | null }>>`
