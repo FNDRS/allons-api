@@ -34,6 +34,7 @@ VALUES (
   ]
 )
 ON CONFLICT (id) DO UPDATE SET
+  name = EXCLUDED.name,
   public = EXCLUDED.public,
   file_size_limit = EXCLUDED.file_size_limit,
   allowed_mime_types = EXCLUDED.allowed_mime_types;
@@ -70,6 +71,7 @@ CREATE POLICY event_images_provider_insert
       SELECT 1
       FROM public.provider_members pm
       WHERE pm.user_id = (SELECT auth.uid())
+        AND pm.active = true
         AND pm.role IN ('owner', 'admin')
     )
   );
