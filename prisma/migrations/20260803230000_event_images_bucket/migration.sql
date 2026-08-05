@@ -76,6 +76,15 @@ CREATE POLICY event_images_provider_insert
     )
   );
 
+-- Overwrite and delete are limited to whoever uploaded the object.
+--
+-- Both ownership columns are accepted on purpose. `storage.objects` carries
+-- `owner uuid` (deprecated) and `owner_id text`; which one the storage service
+-- populates depends on its version, and this project's 2000 existing objects
+-- have neither, having been written with the service key. Matching only
+-- `owner` would risk a policy that never fires, leaving a comercio unable to
+-- replace its own image.
+--
 -- `auth.uid()` is wrapped in `(SELECT ...)` so the planner caches the call
 -- once per query instead of evaluating it per row, as the provider_realtime_rls
 -- migration does and documents.
@@ -84,12 +93,30 @@ CREATE POLICY event_images_owner_update
   ON storage.objects
   FOR UPDATE
   TO authenticated
-  USING (bucket_id = 'event-images' AND owner = (SELECT auth.uid()))
-  WITH CHECK (bucket_id = 'event-images' AND owner = (SELECT auth.uid()));
+  USING (
+    bucket_id = 'event-images'
+    AND (
+      owner = (SELECT auth.uid())
+      OR owner_id = (SELECT auth.uid())::text
+    )
+  )
+  WITH CHECK (
+    bucket_id = 'event-images'
+    AND (
+      owner = (SELECT auth.uid())
+      OR owner_id = (SELECT auth.uid())::text
+    )
+  );
 
 DROP POLICY IF EXISTS event_images_owner_delete ON storage.objects;
 CREATE POLICY event_images_owner_delete
   ON storage.objects
   FOR DELETE
   TO authenticated
-  USING (bucket_id = 'event-images' AND owner = (SELECT auth.uid()));
+  USING (
+    bucket_id = 'event-images'
+    AND (
+      owner = (SELECT auth.uid())
+      OR owner_id = (SELECT auth.uid())::text
+    )
+  );
