@@ -1,3 +1,4 @@
+import { Prisma } from '../../../generated/prisma';
 import {
   BadRequestException,
   ForbiddenException,
@@ -36,7 +37,7 @@ type RepositoryMock = {
   deactivatePackage: jest.Mock;
   getProgramMetrics: jest.Mock;
   listPublishedPrograms: jest.Mock;
-  findPassForPackage: jest.Mock;
+  findFreeClaimForPackage: jest.Mock;
   createFreeClassPass: jest.Mock;
 };
 
@@ -51,7 +52,7 @@ function makeService() {
     getTemplates: jest.fn().mockResolvedValue([]),
     getPackages: jest.fn().mockResolvedValue([]),
     listPublishedPrograms: jest.fn().mockResolvedValue([]),
-    findPassForPackage: jest.fn().mockResolvedValue(null),
+    findFreeClaimForPackage: jest.fn().mockResolvedValue(null),
     createFreeClassPass: jest.fn().mockResolvedValue({ id: 'pass-1' }),
     getReservationCounts: jest.fn(),
     getActivePackageForPayment: jest.fn(),
@@ -886,7 +887,7 @@ describe('ClassProgramsService.claimFreePackage', () => {
   it('rejects a second claim of the same package', async () => {
     const { service, repository } = makeService();
     repository.getActivePackageForPayment.mockResolvedValueOnce(freePackage());
-    repository.findPassForPackage.mockResolvedValueOnce({ id: 'pass-old' });
+    repository.findFreeClaimForPackage.mockResolvedValueOnce({ id: 'pass-old' });
 
     await expect(
       service.claimFreePackage('user-1', 'pkg-free'),
@@ -942,5 +943,63 @@ describe('ClassProgramsService.claimFreePackage', () => {
 
     expect(result.programId).toBe('program-1');
     expect(result.balance?.creditsRemaining).toBe(1);
+  });
+});
+
+describe('ClassProgramsService.claimFreePackage — concurrent claims', () => {
+  // The pre-insert check cannot be atomic on its own, so the unique index is
+  // what guarantees one claim. This covers the race loser: it must read as
+  // "already claimed", not as a 500.
+  it('maps a unique violation to the already-claimed error', async () => {
+    const { service, repository } = makeService();
+    repository.getActivePackageForPayment.mockResolvedValueOnce({
+      id: 'pkg-free',
+      program_id: 'program-1',
+      provider_id: 'provider-1',
+      program_title: 'Yoga Suave',
+      program_status: 'published',
+      name: 'Clase gratis',
+      price: 0,
+      credits: 1,
+      validity_days: null,
+      kind: 'drop_in',
+      active: true,
+      sort_order: 0,
+    });
+    repository.createFreeClassPass.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('duplicate', {
+        code: 'P2002',
+        clientVersion: 'test',
+      }),
+    );
+
+    await expect(
+      service.claimFreePackage('user-1', 'pkg-free'),
+    ).rejects.toMatchObject({ message: 'Ya reclamaste este paquete gratis' });
+  });
+
+  it('rethrows an unrelated database error instead of masking it', async () => {
+    const { service, repository } = makeService();
+    repository.getActivePackageForPayment.mockResolvedValueOnce({
+      id: 'pkg-free',
+      program_id: 'program-1',
+      provider_id: 'provider-1',
+      program_title: 'Yoga Suave',
+      program_status: 'published',
+      name: 'Clase gratis',
+      price: 0,
+      credits: 1,
+      validity_days: null,
+      kind: 'drop_in',
+      active: true,
+      sort_order: 0,
+    });
+    repository.createFreeClassPass.mockRejectedValueOnce(
+      new Error('connection reset'),
+    );
+
+    await expect(
+      service.claimFreePackage('user-1', 'pkg-free'),
+    ).rejects.toMatchObject({ message: 'connection reset' });
   });
 });

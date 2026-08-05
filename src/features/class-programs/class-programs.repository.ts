@@ -419,11 +419,17 @@ export class ClassProgramsRepository {
     `;
   }
 
-  /** Any pass this user already holds for a package, regardless of state. */
-  async findPassForPackage(userId: string, packageId: string) {
+  /**
+   * A pass this user already *claimed* for a package, i.e. one with no payment
+   * order behind it. Scoped the same way as
+   * `user_class_passes_free_claim_uidx`, so the check and the constraint that
+   * backs it agree — buying the same package twice stays legitimate.
+   */
+  async findFreeClaimForPackage(userId: string, packageId: string) {
     const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
       SELECT id::text AS id FROM user_class_passes
       WHERE user_id = ${userId}::uuid AND package_id = ${packageId}::uuid
+        AND payment_order_id IS NULL
       LIMIT 1
     `;
     return rows[0] ?? null;

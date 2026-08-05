@@ -7,6 +7,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
+import { Prisma } from '../../../generated/prisma';
 import { FeatureFlagsService } from '../../shared/feature-flags.service';
 import { ObservabilityService } from '../../shared/observability/observability.service';
 import { PaygateService } from '../paygate/paygate.service';
@@ -35,6 +36,8 @@ import {
   parseTemplatePayload,
   parseTemplateUpdatePayload,
 } from './class-programs.validation';
+
+const ALREADY_CLAIMED = 'Ya reclamaste este paquete gratis';
 
 @Injectable()
 export class ClassProgramsService {
@@ -327,12 +330,12 @@ export class ClassProgramsService {
       );
     }
 
-    const existing = await this.repository.findPassForPackage(
+    const existing = await this.repository.findFreeClaimForPackage(
       userId,
       packageId,
     );
     if (existing) {
-      throw new BadRequestException('Ya reclamaste este paquete gratis');
+      throw new BadRequestException(ALREADY_CLAIMED);
     }
 
     // Same derivation as the paid path in `payment-fulfillment.service.ts`:
@@ -342,14 +345,28 @@ export class ClassProgramsService {
       ? new Date(Date.now() + item.validity_days * 24 * 60 * 60 * 1000)
       : null;
 
-    await this.repository.createFreeClassPass({
-      userId,
-      providerId: item.provider_id,
-      programId: item.program_id,
-      packageId: item.id,
-      creditsTotal: credits,
-      expiresAt,
-    });
+    // The check above is not atomic on its own: two concurrent claims can both
+    // see no pass before either inserts. `user_class_passes_free_claim_uidx`
+    // is what actually guarantees one claim, so the race loser lands here as a
+    // unique violation and gets the same message rather than a 500.
+    try {
+      await this.repository.createFreeClassPass({
+        userId,
+        providerId: item.provider_id,
+        programId: item.program_id,
+        packageId: item.id,
+        creditsTotal: credits,
+        expiresAt,
+      });
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        throw new BadRequestException(ALREADY_CLAIMED);
+      }
+      throw err;
+    }
 
     this.obs.event('class_packages.claimed_free', {
       userId,
