@@ -61,6 +61,13 @@ export interface ReservationPayload {
   startTime: string;
 }
 
+/** A published program plus the comercio it belongs to, for discovery feeds. */
+export interface DiscoveryProgramRow extends ProgramRow {
+  provider_name: string;
+  provider_handle: string | null;
+  provider_logo_url: string | null;
+}
+
 export interface ProgramRow {
   id: string;
   provider_id: string;

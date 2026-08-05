@@ -168,6 +168,25 @@ export class ClassProgramsService {
     return this.withChildren(programs, { publicOnly: true });
   }
 
+  /**
+   * Discovery feed of published programs across comercios. Carries the
+   * comercio's name and logo so a card can be rendered without a second
+   * request per program.
+   */
+  async listDiscoveryPrograms(options: { cities: string[]; limit: number }) {
+    const rows = await this.repository.listPublishedPrograms(options);
+    const withChildren = await this.withChildren(rows, { publicOnly: true });
+    return withChildren.map((program, index) => ({
+      ...program,
+      provider: {
+        id: rows[index].provider_id,
+        name: rows[index].provider_name,
+        handle: rows[index].provider_handle,
+        logoUrl: rows[index].provider_logo_url,
+      },
+    }));
+  }
+
   async getPublicProgram(
     programId: string,
     options: { userId?: string | null } = {},

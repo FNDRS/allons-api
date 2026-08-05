@@ -7,6 +7,7 @@ import {
   Req,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { parseList } from '../events/events.types';
 import { SupabaseAdminService } from '../../shared/supabase/supabase-admin.service';
 import { ClassProgramsService } from './class-programs.service';
 
@@ -38,6 +39,31 @@ export class ClassProgramsController {
   @Get('providers/:providerId/class-programs')
   listPublicForProvider(@Param('providerId') providerId: string) {
     return this.classPrograms.listPublicPrograms(providerId);
+  }
+
+  /**
+   * Discovery listing for the client home. Accepts `city` and `cities` in
+   * either repeated or comma-separated form, matching the events listing's
+   * contract so both feeds can be filtered the same way.
+   * Guest-accessible: browsing classes never requires an account.
+   */
+  @Get('class-programs')
+  listDiscovery(
+    @Query('city') city?: string | string[],
+    @Query('cities') cities?: string | string[],
+    @Query('limit') limit?: string,
+  ) {
+    const parsedCities = [
+      ...new Set([...parseList(city), ...parseList(cities)]),
+    ];
+    const parsedLimit = limit === undefined ? 20 : Number(limit);
+    if (!Number.isFinite(parsedLimit) || parsedLimit < 1) {
+      throw new BadRequestException('limit debe ser mayor a 0');
+    }
+    return this.classPrograms.listDiscoveryPrograms({
+      cities: parsedCities,
+      limit: Math.min(Math.floor(parsedLimit), 50),
+    });
   }
 
   @Get('class-programs/:programId')
