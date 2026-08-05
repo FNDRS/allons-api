@@ -7,6 +7,7 @@ function makeController(getAuthenticatedUser: jest.Mock) {
   const classPrograms = {
     getAvailability: jest.fn().mockResolvedValue([]),
     getPublicProgram: jest.fn().mockResolvedValue({}),
+    listDiscoveryPrograms: jest.fn().mockResolvedValue([]),
   } as unknown as jest.Mocked<ClassProgramsService>;
   const supabaseAdmin = {
     getAuthenticatedUser,
@@ -87,5 +88,78 @@ describe('ClassProgramsController.getPublicProgram', () => {
     expect(classPrograms.getPublicProgram).toHaveBeenCalledWith('program-1', {
       userId: 'user-1',
     });
+  });
+});
+
+describe('ClassProgramsController.listDiscovery', () => {
+  function listDiscovery(
+    city?: string | string[],
+    cities?: string | string[],
+    limit?: string,
+  ) {
+    const { controller, classPrograms } = makeController(jest.fn());
+    controller.listDiscovery(city, cities, limit);
+    return classPrograms.listDiscoveryPrograms.mock.calls[0][0];
+  }
+
+  it('defaults to no city filter and a limit of 20', () => {
+    expect(listDiscovery()).toEqual({ cities: [], limit: 20 });
+  });
+
+  it('accepts comma-separated cities, the form the mobile client sends', () => {
+    expect(listDiscovery(undefined, 'La Ceiba,Tegucigalpa').cities).toEqual([
+      'La Ceiba',
+      'Tegucigalpa',
+    ]);
+  });
+
+  it('accepts a repeated city param', () => {
+    expect(listDiscovery(['La Ceiba', 'Tegucigalpa']).cities).toEqual([
+      'La Ceiba',
+      'Tegucigalpa',
+    ]);
+  });
+
+  it('merges city and cities, dropping duplicates', () => {
+    expect(listDiscovery('La Ceiba', 'La Ceiba,Tegucigalpa').cities).toEqual([
+      'La Ceiba',
+      'Tegucigalpa',
+    ]);
+  });
+
+  it('trims surrounding whitespace and ignores empty entries', () => {
+    expect(listDiscovery(undefined, ' La Ceiba , , Tegucigalpa ').cities).toEqual([
+      'La Ceiba',
+      'Tegucigalpa',
+    ]);
+  });
+
+  it('caps the limit at 50 so a caller cannot ask for the whole table', () => {
+    expect(listDiscovery(undefined, undefined, '500').limit).toBe(50);
+  });
+
+  it('floors a fractional limit', () => {
+    expect(listDiscovery(undefined, undefined, '7.9').limit).toBe(7);
+  });
+
+  it('rejects a limit below 1', () => {
+    const { controller } = makeController(jest.fn());
+    expect(() => controller.listDiscovery(undefined, undefined, '0')).toThrow(
+      'limit debe ser mayor a 0',
+    );
+  });
+
+  it('rejects a non-numeric limit', () => {
+    const { controller } = makeController(jest.fn());
+    expect(() => controller.listDiscovery(undefined, undefined, 'abc')).toThrow(
+      'limit debe ser mayor a 0',
+    );
+  });
+
+  it('never authenticates — discovery is guest-accessible', () => {
+    const getAuthenticatedUser = jest.fn();
+    const { controller } = makeController(getAuthenticatedUser);
+    controller.listDiscovery('La Ceiba');
+    expect(getAuthenticatedUser).not.toHaveBeenCalled();
   });
 });
