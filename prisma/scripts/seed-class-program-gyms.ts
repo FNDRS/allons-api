@@ -1,15 +1,21 @@
 /**
- * Adds gym `providers`, each with one published `class_program` (weekly
- * schedule + a drop_in/pack/unlimited package mix), so the client-facing
- * buy-sessions / reserve-a-class flow can be tested against real data.
+ * Gym `providers`, each with one published `class_program` (weekly schedule +
+ * a drop_in/pack/unlimited package mix), so the client-facing buy-sessions /
+ * reserve-a-class flow can be tested against real data.
  *
- * Purely additive: unlike `fresh-start-seed.ts` this never deletes anything.
- * Providers are upserted by `handle`, and a program is skipped when one with
- * the same title already exists for that provider, so re-running is a no-op.
+ * Usable two ways:
+ *  - as a CLI, additively, against an existing database (see Run below);
+ *  - as a module, from `fresh-start-seed.ts`, to repopulate class programs
+ *    after that script wipes the app tables.
+ *
+ * Additive and idempotent either way: it never deletes anything, providers are
+ * upserted by `handle`, and a program is skipped when one with the same title
+ * already exists for that provider.
  *
  * Mirrors the INSERT shape of
  * `ClassProgramsRepository.createProgramWithChildren` (same columns, same
- * casts) so seeded rows are indistinguishable from API-created ones.
+ * casts, same transaction) so seeded rows are indistinguishable from
+ * API-created ones.
  *
  * Env: DATABASE_URL
  *
@@ -24,7 +30,8 @@
 
 import { PrismaClient } from '../../generated/prisma';
 
-const prisma = new PrismaClient();
+/** Accepts the base client or a transaction client. */
+type Db = Pick<PrismaClient, '$queryRaw' | '$executeRaw' | '$transaction' | 'provider'>;
 
 type PackageSpec = {
   name: string;
@@ -45,7 +52,7 @@ type TemplateSpec = {
   instructorName: string | null;
 };
 
-type GymSpec = {
+export type GymSpec = {
   providerName: string;
   providerHandle: string;
   providerDescription: string;
@@ -64,7 +71,7 @@ type GymSpec = {
   packages: PackageSpec[];
 };
 
-/** drop-in + 8-session pack + monthly unlimited, priced off a single per-class base. */
+/** drop-in + 8-session pack + monthly unlimited, priced off a per-class base. */
 function standardPackages(basePrice: number): PackageSpec[] {
   return [
     {
@@ -94,7 +101,7 @@ function standardPackages(basePrice: number): PackageSpec[] {
   ];
 }
 
-const GYMS: GymSpec[] = [
+export const GYMS: GymSpec[] = [
   {
     providerName: 'Erei Wellness',
     providerHandle: 'erei-wellness',
@@ -177,8 +184,8 @@ const GYMS: GymSpec[] = [
   },
 ];
 
-async function ensureProvider(spec: GymSpec): Promise<string> {
-  const provider = await prisma.provider.upsert({
+async function ensureProvider(db: Db, spec: GymSpec): Promise<string> {
+  const provider = await db.provider.upsert({
     where: { handle: spec.providerHandle },
     update: {},
     create: {
@@ -192,10 +199,11 @@ async function ensureProvider(spec: GymSpec): Promise<string> {
 }
 
 async function findExistingProgramId(
+  db: Db,
   providerId: string,
   title: string,
 ): Promise<string | null> {
-  const rows = await prisma.$queryRaw<Array<{ id: string }>>`
+  const rows = await db.$queryRaw<Array<{ id: string }>>`
     SELECT id::text AS id FROM class_programs
     WHERE provider_id = ${providerId}::uuid AND title = ${title}
     LIMIT 1
@@ -204,10 +212,11 @@ async function findExistingProgramId(
 }
 
 async function createProgramWithChildren(
+  db: Db,
   providerId: string,
   spec: GymSpec,
 ): Promise<string> {
-  return prisma.$transaction(async (tx) => {
+  return db.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<Array<{ id: string }>>`
       INSERT INTO class_programs (
         provider_id, title, description, discipline, instructor_name,
@@ -253,33 +262,47 @@ async function createProgramWithChildren(
   });
 }
 
-async function main() {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL es obligatorio.');
-  }
-
-  console.log('[seed-class-gyms] creando gimnasios de prueba…');
+/**
+ * Creates every gym in `GYMS` that isn't there yet. Safe to call after a wipe
+ * or against a populated database.
+ */
+export async function seedClassProgramGyms(db: Db): Promise<void> {
   for (const gym of GYMS) {
-    const providerId = await ensureProvider(gym);
-    const existing = await findExistingProgramId(providerId, gym.program.title);
+    const providerId = await ensureProvider(db, gym);
+    const existing = await findExistingProgramId(db, providerId, gym.program.title);
     if (existing) {
       console.log(
         `  omitido: "${gym.program.title}" ya existe en ${gym.providerHandle} (${existing})`,
       );
       continue;
     }
-    const programId = await createProgramWithChildren(providerId, gym);
+    const programId = await createProgramWithChildren(db, providerId, gym);
     console.log(
       `  creado: ${gym.providerName} → "${gym.program.title}" (${programId}), ` +
         `${gym.templates.length} horarios, ${gym.packages.length} paquetes`,
     );
   }
-  console.log('[seed-class-gyms] listo.');
 }
 
-main()
-  .catch((e) => {
+async function main() {
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL es obligatorio.');
+  }
+  const prisma = new PrismaClient();
+  try {
+    console.log('[seed-class-gyms] creando gimnasios de prueba…');
+    await seedClassProgramGyms(prisma);
+    console.log('[seed-class-gyms] listo.');
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+// Only run when invoked directly, so importing this from `fresh-start-seed.ts`
+// doesn't kick off a seed at import time.
+if (require.main === module) {
+  main().catch((e) => {
     console.error(e);
     process.exitCode = 1;
-  })
-  .finally(() => prisma.$disconnect());
+  });
+}
