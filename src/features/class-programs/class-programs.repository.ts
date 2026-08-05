@@ -5,6 +5,7 @@ import type {
   ClassPackagePaymentRow,
   ClassPassFilters,
   ClassPassRow,
+  DiscoveryProgramRow,
   PackagePayload,
   PackageRow,
   PackageUpdatePayload,
@@ -109,6 +110,44 @@ export class ClassProgramsRepository {
         validity_days, kind, active, sort_order
     `;
     return rows[0];
+  }
+
+  /**
+   * Published programs across every comercio, for the client discovery feed.
+   *
+   * Requires at least one active schedule and one active package: a program
+   * missing either cannot be booked or bought, so surfacing it would only
+   * produce a dead card. Comercios whose sole content is classes have no other
+   * way into the app, which is what this listing exists to solve.
+   */
+  listPublishedPrograms(options: { cities: string[]; limit: number }) {
+    const cityFilter =
+      options.cities.length > 0
+        ? Prisma.sql`AND lower(cp.city) = ANY(${options.cities.map((c) =>
+            c.toLowerCase(),
+          )})`
+        : Prisma.empty;
+
+    return this.prisma.$queryRaw<DiscoveryProgramRow[]>`
+      SELECT cp.*,
+             p.name AS provider_name,
+             p.handle AS provider_handle,
+             p.logo_url AS provider_logo_url
+      FROM class_programs cp
+      JOIN providers p ON p.id = cp.provider_id
+      WHERE cp.status = 'published'
+        ${cityFilter}
+        AND EXISTS (
+          SELECT 1 FROM class_session_templates t
+          WHERE t.program_id = cp.id AND t.active = true
+        )
+        AND EXISTS (
+          SELECT 1 FROM class_packages k
+          WHERE k.program_id = cp.id AND k.active = true
+        )
+      ORDER BY cp.created_at DESC
+      LIMIT ${options.limit}
+    `;
   }
 
   getProgramsByProvider(providerId: string, options: { publicOnly: boolean }) {

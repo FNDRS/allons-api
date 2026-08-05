@@ -40,6 +40,28 @@ export class ClassProgramsController {
     return this.classPrograms.listPublicPrograms(providerId);
   }
 
+  /**
+   * Discovery listing for the client home. `city` may repeat to pass several.
+   * Guest-accessible: browsing classes never requires an account.
+   */
+  @Get('class-programs')
+  listDiscovery(
+    @Query('city') city?: string | string[],
+    @Query('limit') limit?: string,
+  ) {
+    const cities = (Array.isArray(city) ? city : city ? [city] : [])
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0);
+    const parsedLimit = limit === undefined ? 20 : Number(limit);
+    if (!Number.isFinite(parsedLimit) || parsedLimit < 1) {
+      throw new BadRequestException('limit debe ser mayor a 0');
+    }
+    return this.classPrograms.listDiscoveryPrograms({
+      cities,
+      limit: Math.min(Math.floor(parsedLimit), 50),
+    });
+  }
+
   @Get('class-programs/:programId')
   async getPublicProgram(
     @Req() req: Request,
