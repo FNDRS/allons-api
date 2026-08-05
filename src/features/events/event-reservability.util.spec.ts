@@ -120,15 +120,19 @@ describe('isEventOpenForReservation — recurring classes', () => {
   it('still applies the cutoff to a single event', () => {
     expect(
       isEventOpenForReservation(
-        { startsAt: hoursFromNow(-1), status: 'published', eventType: 'single' },
+        {
+          startsAt: hoursFromNow(-1),
+          status: 'published',
+          eventType: 'single',
+        },
         NOW,
       ),
     ).toBe(false);
   });
 
   it('treats a missing eventType as a single event', () => {
-    expect(
-      isEventOpenForReservation({ startsAt: hoursFromNow(-1) }, NOW),
-    ).toBe(false);
+    expect(isEventOpenForReservation({ startsAt: hoursFromNow(-1) }, NOW)).toBe(
+      false,
+    );
   });
 });

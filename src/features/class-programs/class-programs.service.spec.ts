@@ -887,7 +887,9 @@ describe('ClassProgramsService.claimFreePackage', () => {
   it('rejects a second claim of the same package', async () => {
     const { service, repository } = makeService();
     repository.getActivePackageForPayment.mockResolvedValueOnce(freePackage());
-    repository.findFreeClaimForPackage.mockResolvedValueOnce({ id: 'pass-old' });
+    repository.findFreeClaimForPackage.mockResolvedValueOnce({
+      id: 'pass-old',
+    });
 
     await expect(
       service.claimFreePackage('user-1', 'pkg-free'),

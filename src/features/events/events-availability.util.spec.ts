@@ -14,9 +14,9 @@ describe('computeEntryTypeRemaining', () => {
   });
 
   it('uses the entry type total when only that is set', () => {
-    expect(
-      computeEntryTypeRemaining({ ...base, total: 8, soldCount: 3 }),
-    ).toBe(5);
+    expect(computeEntryTypeRemaining({ ...base, total: 8, soldCount: 3 })).toBe(
+      5,
+    );
   });
 
   // The event cap is the one checkout enforces, so it has to win when tighter
@@ -47,9 +47,9 @@ describe('computeEntryTypeRemaining', () => {
     expect(
       computeEntryTypeRemaining({ ...base, capacity: 5, soldTickets: 9 }),
     ).toBe(0);
-    expect(
-      computeEntryTypeRemaining({ ...base, total: 5, soldCount: 9 }),
-    ).toBe(0);
+    expect(computeEntryTypeRemaining({ ...base, total: 5, soldCount: 9 })).toBe(
+      0,
+    );
   });
 
   // The seeded "last spot" case: capacity 3 with 2 live tickets.
