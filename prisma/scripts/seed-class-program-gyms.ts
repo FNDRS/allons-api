@@ -12,8 +12,14 @@
  * casts) so seeded rows are indistinguishable from API-created ones.
  *
  * Env: DATABASE_URL
- * Run: cd allons-api && pnpm exec ts-node --transpile-only \
- *        prisma/scripts/seed-class-program-gyms.ts
+ *
+ * `generated/prisma` is gitignored, so a fresh checkout must generate the
+ * client before this script can import it — same reason the `db:seed:*`
+ * entries in package.json all prefix `prisma generate`.
+ *
+ * Run: cd allons-api && pnpm exec prisma generate \
+ *        && pnpm exec ts-node --transpile-only \
+ *           prisma/scripts/seed-class-program-gyms.ts
  */
 
 import { PrismaClient } from '../../generated/prisma';
