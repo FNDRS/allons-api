@@ -9,6 +9,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
+import { isEventOpenForReservation } from '../events/event-reservability.util';
 import { parseList } from '../events/events.types';
 import { attachMinPriceCents } from '../events/events-pricing.util';
 import {
@@ -733,6 +734,14 @@ export class MeService {
     );
     if (!event) {
       throw new NotFoundException('Evento no encontrado');
+    }
+    // Reservations close when the event starts — which is what the client
+    // already advertises next to the start time. Without this a past event
+    // stayed fully bookable, including the ones the seed marks as finished.
+    if (!isEventOpenForReservation(event)) {
+      throw new BadRequestException(
+        'Este evento ya comenzó; las reservas están cerradas',
+      );
     }
     await this.timed(correlationId, 'ensureTicketHoldersTable', () =>
       this.ensureTicketHoldersTable(),
