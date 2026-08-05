@@ -238,22 +238,30 @@ export class EventsController {
 
     // For a recurring class these are the packages (paquetes); for a single
     // event they are the entry tiers. Same rows, `planKind` tells them apart.
-    const entryTypes = (ticketTypeRows ?? []).map((row) => ({
-      id: row.id,
-      name: row.name,
-      priceCents: Math.round(Number(row.price) * 100),
-      planKind: row.plan_kind ?? null,
-      credits: row.credits ?? null,
-      validityDays: row.validity_days ?? null,
-      soldOut: row.total > 0 && row.sold_count >= row.total,
-      /** Seats still buyable, or null when neither cap applies. */
-      remaining: computeEntryTypeRemaining({
+    const entryTypes = (ticketTypeRows ?? []).map((row) => {
+      const remaining = computeEntryTypeRemaining({
         capacity: eventCapacity,
         soldTickets,
         total: row.total,
         soldCount: soldByTypeId.get(row.id) ?? 0,
-      }),
-    }));
+      });
+      return {
+        id: row.id,
+        name: row.name,
+        priceCents: Math.round(Number(row.price) * 100),
+        planKind: row.plan_kind ?? null,
+        credits: row.credits ?? null,
+        validityDays: row.validity_days ?? null,
+        // Derived from `remaining` rather than from `sold_count`, so the two
+        // can never disagree — previously this could report soldOut while
+        // `remaining` said seats were free, since only one of them had been
+        // moved off the drifting counter. `null` remaining means uncapped,
+        // which is never sold out.
+        soldOut: remaining === 0,
+        /** Seats still buyable, or null when neither cap applies. */
+        remaining,
+      };
+    });
 
     const providerContactRows = event.providerId
       ? await this.prisma.$queryRaw<Array<{ email: string | null }>>`

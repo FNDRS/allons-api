@@ -22,7 +22,12 @@ export function computeEntryTypeRemaining(input: {
   soldTickets: number;
   /** `provider_event_ticket_types.total`; 0 or less means no per-tier limit. */
   total: number;
-  /** `provider_event_ticket_types.sold_count`. */
+  /**
+   * Live, non-cancelled `tickets` rows carrying this entry type. Deliberately
+   * not `provider_event_ticket_types.sold_count`: that counter drifts, because
+   * `cancelTicket` decrements whichever tier sorts first rather than the
+   * cancelled ticket's own.
+   */
   soldCount: number;
 }): number | null {
   const caps: number[] = [];
