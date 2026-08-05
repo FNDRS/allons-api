@@ -553,7 +553,9 @@ describe('ClassProgramsRepository.listPublishedPrograms', () => {
       limit: 20,
     });
 
-    const city = fragments(prisma).find((f) => f.sql.includes('lower(cp.city)'));
+    const city = fragments(prisma).find((f) =>
+      f.sql.includes('lower(cp.city)'),
+    );
     expect(city).toBeTruthy();
     expect(city!.values[0]).toEqual(['la ceiba', 'tegucigalpa']);
   });

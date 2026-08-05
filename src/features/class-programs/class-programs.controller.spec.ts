@@ -128,10 +128,9 @@ describe('ClassProgramsController.listDiscovery', () => {
   });
 
   it('trims surrounding whitespace and ignores empty entries', () => {
-    expect(listDiscovery(undefined, ' La Ceiba , , Tegucigalpa ').cities).toEqual([
-      'La Ceiba',
-      'Tegucigalpa',
-    ]);
+    expect(
+      listDiscovery(undefined, ' La Ceiba , , Tegucigalpa ').cities,
+    ).toEqual(['La Ceiba', 'Tegucigalpa']);
   });
 
   it('caps the limit at 50 so a caller cannot ask for the whole table', () => {
