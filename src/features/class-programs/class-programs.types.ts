@@ -186,6 +186,13 @@ export type ClassCheckInResult =
       checkedInAt?: string;
     };
 
+/**
+ * What the scan endpoint answers. `verified` says whether a signature was
+ * actually checked, so an operator can tell a cryptographic scan from a code
+ * typed by hand; the repository does not know that, so the service adds it.
+ */
+export type ClassScanResponse = ClassCheckInResult & { verified: boolean };
+
 export type ReservationCreateResult =
   | { ok: true; reservation: ReservationRow }
   | {
@@ -233,5 +240,6 @@ export type ReservationCancelResult =
         | 'not_found'
         | 'forbidden'
         | 'already_cancelled'
+        | 'already_checked_in'
         | 'occurrence_elapsed';
     };

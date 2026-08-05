@@ -1,5 +1,22 @@
+import { Prisma } from '../../../generated/prisma';
 import type { PrismaService } from '../../prisma/prisma.service';
 import { ClassProgramsRepository } from './class-programs.repository';
+
+/**
+ * The error a raw insert actually produces on a unique violation.
+ *
+ * Not `P2002`: Prisma only maps that for its typed client. `$queryRaw` surfaces
+ * the database error as `P2010` with the SQLSTATE in `meta.code`. Getting this
+ * wrong meant neither the code retry nor `duplicate_reservation` could fire, and
+ * both came back as a 500 — verified against Postgres before writing this.
+ */
+function rawUniqueViolation(key: string) {
+  return new Prisma.PrismaClientKnownRequestError('Raw query failed.', {
+    code: 'P2010',
+    clientVersion: 'test',
+    meta: { code: '23505', message: `Key (${key})=(x) already exists.` },
+  });
+}
 
 function buildRepository() {
   const tx = {
@@ -595,5 +612,79 @@ describe('ClassProgramsRepository.listPublishedPrograms', () => {
     );
     expect(city).toBeTruthy();
     expect(city!.values[0]).toEqual(['la ceiba', 'tegucigalpa']);
+  });
+});
+
+describe('ClassProgramsRepository unique-violation handling', () => {
+  const templateRow = {
+    template_id: '33333333-3333-3333-3333-333333333333',
+    provider_id: '11111111-1111-1111-1111-111111111111',
+    program_id: payload.programId,
+    duration_minutes: 60,
+    instructor_name: null,
+    capacity: 8,
+    template_count: 1,
+  };
+
+  function primeUpToInsert(tx: { $queryRaw: jest.Mock }) {
+    tx.$queryRaw
+      .mockResolvedValueOnce([templateRow])
+      .mockResolvedValueOnce([{ elapsed: false }])
+      .mockResolvedValueOnce([{ id: 'pass-1', credits_remaining: 3 }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ reserved_count: 0 }]);
+  }
+
+  it('retries with a new code when the code index collides', async () => {
+    const { repository, tx } = buildRepository();
+    // First booking attempt: everything fine until the insert collides.
+    primeUpToInsert(tx);
+    tx.$queryRaw.mockRejectedValueOnce(rawUniqueViolation('code'));
+    // Second attempt, with a freshly generated code, succeeds.
+    primeUpToInsert(tx);
+    tx.$queryRaw.mockResolvedValueOnce([
+      { id: 'res-1', status: 'reserved', code: 'CLS-AB23CD' },
+    ]);
+
+    const result = await repository.createReservation('user-1', payload);
+
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it('reports a duplicate occurrence rather than retrying it', async () => {
+    // Retrying this would be pointless — a new code changes nothing about the
+    // fact that the user already holds this slot.
+    const { repository, tx } = buildRepository();
+    primeUpToInsert(tx);
+    tx.$queryRaw.mockRejectedValueOnce(
+      rawUniqueViolation('user_id, program_id, session_date, start_time'),
+    );
+
+    const result = await repository.createReservation('user-1', payload);
+
+    expect(result).toEqual({ ok: false, reason: 'duplicate_reservation' });
+  });
+
+  it('refuses to cancel a reservation that was already checked in', async () => {
+    // Check-in leaves the status as `reserved` and is allowed all day, so
+    // without this the holder could be admitted at the door and then cancel —
+    // recovering the credit too, if the class had not started yet.
+    const { repository, tx } = buildRepository();
+    tx.$queryRaw.mockResolvedValueOnce([
+      {
+        id: reservationId,
+        user_id: userId,
+        pass_id: passId,
+        session_date: '2026-08-10',
+        start_time: '09:00',
+        status: 'reserved',
+        checked_in_at: new Date('2026-08-10T13:00:00.000Z'),
+      },
+    ]);
+
+    const result = await repository.cancelReservation(userId, reservationId);
+
+    expect(result).toEqual({ ok: false, reason: 'already_checked_in' });
+    expect(tx.$executeRaw).not.toHaveBeenCalled();
   });
 });

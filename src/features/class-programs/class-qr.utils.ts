@@ -25,7 +25,13 @@ const UUID_REGEX =
 // row, and a shared prefix would leave "which table?" ambiguous.
 const CODE_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const CODE_BODY_LEN = 6;
-const CLASS_CODE_BODY_REGEX = /^CLS([0-9A-Z]{6})$/;
+// `I` and `O` are excluded: neither generated codes nor the migration's hex
+// backfill can produce them, so a code containing one is a mistyped `1` or `0`
+// and worth rejecting before it costs a database lookup.
+//
+// `0` and `1` themselves stay accepted even though the generator omits them —
+// the backfill is hex, so an existing code legitimately can contain either.
+const CLASS_CODE_BODY_REGEX = /^CLS([0-9A-HJ-NP-Z]{6})$/;
 
 const logger = new Logger('ClassQr');
 

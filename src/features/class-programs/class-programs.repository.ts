@@ -51,24 +51,49 @@ const CANCELLATION_REFUND_WINDOW_HOURS = 6;
 /** Fresh codes to try before giving up on a booking. See `createReservationAttempt`. */
 const RESERVATION_CODE_ATTEMPTS = 5;
 
-const RESERVATION_CODE_INDEX = 'class_session_reservations_code_uidx';
+/** Postgres unique_violation. */
+const PG_UNIQUE_VIOLATION = '23505';
 
 /**
- * Whether a unique violation came from the access-code index rather than the
- * one-reservation-per-occurrence constraint. Prisma reports the offending
- * index in `meta.target`, as either a string or a list of columns depending on
- * the driver, so both shapes are checked; the message is the last resort.
+ * Whether an error is a unique-constraint violation.
+ *
+ * `$queryRaw` does not report these as `P2002`. Prisma only maps that code for
+ * its typed client; a raw query surfaces the database error as `P2010` with the
+ * real SQLSTATE in `meta.code`:
+ *
+ *   code: 'P2010', meta: { code: '23505', message: 'Key (code)=(CLS-…) already exists.' }
+ *
+ * Both are accepted here — `P2002` for any typed call, `P2010` + 23505 for the
+ * raw inserts this repository actually uses. Checking only `P2002`, as this did
+ * before, meant neither the code retry nor `duplicate_reservation` could ever
+ * fire and both surfaced as a 500.
+ */
+function isUniqueViolation(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (err.code === 'P2002') return true;
+  if (err.code !== 'P2010') return false;
+  const meta = err.meta as { code?: unknown } | undefined;
+  return meta?.code === PG_UNIQUE_VIOLATION;
+}
+
+/**
+ * Whether the violation was the access-code index rather than the
+ * one-reservation-per-occurrence one.
+ *
+ * Postgres names the offending columns in the detail message, `Key (code)=(…)`
+ * against `Key (user_id, program_id, session_date, start_time)=(…)`, so the two
+ * are told apart by which key is quoted. `meta.target` is checked first for
+ * typed calls, which report it there instead.
  */
 function violatesCodeIndex(err: Prisma.PrismaClientKnownRequestError): boolean {
-  const target = (err.meta as { target?: unknown } | undefined)?.target;
-  if (typeof target === 'string')
-    return target.includes(RESERVATION_CODE_INDEX);
+  const meta = err.meta as { target?: unknown; message?: unknown } | undefined;
+  const target = meta?.target;
+  if (typeof target === 'string') return /\bcode\b/.test(target);
   if (Array.isArray(target)) {
-    return target.some(
-      (entry) => typeof entry === 'string' && entry.includes('code'),
-    );
+    return target.some((entry) => entry === 'code');
   }
-  return err.message.includes(RESERVATION_CODE_INDEX);
+  const detail = typeof meta?.message === 'string' ? meta.message : err.message;
+  return /Key \(code\)=/.test(detail);
 }
 
 @Injectable()
@@ -759,8 +784,8 @@ export class ClassProgramsRepository {
       })
       .catch((err) => {
         if (
-          err instanceof Prisma.PrismaClientKnownRequestError &&
-          err.code === 'P2002'
+          isUniqueViolation(err) &&
+          err instanceof Prisma.PrismaClientKnownRequestError
         ) {
           if (violatesCodeIndex(err)) {
             if (attempt + 1 < RESERVATION_CODE_ATTEMPTS) {
@@ -802,10 +827,11 @@ export class ClassProgramsRepository {
             session_date: string;
             start_time: string;
             status: string;
+            checked_in_at: Date | null;
           }>
         >`
         SELECT id, user_id, pass_id, session_date::text AS session_date,
-          to_char(start_time, 'HH24:MI') AS start_time, status
+          to_char(start_time, 'HH24:MI') AS start_time, status, checked_in_at
         FROM class_session_reservations
         WHERE id = ${reservationId}::uuid
         FOR UPDATE
@@ -817,6 +843,15 @@ export class ClassProgramsRepository {
         }
         if (reservation.status === 'cancelled') {
           return { ok: false, reason: 'already_cancelled' };
+        }
+        // Attendance was already taken, so there is nothing left to cancel.
+        // Check-in leaves the status as `reserved`, and it is allowed any time
+        // on the session's own day — including more than the refund window
+        // ahead of the start time. Without this a client scanned in at the door
+        // could cancel afterwards and, if the class had not started yet, get
+        // the credit back after having been admitted.
+        if (reservation.checked_in_at) {
+          return { ok: false, reason: 'already_checked_in' };
         }
 
         const checkRows = await tx.$queryRaw<

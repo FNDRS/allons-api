@@ -199,6 +199,15 @@ model ClassSessionReservation {
   cancelledAt     DateTime? @map("cancelled_at") @db.Timestamptz(6)
   /// Set when the session reminder was queued, so the sweep never repeats one.
   remindedAt      DateTime? @map("reminded_at") @db.Timestamptz(6)
+  /// `CLS-XXXXXX`, shown to the client and accepted by the scanner's manual entry.
+  /// Its uniqueness is a partial index (`WHERE code IS NOT NULL`), which the
+  /// Prisma DSL cannot express, so it lives in the migration only.
+  code            String?
+  /// When a comercio scanned this reservation in. Cancellation refuses once set.
+  checkedInAt     DateTime? @map("checked_in_at") @db.Timestamptz(6)
+  /// The staff member who scanned it. Not a relation: staff can be removed, and
+  /// the attendance record should outlive them.
+  checkedInBy     String?   @map("checked_in_by") @db.Uuid
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 

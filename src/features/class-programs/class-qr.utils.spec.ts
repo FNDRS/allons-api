@@ -38,6 +38,15 @@ describe('normalizeClassCode', () => {
     expect(normalizeClassCode('ALL-AB23CD')).toBeNull();
   });
 
+  it('rejects the ambiguous letters, but not 0 and 1', () => {
+    // I and O can only be a mistyped 1 and 0: neither the generator nor the
+    // migration's hex backfill produces them.
+    expect(normalizeClassCode('CLS-AB23CI')).toBeNull();
+    expect(normalizeClassCode('CLS-AB23CO')).toBeNull();
+    // Hex backfilled codes legitimately contain 0 and 1.
+    expect(normalizeClassCode('CLS-0F63D1')).toBe('CLS-0F63D1');
+  });
+
   it('rejects nonsense', () => {
     expect(normalizeClassCode('')).toBeNull();
     expect(normalizeClassCode('CLS-AB23')).toBeNull();

@@ -24,7 +24,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { normalizeClassCode, parseClassQrPayload } from './class-qr.utils';
 import { ClassProgramsRepository } from './class-programs.repository';
-import type { ProgramRow } from './class-programs.types';
+import type { ClassScanResponse, ProgramRow } from './class-programs.types';
 import {
   formatDate,
   parseDateParam,
@@ -375,7 +375,10 @@ export class ClassProgramsService {
    * whether a signature was actually checked, so an operator can tell a
    * cryptographic scan from a typed code.
    */
-  async checkInClassReservation(userId: string, body: Record<string, unknown>) {
+  async checkInClassReservation(
+    userId: string,
+    body: Record<string, unknown>,
+  ): Promise<ClassScanResponse> {
     const member = await this.providers.requireMembership(userId, [
       'owner',
       'admin',
@@ -606,6 +609,10 @@ export class ClassProgramsService {
           throw new ForbiddenException('La reserva no pertenece al usuario');
         case 'already_cancelled':
           throw new BadRequestException('La reserva ya fue cancelada');
+        case 'already_checked_in':
+          throw new BadRequestException(
+            'Ya registraste tu entrada a esta clase; no se puede cancelar',
+          );
         case 'occurrence_elapsed':
           throw new BadRequestException(
             'Esta clase ya pasó; no se puede cancelar',
