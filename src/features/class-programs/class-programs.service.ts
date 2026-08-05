@@ -175,15 +175,24 @@ export class ClassProgramsService {
    */
   async listDiscoveryPrograms(options: { cities: string[]; limit: number }) {
     const rows = await this.repository.listPublishedPrograms(options);
+    // Keyed by program id rather than by position: `withChildren` happens to
+    // preserve order today, but pairing by index would break silently the
+    // moment it filters or reorders.
+    const providerByProgramId = new Map(
+      rows.map((row) => [
+        row.id,
+        {
+          id: row.provider_id,
+          name: row.provider_name,
+          handle: row.provider_handle,
+          logoUrl: row.provider_logo_url,
+        },
+      ]),
+    );
     const withChildren = await this.withChildren(rows, { publicOnly: true });
-    return withChildren.map((program, index) => ({
+    return withChildren.map((program) => ({
       ...program,
-      provider: {
-        id: rows[index].provider_id,
-        name: rows[index].provider_name,
-        handle: rows[index].provider_handle,
-        logoUrl: rows[index].provider_logo_url,
-      },
+      provider: providerByProgramId.get(program.id) ?? null,
     }));
   }
 

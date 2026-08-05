@@ -35,6 +35,7 @@ type RepositoryMock = {
   updatePackage: jest.Mock;
   deactivatePackage: jest.Mock;
   getProgramMetrics: jest.Mock;
+  listPublishedPrograms: jest.Mock;
 };
 
 function makeService() {
@@ -47,6 +48,7 @@ function makeService() {
     findProviderProgramId: jest.fn(),
     getTemplates: jest.fn().mockResolvedValue([]),
     getPackages: jest.fn().mockResolvedValue([]),
+    listPublishedPrograms: jest.fn().mockResolvedValue([]),
     getReservationCounts: jest.fn(),
     getActivePackageForPayment: jest.fn(),
     createReservation: jest.fn(),
@@ -732,4 +734,96 @@ describe('ClassProgramsService', () => {
       ).rejects.toBeInstanceOf(expected);
     },
   );
+});
+
+describe('ClassProgramsService.listDiscoveryPrograms', () => {
+  function programRow(id: string, providerName: string) {
+    return {
+      id,
+      provider_id: `provider-of-${id}`,
+      provider_name: providerName,
+      provider_handle: providerName.toLowerCase(),
+      provider_logo_url: null,
+      title: `Program ${id}`,
+      description: null,
+      discipline: null,
+      instructor_name: null,
+      duration_minutes: 60,
+      capacity_per_session: 10,
+      location_name: null,
+      address: null,
+      city: 'Tegucigalpa',
+      latitude: null,
+      longitude: null,
+      cover_image_url: null,
+      theme_color: null,
+      status: 'published',
+      created_at: new Date('2026-01-01T00:00:00.000Z'),
+      updated_at: new Date('2026-01-01T00:00:00.000Z'),
+    };
+  }
+
+  it('forwards the city and limit options to the repository', async () => {
+    const { service, repository } = makeService();
+
+    await service.listDiscoveryPrograms({ cities: ['La Ceiba'], limit: 5 });
+
+    expect(repository.listPublishedPrograms).toHaveBeenCalledWith({
+      cities: ['La Ceiba'],
+      limit: 5,
+    });
+  });
+
+  it('attaches each program its own comercio', async () => {
+    const { service, repository } = makeService();
+    repository.listPublishedPrograms.mockResolvedValueOnce([
+      programRow('a', 'Erei'),
+      programRow('b', 'RAVA'),
+    ]);
+
+    const result = await service.listDiscoveryPrograms({
+      cities: [],
+      limit: 20,
+    });
+
+    expect(result.map((p) => [p.id, p.provider?.name])).toEqual([
+      ['a', 'Erei'],
+      ['b', 'RAVA'],
+    ]);
+  });
+
+  // The provider used to be paired by array index, which silently mismatched
+  // if withChildren ever reordered or dropped a row. Keying by program id
+  // keeps each program with its own comercio regardless of ordering.
+  it('keeps programs paired with their comercio even when children come back reordered', async () => {
+    const { service, repository } = makeService();
+    repository.listPublishedPrograms.mockResolvedValueOnce([
+      programRow('a', 'Erei'),
+      programRow('b', 'RAVA'),
+    ]);
+    // Packages arrive for the second program only, and out of order.
+    repository.getPackages.mockResolvedValueOnce([
+      {
+        id: 'pkg-b',
+        program_id: 'b',
+        name: 'Pack',
+        price: 100,
+        credits: 4,
+        validity_days: 30,
+        kind: 'pack',
+        active: true,
+        sort_order: 0,
+      },
+    ]);
+
+    const result = await service.listDiscoveryPrograms({
+      cities: [],
+      limit: 20,
+    });
+
+    const b = result.find((p) => p.id === 'b');
+    expect(b?.provider?.name).toBe('RAVA');
+    expect(b?.packages).toHaveLength(1);
+    expect(result.find((p) => p.id === 'a')?.provider?.name).toBe('Erei');
+  });
 });
