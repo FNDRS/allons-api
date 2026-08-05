@@ -9,6 +9,7 @@ import {
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
+import { isEventOpenForReservation } from '../events/event-reservability.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { FeatureFlagsService } from '../../shared/feature-flags.service';
 import { ObservabilityService } from '../../shared/observability/observability.service';
@@ -90,6 +91,13 @@ export class MePaymentsService {
       where: { id: input.eventId },
     });
     if (!event) throw new NotFoundException('Evento no encontrado');
+    // Same rule as the free reservation path: once the event has started there
+    // is nothing left to sell, and taking a payment for it would need a refund.
+    if (!isEventOpenForReservation(event)) {
+      throw new BadRequestException(
+        'Este evento ya comenzó; las reservas están cerradas',
+      );
+    }
 
     const quantity = Math.floor(input.quantity);
     if (!Number.isFinite(quantity) || quantity < 1 || quantity > 20) {
