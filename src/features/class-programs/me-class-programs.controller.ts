@@ -81,7 +81,11 @@ export class MeClassProgramsController {
 
   @Get('class-reservations')
   @ApiOperation({ summary: "List the caller's class reservations" })
-  @ApiQuery({ name: 'scope', required: false, enum: ['upcoming', 'past', 'all'] })
+  @ApiQuery({
+    name: 'scope',
+    required: false,
+    enum: ['upcoming', 'past', 'all'],
+  })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   async listMyReservations(
     @Req() req: Request,
