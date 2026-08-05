@@ -35,6 +35,20 @@ export class ProviderClassProgramsController {
     return this.classPrograms.listProviderPrograms(user.id);
   }
 
+  /**
+   * Checks a client in to today's class. `code` carries whatever the scanner
+   * read: a signed QR, an unsigned one, a bare reservation id, or a typed
+   * `CLS-XXXXXX`.
+   *
+   * Open to `staff_scanner` as well as owners/admins — scanning at the door is
+   * exactly what that role exists for.
+   */
+  @Post('provider/class-scans')
+  async checkIn(@Req() req: Request, @Body() body: Record<string, unknown>) {
+    const user = await this.getUser(req);
+    return this.classPrograms.checkInClassReservation(user.id, body);
+  }
+
   @Post('provider/class-programs')
   async create(@Req() req: Request, @Body() body: Record<string, unknown>) {
     const user = await this.getUser(req);
