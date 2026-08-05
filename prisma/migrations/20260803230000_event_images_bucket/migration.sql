@@ -42,11 +42,15 @@ ON CONFLICT (id) DO UPDATE SET
 -- 2. Policies on storage.objects, scoped to this bucket
 -- =====================================================================
 
+-- Named roles rather than `TO public`: every role inherits from `public`, so
+-- that form grants the policy more broadly than anything here needs. Matches
+-- how the other public SELECT policies are written (see the
+-- supabase_lint_security_fixes migration).
 DROP POLICY IF EXISTS event_images_public_read ON storage.objects;
 CREATE POLICY event_images_public_read
   ON storage.objects
   FOR SELECT
-  TO public
+  TO anon, authenticated
   USING (bucket_id = 'event-images');
 
 DROP POLICY IF EXISTS event_images_authenticated_insert ON storage.objects;
@@ -56,17 +60,20 @@ CREATE POLICY event_images_authenticated_insert
   TO authenticated
   WITH CHECK (bucket_id = 'event-images');
 
+-- `auth.uid()` is wrapped in `(SELECT ...)` so the planner caches the call
+-- once per query instead of evaluating it per row, as the provider_realtime_rls
+-- migration does and documents.
 DROP POLICY IF EXISTS event_images_owner_update ON storage.objects;
 CREATE POLICY event_images_owner_update
   ON storage.objects
   FOR UPDATE
   TO authenticated
-  USING (bucket_id = 'event-images' AND owner = auth.uid())
-  WITH CHECK (bucket_id = 'event-images' AND owner = auth.uid());
+  USING (bucket_id = 'event-images' AND owner = (SELECT auth.uid()))
+  WITH CHECK (bucket_id = 'event-images' AND owner = (SELECT auth.uid()));
 
 DROP POLICY IF EXISTS event_images_owner_delete ON storage.objects;
 CREATE POLICY event_images_owner_delete
   ON storage.objects
   FOR DELETE
   TO authenticated
-  USING (bucket_id = 'event-images' AND owner = auth.uid());
+  USING (bucket_id = 'event-images' AND owner = (SELECT auth.uid()));
