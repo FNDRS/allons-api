@@ -249,17 +249,24 @@ export class EventsController {
     //   VIP ticket therefore decrements General, leaving VIP's `sold_count`
     //   inflated — which would have reported a tier as full while a seat was
     //   actually free, blocking a purchase checkout would have accepted.
-    const [soldTickets, soldByTypeRows] = await Promise.all([
-      this.prisma.ticket.count({ where: { eventId: id, cancelledAt: null } }),
-      this.prisma.$queryRaw<Array<{ ticket_type_id: string; n: number }>>`
-        SELECT ticket_type_id::text AS ticket_type_id, count(*)::int AS n
-        FROM tickets
-        WHERE event_id = ${id}::uuid
-          AND cancelled_at IS NULL
-          AND ticket_type_id IS NOT NULL
-        GROUP BY ticket_type_id
-      `,
-    ]);
+    //
+    // Both are consumed only by the `entryTypes` map below, so an event with no
+    // active tier has nothing to compute and skips the two round trips.
+    const [soldTickets, soldByTypeRows] = (ticketTypeRows ?? []).length
+      ? await Promise.all([
+          this.prisma.ticket.count({
+            where: { eventId: id, cancelledAt: null },
+          }),
+          this.prisma.$queryRaw<Array<{ ticket_type_id: string; n: number }>>`
+            SELECT ticket_type_id::text AS ticket_type_id, count(*)::int AS n
+            FROM tickets
+            WHERE event_id = ${id}::uuid
+              AND cancelled_at IS NULL
+              AND ticket_type_id IS NOT NULL
+            GROUP BY ticket_type_id
+          `,
+        ])
+      : [0, []];
     const soldByTypeId = new Map(
       soldByTypeRows.map((row) => [row.ticket_type_id, Number(row.n)]),
     );
