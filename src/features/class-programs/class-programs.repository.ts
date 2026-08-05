@@ -31,12 +31,19 @@ import type {
  * A session is stored as `session_date + start_time`: local wall time with no
  * zone. The Postgres session runs in UTC, so comparing that against a bare
  * `now()` reads a 07:00 class as 07:00 UTC — six hours early, which silently
- * drops the last six hours of bookings out of "upcoming". Every comparison
- * against a session's own clock goes through this.
+ * drops the last six hours of bookings out of "upcoming". Used wherever a
+ * session's own clock is compared; the cancellation check spells the same
+ * expression out inline because it builds one ad-hoc SELECT of its own.
  */
 const NOW_HN = Prisma.sql`(now() AT TIME ZONE 'America/Tegucigalpa')`;
 
-/** Cancelling this far ahead of the session (or further) returns the credit. */
+/**
+ * Cancelling this far ahead of the session (or further) returns the credit.
+ *
+ * Interpolated with an explicit `::int` at the call site: Prisma binds a JS
+ * number as `bigint`, and `make_interval(hours => bigint)` does not exist, so
+ * without the cast the whole cancellation query fails at runtime with 42883.
+ */
 const CANCELLATION_REFUND_WINDOW_HOURS = 6;
 
 @Injectable()
@@ -740,7 +747,7 @@ export class ClassProgramsRepository {
             <= (now() AT TIME ZONE 'America/Tegucigalpa') AS elapsed,
           (${reservation.session_date}::date + ${reservation.start_time}::time)
             - (now() AT TIME ZONE 'America/Tegucigalpa')
-            >= make_interval(hours => ${CANCELLATION_REFUND_WINDOW_HOURS}) AS refund_eligible
+            >= make_interval(hours => ${CANCELLATION_REFUND_WINDOW_HOURS}::int) AS refund_eligible
       `;
         if (checkRows[0]?.elapsed) {
           return { ok: false, reason: 'occurrence_elapsed' };

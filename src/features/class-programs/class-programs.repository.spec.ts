@@ -274,6 +274,43 @@ describe('ClassProgramsRepository.cancelReservation', () => {
     expect(values).toEqual(expect.arrayContaining([passId, userId]));
   });
 
+  // The bug this guards against reached production precisely because every
+  // test here mocks $queryRaw: Postgres never ran the statement, so the suite
+  // passed both before and after the fix. Asserting the emitted SQL is the only
+  // way this file can catch it. Prisma binds a JS number as bigint, and there is
+  // no make_interval(hours => bigint) overload, so dropping the cast fails with
+  // 42883 at runtime for every cancellation.
+  it('casts the refund window to int in the make_interval call', async () => {
+    const { repository, tx } = buildRepository();
+    tx.$queryRaw
+      .mockResolvedValueOnce([
+        {
+          id: reservationId,
+          user_id: userId,
+          pass_id: passId,
+          session_date: '2026-08-10',
+          start_time: '09:00',
+          status: 'reserved',
+        },
+      ])
+      .mockResolvedValueOnce([{ elapsed: false, refund_eligible: false }])
+      .mockResolvedValueOnce([
+        {
+          id: reservationId,
+          status: 'cancelled',
+          cancelled_at: new Date('2026-08-04T12:00:00.000Z'),
+        },
+      ]);
+
+    await repository.cancelReservation(userId, reservationId);
+
+    // Second $queryRaw is the elapsed / refund-window check. Joining the
+    // template fragments with '?' puts a marker where each value is bound.
+    const [fragments] = tx.$queryRaw.mock.calls[1] as [string[]];
+    const sql = fragments.join('?');
+    expect(sql).toMatch(/make_interval\(hours => \?::int\)/);
+  });
+
   it('cancels without a refund when outside the refund window', async () => {
     const { repository, tx } = buildRepository();
     tx.$queryRaw
@@ -553,7 +590,9 @@ describe('ClassProgramsRepository.listPublishedPrograms', () => {
       limit: 20,
     });
 
-    const city = fragments(prisma).find((f) => f.sql.includes('lower(cp.city)'));
+    const city = fragments(prisma).find((f) =>
+      f.sql.includes('lower(cp.city)'),
+    );
     expect(city).toBeTruthy();
     expect(city!.values[0]).toEqual(['la ceiba', 'tegucigalpa']);
   });
