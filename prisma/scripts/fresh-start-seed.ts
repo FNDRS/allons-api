@@ -428,8 +428,8 @@ async function main() {
   }
 
   // ---------------------------------------------------------------------
-  // Comercio principal (dev+comercio): un evento unico. Sus clases
-  // recurrentes ahora son class_programs, sembrados mas abajo.
+  // Comercio principal (dev+comercio): un evento único. Sus clases
+  // recurrentes ahora son class_programs, sembrados más abajo.
   // ---------------------------------------------------------------------
   console.log('[fresh-start] comercio principal + 1 evento…');
   const main1 = await prisma.provider.create({
