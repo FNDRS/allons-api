@@ -445,3 +445,116 @@ describe('ClassProgramsRepository.getUserReservedOccurrences', () => {
     );
   });
 });
+
+describe('ClassProgramsRepository.listPublishedPrograms', () => {
+  /**
+   * The city and search clauses reach `$queryRaw` as interpolated `Prisma.sql`
+   * fragments, so they arrive as *values* rather than as part of the template
+   * strings. Reading `.sql`/`.values` off them is what lets these assertions
+   * check the clause itself instead of the surrounding query text.
+   */
+  function fragments(prisma: { $queryRaw: jest.Mock }) {
+    const [, ...values] = prisma.$queryRaw.mock.calls[0];
+    return values
+      .filter(
+        (v: unknown): v is { sql: string; values: unknown[] } =>
+          typeof v === 'object' && v !== null && 'sql' in v && 'values' in v,
+      )
+      .map((v) => v);
+  }
+
+  function searchFragment(prisma: { $queryRaw: jest.Mock }) {
+    return fragments(prisma).find((f) => f.sql.includes('ILIKE')) ?? null;
+  }
+
+  it('searches every field a person would type into the box', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await repository.listPublishedPrograms({
+      cities: [],
+      limit: 20,
+      q: 'pilates',
+    });
+
+    const search = searchFragment(prisma);
+    expect(search).not.toBeNull();
+    for (const column of [
+      'cp.title',
+      'cp.description',
+      'cp.discipline',
+      'cp.instructor_name',
+      'cp.location_name',
+      'cp.city',
+      'p.name',
+    ]) {
+      expect(search!.sql).toContain(column);
+    }
+  });
+
+  it('binds the term as a wildcard match, once per searched column', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await repository.listPublishedPrograms({
+      cities: [],
+      limit: 20,
+      q: 'pilates',
+    });
+
+    const search = searchFragment(prisma)!;
+    expect(new Set(search.values)).toEqual(new Set(['%pilates%']));
+    expect(search.values).toHaveLength(7);
+  });
+
+  it('trims the term before binding it', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await repository.listPublishedPrograms({
+      cities: [],
+      limit: 20,
+      q: '  pilates  ',
+    });
+
+    expect(searchFragment(prisma)!.values[0]).toBe('%pilates%');
+  });
+
+  it('adds no search clause when the term is absent', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await repository.listPublishedPrograms({ cities: [], limit: 20 });
+
+    expect(searchFragment(prisma)).toBeNull();
+  });
+
+  // A blank box must not become `ILIKE '%%'`, which matches every row and
+  // would also exclude rows with a null column.
+  it('adds no search clause when the term is only whitespace', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await repository.listPublishedPrograms({
+      cities: [],
+      limit: 20,
+      q: '   ',
+    });
+
+    expect(searchFragment(prisma)).toBeNull();
+  });
+
+  it('lowercases the city filter so it matches regardless of casing', async () => {
+    const { repository, prisma } = buildRepository();
+    prisma.$queryRaw.mockResolvedValueOnce([]);
+
+    await repository.listPublishedPrograms({
+      cities: ['La Ceiba', 'TEGUCIGALPA'],
+      limit: 20,
+    });
+
+    const city = fragments(prisma).find((f) => f.sql.includes('lower(cp.city)'));
+    expect(city).toBeTruthy();
+    expect(city!.values[0]).toEqual(['la ceiba', 'tegucigalpa']);
+  });
+});
