@@ -14,10 +14,23 @@
  * finished is a stronger statement than the clock.
  */
 export function isEventOpenForReservation(
-  event: { startsAt?: Date | string | null; status?: string | null },
+  event: {
+    startsAt?: Date | string | null;
+    status?: string | null;
+    eventType?: string | null;
+  },
   now: Date = new Date(),
 ): boolean {
   if (event.status === 'ended') return false;
+
+  // A recurring class's `startsAt` is its *first* session, not a deadline: the
+  // program keeps running weekly afterwards. The public catalog says as much,
+  // listing `recurring_class` as upcoming unconditionally and excluding it
+  // from `past` outright (`public-providers.service.ts`), and `createTicket`
+  // already branches on `isRecurringClass`. Applying the cutoff here would
+  // have closed every ongoing class the day after its first session.
+  if (event.eventType === 'recurring_class') return true;
+
   if (event.startsAt == null) return true;
 
   const startsAt =

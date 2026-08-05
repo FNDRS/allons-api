@@ -76,3 +76,59 @@ describe('isEventOpenForReservation', () => {
     ).toBe(true);
   });
 });
+
+describe('isEventOpenForReservation — recurring classes', () => {
+  // A recurring class's startsAt is its first session, and the program runs
+  // weekly from there. The public catalog lists them as upcoming forever, so
+  // the start-time cutoff must not apply.
+  it('stays open long after its first session', () => {
+    expect(
+      isEventOpenForReservation(
+        {
+          startsAt: hoursFromNow(-24 * 90),
+          status: 'published',
+          eventType: 'recurring_class',
+        },
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it('stays open when its first session is today', () => {
+    expect(
+      isEventOpenForReservation(
+        { startsAt: NOW, status: 'published', eventType: 'recurring_class' },
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  // `ended` is the comercio's own statement and still wins over the type.
+  it('closes when the comercio marks the class ended', () => {
+    expect(
+      isEventOpenForReservation(
+        {
+          startsAt: hoursFromNow(-24),
+          status: 'ended',
+          eventType: 'recurring_class',
+        },
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it('still applies the cutoff to a single event', () => {
+    expect(
+      isEventOpenForReservation(
+        { startsAt: hoursFromNow(-1), status: 'published', eventType: 'single' },
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it('treats a missing eventType as a single event', () => {
+    expect(
+      isEventOpenForReservation({ startsAt: hoursFromNow(-1) }, NOW),
+    ).toBe(false);
+  });
+});
