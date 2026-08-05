@@ -428,9 +428,10 @@ async function main() {
   }
 
   // ---------------------------------------------------------------------
-  // Comercio principal (dev+comercio): exactamente 3 eventos — 1 único + 2 recurrentes
+  // Comercio principal (dev+comercio): un evento unico. Sus clases
+  // recurrentes ahora son class_programs, sembrados mas abajo.
   // ---------------------------------------------------------------------
-  console.log('[fresh-start] comercio principal + 3 eventos…');
+  console.log('[fresh-start] comercio principal + 1 evento…');
   const main1 = await prisma.provider.create({
     data: {
       name: 'Expresión Cultural HN',
@@ -495,7 +496,7 @@ async function main() {
   `;
 
   await createEvent(reviewProvider.id, idRevComercio, {
-    title: 'Cata de cafés de origen — 12 cupping',
+    title: 'Cata de cafés de origen',
     description:
       'Recorrido sensorial por fincas de Santa Bárbara, Copán y Ocotepeque.',
     startsAt: '2026-08-22T16:00:00-06:00',
@@ -513,7 +514,7 @@ async function main() {
   }, interestIds);
 
   await createEvent(reviewProvider.id, idRevComercio, {
-    title: 'Taller de barismo — entrada libre',
+    title: 'Taller de barismo gratuito',
     description:
       'Introducción gratuita al espresso y latte art. Reserva tu cupo sin pago.',
     startsAt: '2026-08-30T10:00:00-06:00',
@@ -559,7 +560,7 @@ async function main() {
     ticket: { name: 'Entrada libre', price: 0 },
   }, interestIds);
   await createEvent(extra1.id, null, {
-    title: 'Feria de emprendedores — edición agosto',
+    title: 'Feria de emprendedores de agosto',
     description: 'Marcas locales, artesanía y diseño hondureño.',
     startsAt: '2026-08-23T10:00:00-06:00',
     endsAt: '2026-08-23T18:00:00-06:00',
@@ -583,7 +584,7 @@ async function main() {
     },
   });
   await createEvent(extra2.id, null, {
-    title: 'Honduras Fintech Day — charlas abiertas',
+    title: 'Honduras Fintech Day',
     description:
       'Panel sobre pagos digitales, banca abierta y el ecosistema fintech hondureño.',
     startsAt: '2026-08-19T09:00:00-06:00',
