@@ -93,25 +93,36 @@ async function wipeAppTables(): Promise<void> {
   }
 }
 
+/** Objects `storage.list` returns per call; it will not return more than this. */
+const STORAGE_PAGE_SIZE = 1000;
+
 /** Recursively collects every object path under `prefix`. */
 async function listStoragePaths(
   admin: SupabaseClient,
   prefix = '',
 ): Promise<string[]> {
-  const { data, error } = await admin.storage
-    .from(STORAGE_BUCKET)
-    .list(prefix, { limit: 1000 });
-  if (error) throw error;
-
   const paths: string[] = [];
-  for (const entry of data ?? []) {
-    const full = prefix ? `${prefix}/${entry.name}` : entry.name;
-    // Supabase marks folders by returning a null id.
-    if (entry.id === null) {
-      paths.push(...(await listStoragePaths(admin, full)));
-    } else {
-      paths.push(full);
+  // Walk offsets until a short page arrives. Without paging, a folder holding
+  // more than one page of objects would be silently half-collected and the
+  // wipe would report success while leaving files behind.
+  for (let offset = 0; ; offset += STORAGE_PAGE_SIZE) {
+    const { data, error } = await admin.storage
+      .from(STORAGE_BUCKET)
+      .list(prefix, { limit: STORAGE_PAGE_SIZE, offset });
+    if (error) throw error;
+    const entries = data ?? [];
+
+    for (const entry of entries) {
+      const full = prefix ? `${prefix}/${entry.name}` : entry.name;
+      // Supabase marks folders by returning a null id.
+      if (entry.id === null) {
+        paths.push(...(await listStoragePaths(admin, full)));
+      } else {
+        paths.push(full);
+      }
     }
+
+    if (entries.length < STORAGE_PAGE_SIZE) break;
   }
   return paths;
 }

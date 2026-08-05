@@ -30,9 +30,6 @@
 
 import { PrismaClient } from '../../generated/prisma';
 
-/** Accepts the base client or a transaction client. */
-type Db = Pick<PrismaClient, '$queryRaw' | '$executeRaw' | '$transaction' | 'provider'>;
-
 type PackageSpec = {
   name: string;
   price: number;
@@ -184,7 +181,7 @@ export const GYMS: GymSpec[] = [
   },
 ];
 
-async function ensureProvider(db: Db, spec: GymSpec): Promise<string> {
+async function ensureProvider(db: PrismaClient, spec: GymSpec): Promise<string> {
   const provider = await db.provider.upsert({
     where: { handle: spec.providerHandle },
     update: {},
@@ -199,7 +196,7 @@ async function ensureProvider(db: Db, spec: GymSpec): Promise<string> {
 }
 
 async function findExistingProgramId(
-  db: Db,
+  db: PrismaClient,
   providerId: string,
   title: string,
 ): Promise<string | null> {
@@ -212,7 +209,7 @@ async function findExistingProgramId(
 }
 
 async function createProgramWithChildren(
-  db: Db,
+  db: PrismaClient,
   providerId: string,
   spec: GymSpec,
 ): Promise<string> {
@@ -266,7 +263,7 @@ async function createProgramWithChildren(
  * Creates every gym in `GYMS` that isn't there yet. Safe to call after a wipe
  * or against a populated database.
  */
-export async function seedClassProgramGyms(db: Db): Promise<void> {
+export async function seedClassProgramGyms(db: PrismaClient): Promise<void> {
   for (const gym of GYMS) {
     const providerId = await ensureProvider(db, gym);
     const existing = await findExistingProgramId(db, providerId, gym.program.title);
