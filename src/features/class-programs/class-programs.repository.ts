@@ -1,7 +1,9 @@
 import { Injectable, InternalServerErrorException } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
+import { generateClassCode } from './class-qr.utils';
 import type {
+  ClassCheckInResult,
   ClassPackagePaymentRow,
   ClassPassFilters,
   ClassPassRow,
@@ -45,6 +47,54 @@ const NOW_HN = Prisma.sql`(now() AT TIME ZONE 'America/Tegucigalpa')`;
  * without the cast the whole cancellation query fails at runtime with 42883.
  */
 const CANCELLATION_REFUND_WINDOW_HOURS = 6;
+
+/** Fresh codes to try before giving up on a booking. See `createReservationAttempt`. */
+const RESERVATION_CODE_ATTEMPTS = 5;
+
+/** Postgres unique_violation. */
+const PG_UNIQUE_VIOLATION = '23505';
+
+/**
+ * Whether an error is a unique-constraint violation.
+ *
+ * `$queryRaw` does not report these as `P2002`. Prisma only maps that code for
+ * its typed client; a raw query surfaces the database error as `P2010` with the
+ * real SQLSTATE in `meta.code`:
+ *
+ *   code: 'P2010', meta: { code: '23505', message: 'Key (code)=(CLS-…) already exists.' }
+ *
+ * Both are accepted here — `P2002` for any typed call, `P2010` + 23505 for the
+ * raw inserts this repository actually uses. Checking only `P2002`, as this did
+ * before, meant neither the code retry nor `duplicate_reservation` could ever
+ * fire and both surfaced as a 500.
+ */
+function isUniqueViolation(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (err.code === 'P2002') return true;
+  if (err.code !== 'P2010') return false;
+  const meta = err.meta as { code?: unknown } | undefined;
+  return meta?.code === PG_UNIQUE_VIOLATION;
+}
+
+/**
+ * Whether the violation was the access-code index rather than the
+ * one-reservation-per-occurrence one.
+ *
+ * Postgres names the offending columns in the detail message, `Key (code)=(…)`
+ * against `Key (user_id, program_id, session_date, start_time)=(…)`, so the two
+ * are told apart by which key is quoted. `meta.target` is checked first for
+ * typed calls, which report it there instead.
+ */
+function violatesCodeIndex(err: Prisma.PrismaClientKnownRequestError): boolean {
+  const meta = err.meta as { target?: unknown; message?: unknown } | undefined;
+  const target = meta?.target;
+  if (typeof target === 'string') return /\bcode\b/.test(target);
+  if (Array.isArray(target)) {
+    return target.some((entry) => entry === 'code');
+  }
+  const detail = typeof meta?.message === 'string' ? meta.message : err.message;
+  return /Key \(code\)=/.test(detail);
+}
 
 @Injectable()
 export class ClassProgramsRepository {
@@ -487,6 +537,7 @@ export class ClassProgramsRepository {
              to_char(r.session_date, 'YYYY-MM-DD') AS session_date,
              to_char(r.start_time, 'HH24:MI') AS start_time,
              r.duration_minutes, r.instructor_name, r.status, r.created_at,
+             r.code, r.checked_in_at,
              cp.title AS program_title,
              cp.city AS program_city,
              cp.location_name AS program_location_name,
@@ -584,6 +635,29 @@ export class ClassProgramsRepository {
     userId: string,
     payload: ReservationPayload,
   ): Promise<ReservationCreateResult> {
+    return this.createReservationAttempt(userId, payload, 0);
+  }
+
+  /**
+   * One attempt at booking, with one freshly generated access code.
+   *
+   * The retry exists because the code is random over 32^6: rare, but at any
+   * real volume two reservations will eventually draw the same one, and the
+   * unique index turns that into a failed insert. Retrying with a new code is
+   * invisible to the caller.
+   *
+   * The distinction in the catch matters more than the retry. A code collision
+   * and "this user already booked this occurrence" both arrive as P2002, so
+   * without checking which index was violated a collision would be reported
+   * back as `duplicate_reservation` — telling someone they already have a spot
+   * they do not have.
+   */
+  private createReservationAttempt(
+    userId: string,
+    payload: ReservationPayload,
+    attempt: number,
+  ): Promise<ReservationCreateResult> {
+    const code = generateClassCode();
     return this.prisma
       .$transaction(async (tx): Promise<ReservationCreateResult> => {
         await tx.$executeRaw`
@@ -685,16 +759,16 @@ export class ClassProgramsRepository {
         const reservationRows = await tx.$queryRaw<ReservationRow[]>`
         INSERT INTO class_session_reservations (
           user_id, provider_id, program_id, template_id, pass_id, session_date,
-          start_time, duration_minutes, instructor_name, status
+          start_time, duration_minutes, instructor_name, status, code
         ) VALUES (
           ${userId}::uuid, ${template.provider_id}::uuid, ${template.program_id}::uuid,
           ${template.template_id}::uuid, ${pass.id}::uuid, ${payload.date}::date,
           ${payload.startTime}::time, ${template.duration_minutes},
-          ${template.instructor_name}, 'reserved'
+          ${template.instructor_name}, 'reserved', ${code}
         )
         RETURNING id, user_id, provider_id, program_id, template_id, pass_id,
           session_date::text AS session_date, to_char(start_time, 'HH24:MI') AS start_time,
-          duration_minutes, instructor_name, status, created_at
+          duration_minutes, instructor_name, status, code, created_at
       `;
 
         if (pass.credits_remaining !== null) {
@@ -710,9 +784,22 @@ export class ClassProgramsRepository {
       })
       .catch((err) => {
         if (
-          err instanceof Prisma.PrismaClientKnownRequestError &&
-          err.code === 'P2002'
+          isUniqueViolation(err) &&
+          err instanceof Prisma.PrismaClientKnownRequestError
         ) {
+          if (violatesCodeIndex(err)) {
+            if (attempt + 1 < RESERVATION_CODE_ATTEMPTS) {
+              return this.createReservationAttempt(
+                userId,
+                payload,
+                attempt + 1,
+              );
+            }
+            // Out of attempts. Rethrowing surfaces a 500, which is correct:
+            // reporting `duplicate_reservation` here would tell the caller they
+            // already hold a spot they never got.
+            throw err;
+          }
           return { ok: false, reason: 'duplicate_reservation' } as const;
         }
         throw err;
@@ -740,10 +827,11 @@ export class ClassProgramsRepository {
             session_date: string;
             start_time: string;
             status: string;
+            checked_in_at: Date | null;
           }>
         >`
         SELECT id, user_id, pass_id, session_date::text AS session_date,
-          to_char(start_time, 'HH24:MI') AS start_time, status
+          to_char(start_time, 'HH24:MI') AS start_time, status, checked_in_at
         FROM class_session_reservations
         WHERE id = ${reservationId}::uuid
         FOR UPDATE
@@ -755,6 +843,15 @@ export class ClassProgramsRepository {
         }
         if (reservation.status === 'cancelled') {
           return { ok: false, reason: 'already_cancelled' };
+        }
+        // Attendance was already taken, so there is nothing left to cancel.
+        // Check-in leaves the status as `reserved`, and it is allowed any time
+        // on the session's own day — including more than the refund window
+        // ahead of the start time. Without this a client scanned in at the door
+        // could cancel afterwards and, if the class had not started yet, get
+        // the credit back after having been admitted.
+        if (reservation.checked_in_at) {
+          return { ok: false, reason: 'already_checked_in' };
         }
 
         const checkRows = await tx.$queryRaw<
@@ -860,5 +957,108 @@ export class ClassProgramsRepository {
       GROUP BY ucp.provider_id, ucp.program_id, cp.title
       ORDER BY MIN(ucp.expires_at) ASC NULLS LAST, MIN(ucp.created_at) ASC
     `;
+  }
+
+  /**
+   * Marks a reservation as attended, for the comercio's scanner.
+   *
+   * Everything happens in one transaction with `FOR UPDATE` on the reservation:
+   * two staff phones scanning the same person at the same moment would
+   * otherwise both read `checked_in_at IS NULL` and both report a valid entry.
+   * The second now serializes behind the first and comes back `duplicate`.
+   *
+   * The reservation is looked up by id or by code, but always scoped to the
+   * caller's provider, so one comercio cannot check in — or even confirm the
+   * existence of — another's booking.
+   */
+  checkInReservation(input: {
+    providerId: string;
+    staffUserId: string;
+    reservationId?: string | null;
+    code?: string | null;
+    /** The civil date the scanner is working, `YYYY-MM-DD`. */
+    today: string;
+  }): Promise<ClassCheckInResult> {
+    const locate = input.reservationId
+      ? Prisma.sql`r.id = ${input.reservationId}::uuid`
+      : Prisma.sql`r.code = ${input.code}`;
+
+    return this.prisma.$transaction(async (tx): Promise<ClassCheckInResult> => {
+      const rows = await tx.$queryRaw<
+        Array<{
+          id: string;
+          program_id: string;
+          program_title: string;
+          session_date: string;
+          start_time: string;
+          status: string;
+          code: string | null;
+          checked_in_at: Date | null;
+          holder_name: string | null;
+        }>
+      >`
+          SELECT r.id::text AS id, r.program_id::text AS program_id,
+                 cp.title AS program_title,
+                 to_char(r.session_date, 'YYYY-MM-DD') AS session_date,
+                 to_char(r.start_time, 'HH24:MI') AS start_time,
+                 r.status, r.code, r.checked_in_at,
+                 pr.full_name AS holder_name
+          FROM class_session_reservations r
+          JOIN class_programs cp ON cp.id = r.program_id
+          LEFT JOIN profiles pr ON pr.user_id = r.user_id
+          WHERE ${locate}
+            AND r.provider_id = ${input.providerId}::uuid
+          FOR UPDATE OF r
+        `;
+
+      const row = rows[0];
+      if (!row) return { status: 'invalid' };
+
+      const found = {
+        reservationId: row.id,
+        programId: row.program_id,
+        programTitle: row.program_title,
+        date: row.session_date,
+        startTime: row.start_time,
+        code: row.code,
+        holderName: row.holder_name,
+      };
+
+      if (row.status === 'cancelled') {
+        return { status: 'cancelled', ...found };
+      }
+      // A reservation is admissible on its own day only. Without this, a
+      // single code would let someone in on any date the class runs.
+      if (row.session_date !== input.today) {
+        return { status: 'wrong_day', ...found };
+      }
+      if (row.checked_in_at) {
+        return {
+          status: 'duplicate',
+          ...found,
+          checkedInAt: row.checked_in_at.toISOString(),
+        };
+      }
+
+      const updated = await tx.$queryRaw<Array<{ checked_in_at: Date }>>`
+          UPDATE class_session_reservations
+          SET checked_in_at = now(), checked_in_by = ${input.staffUserId}::uuid,
+              updated_at = now()
+          WHERE id = ${row.id}::uuid
+            -- Re-asserted rather than trusted from the SELECT above: it costs
+            -- nothing and makes the write correct even if the lock is ever
+            -- loosened.
+            AND checked_in_at IS NULL
+          RETURNING checked_in_at
+        `;
+      if (!updated[0]) {
+        return { status: 'duplicate', ...found };
+      }
+      return {
+        status: 'valid',
+        ...found,
+        checkedInAt: updated[0].checked_in_at.toISOString(),
+      };
+    });
   }
 }

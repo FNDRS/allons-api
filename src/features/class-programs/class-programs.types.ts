@@ -147,6 +147,7 @@ export interface UserReservationRow extends ReservationRow {
   provider_name: string;
   provider_logo_url: string | null;
   theme_color: string | null;
+  checked_in_at: Date | null;
 }
 
 export interface ReservationRow {
@@ -161,8 +162,36 @@ export interface ReservationRow {
   duration_minutes: number;
   instructor_name: string | null;
   status: string;
+  /** `CLS-XXXXXX` shown to the client and accepted by the scanner's manual entry. */
+  code: string | null;
   created_at: Date;
 }
+
+/**
+ * Outcome of a scanner check-in. `invalid` deliberately carries nothing: the
+ * code did not resolve to a reservation of this comercio, and saying anything
+ * more would let a scanner probe another comercio's bookings.
+ */
+export type ClassCheckInResult =
+  | { status: 'invalid' }
+  | {
+      status: 'valid' | 'duplicate' | 'cancelled' | 'wrong_day';
+      reservationId: string;
+      programId: string;
+      programTitle: string;
+      date: string;
+      startTime: string;
+      code: string | null;
+      holderName: string | null;
+      checkedInAt?: string;
+    };
+
+/**
+ * What the scan endpoint answers. `verified` says whether a signature was
+ * actually checked, so an operator can tell a cryptographic scan from a code
+ * typed by hand; the repository does not know that, so the service adds it.
+ */
+export type ClassScanResponse = ClassCheckInResult & { verified: boolean };
 
 export type ReservationCreateResult =
   | { ok: true; reservation: ReservationRow }
@@ -211,5 +240,6 @@ export type ReservationCancelResult =
         | 'not_found'
         | 'forbidden'
         | 'already_cancelled'
+        | 'already_checked_in'
         | 'occurrence_elapsed';
     };

@@ -21,8 +21,10 @@ import {
   mapTemplate,
   mapUserReservation,
 } from './class-programs.mappers';
+import { ConfigService } from '@nestjs/config';
+import { normalizeClassCode, parseClassQrPayload } from './class-qr.utils';
 import { ClassProgramsRepository } from './class-programs.repository';
-import type { ProgramRow } from './class-programs.types';
+import type { ClassScanResponse, ProgramRow } from './class-programs.types';
 import {
   formatDate,
   parseDateParam,
@@ -49,6 +51,7 @@ export class ClassProgramsService {
     private readonly orders: PaymentOrdersRepository,
     private readonly flags: FeatureFlagsService,
     private readonly obs: ObservabilityService,
+    private readonly config: ConfigService,
   ) {}
 
   async listProviderPrograms(userId: string) {
@@ -359,7 +362,51 @@ export class ClassProgramsService {
       scope,
       limit,
     });
-    return rows.map(mapUserReservation);
+    // One read of the secret for the whole page rather than per row.
+    const qrSecret = this.config.get<string>('TICKET_QR_SECRET') ?? null;
+    return rows.map((row) => mapUserReservation(row, qrSecret));
+  }
+
+  /**
+   * Checks a client in to today's class, from the comercio's scanner.
+   *
+   * Accepts whatever the scanner produces: a signed QR, an unsigned one, a bare
+   * reservation id, or a `CLS-XXXXXX` code typed by hand. `verified` reports
+   * whether a signature was actually checked, so an operator can tell a
+   * cryptographic scan from a typed code.
+   */
+  async checkInClassReservation(
+    userId: string,
+    body: Record<string, unknown>,
+  ): Promise<ClassScanResponse> {
+    const member = await this.providers.requireMembership(userId, [
+      'owner',
+      'admin',
+      'staff_scanner',
+    ]);
+    const raw = typeof body.code === 'string' ? body.code.trim() : '';
+    if (!raw) throw new BadRequestException('code es requerido');
+
+    const qrSecret = this.config.get<string>('TICKET_QR_SECRET') ?? null;
+    const parsed = parseClassQrPayload(raw, qrSecret);
+    const typedCode = parsed ? null : normalizeClassCode(raw);
+
+    // Neither a QR nor a code: nothing to look up. Reported as `invalid` rather
+    // than a 400 so the scanner shows the operator a rejection instead of an
+    // error screen.
+    if (!parsed && !typedCode) {
+      return { status: 'invalid' as const, verified: false };
+    }
+
+    const today = await this.repository.getCivilToday();
+    const result = await this.repository.checkInReservation({
+      providerId: member.providerId,
+      staffUserId: userId,
+      reservationId: parsed?.reservationId ?? null,
+      code: typedCode,
+      today,
+    });
+    return { ...result, verified: parsed?.verified ?? false };
   }
 
   async claimFreePackage(userId: string, packageId: string) {
@@ -562,6 +609,10 @@ export class ClassProgramsService {
           throw new ForbiddenException('La reserva no pertenece al usuario');
         case 'already_cancelled':
           throw new BadRequestException('La reserva ya fue cancelada');
+        case 'already_checked_in':
+          throw new BadRequestException(
+            'Ya registraste tu entrada a esta clase; no se puede cancelar',
+          );
         case 'occurrence_elapsed':
           throw new BadRequestException(
             'Esta clase ya pasó; no se puede cancelar',

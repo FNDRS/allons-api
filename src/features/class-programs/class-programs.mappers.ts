@@ -6,6 +6,7 @@ import type {
   ProgramRow,
   TemplateRow,
 } from './class-programs.types';
+import { buildClassQrPayload } from './class-qr.utils';
 
 export function mapProgram(row: ProgramRow) {
   return {
@@ -83,8 +84,18 @@ export function mapClassPass(row: ClassPassRow) {
   };
 }
 
-/** A confirmed class reservation, as a client-facing ticket. */
-export function mapUserReservation(row: UserReservationRow) {
+/**
+ * A confirmed class reservation, as a client-facing ticket.
+ *
+ * `qrSecret` is threaded in rather than read here so this stays a pure mapper.
+ * When it is null the payload is still built, unsigned, and the scanner reports
+ * the scan as unverified — which is what local development without
+ * `TICKET_QR_SECRET` gets.
+ */
+export function mapUserReservation(
+  row: UserReservationRow,
+  qrSecret: string | null = null,
+) {
   return {
     id: row.id,
     programId: row.program_id,
@@ -100,6 +111,13 @@ export function mapUserReservation(row: UserReservationRow) {
     durationMinutes: row.duration_minutes,
     instructorName: row.instructor_name,
     status: row.status,
+    /** `CLS-XXXXXX`, for the scanner's manual-entry fallback. */
+    code: row.code,
+    checkedInAt: row.checked_in_at?.toISOString() ?? null,
+    /** JSON to render as the QR. Null once checked in — nothing left to scan. */
+    qrPayload: row.checked_in_at
+      ? null
+      : buildClassQrPayload(row.id, row.program_id, qrSecret),
     createdAt: row.created_at.toISOString(),
   };
 }

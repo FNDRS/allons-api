@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { Prisma } from '../../../generated/prisma';
 import {
   BadRequestException,
@@ -100,6 +101,9 @@ function makeService() {
   };
   const flags = { paymentsEnabled: true, forceFreeEvents: false };
   const obs = { event: jest.fn(), warn: jest.fn() };
+  // No TICKET_QR_SECRET in tests: reservation QRs come out unsigned, which the
+  // scanner reports as unverified. Signing itself is covered in class-qr.utils.spec.
+  const config = { get: jest.fn().mockReturnValue(undefined) };
   return {
     service: new ClassProgramsService(
       repository as unknown as ClassProgramsRepository,
@@ -108,6 +112,7 @@ function makeService() {
       orders as unknown as PaymentOrdersRepository,
       flags as unknown as FeatureFlagsService,
       obs as unknown as ObservabilityService,
+      config as unknown as ConfigService,
     ),
     repository,
     providers,
